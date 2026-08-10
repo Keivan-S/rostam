@@ -100,7 +100,8 @@ authenticated cluster cannot function.
 
 ## Reporting vulnerabilities
 
-Do not open public issues for security problems — email
-**security@rostamlabs.com**. See
+Do not open public issues for security problems — use the
+[private advisory form](https://github.com/rostamlabs/rostam/security/advisories/new)
+or email **security@rostamlabs.com**. See
 [`SECURITY.md`](https://github.com/rostamlabs/rostam/blob/main/SECURITY.md) for
 scope and the disclosure process.

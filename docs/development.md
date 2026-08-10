@@ -106,6 +106,7 @@ instructions about bumping a Change Date, they are stale.
 
 - Contributions are licensed under Apache-2.0, inbound = outbound, no CLA — see
   [`CONTRIBUTING.md`](https://github.com/rostamlabs/rostam/blob/main/CONTRIBUTING.md).
-- Security issues: **do not** open public issues — email
-  security@rostamlabs.com
+- Security issues: **do not** open public issues — use the
+  [private advisory form](https://github.com/rostamlabs/rostam/security/advisories/new)
+  or email security@rostamlabs.com
   ([`SECURITY.md`](https://github.com/rostamlabs/rostam/blob/main/SECURITY.md)).

@@ -5,7 +5,14 @@
 Please report security vulnerabilities **privately**. Do **not** open a public
 GitHub issue for security problems.
 
-Email **security@rostamlabs.com** with:
+**Preferred:** GitHub's private advisory form —
+[**Report a vulnerability**](https://github.com/rostamlabs/rostam/security/advisories/new).
+It is visible only to the maintainers, keeps the report and the fix in one
+thread, and needs nothing but a GitHub login.
+
+You can also email **security@rostamlabs.com**.
+
+Either way, please include:
 
 - A description of the issue and its impact.
 - Steps to reproduce (proof-of-concept if possible).
