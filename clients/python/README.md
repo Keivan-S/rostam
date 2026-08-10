@@ -20,10 +20,16 @@ The client talks to a Rostam HTTP server. Build and run one from this repo:
 
 ```bash
 go build -o rostam-server ./cmd/rostam-server
-./rostam-server -http :8080 -data ./data                    # REST/JSON
-./rostam-server -http :8080 -grpc :9090 -tcp :7000          # all three over ONE store
-./rostam-server -http :8080 -api-key "$KEY"                 # require a bearer token
+./rostam-server -http 127.0.0.1:8080 -data ./data                    # REST/JSON
+./rostam-server -http 127.0.0.1:8080 -grpc 127.0.0.1:9090 -tcp 127.0.0.1:7000
+./rostam-server -http :8080 -api-key "$KEY"                          # reachable, with auth
 ```
+
+Note the loopback addresses. With no authenticator configured the server
+**refuses to bind a reachable address** rather than serve an open datastore to
+the network, so a bare `:8080` will not start. To listen beyond loopback, give
+it auth (`-api-key` or `-keys-file`) as in the third line, or pass `-insecure`
+to run open deliberately.
 
 A single server can expose REST, gRPC, and the binary TCP protocol at once over
 one shared store — a write on any transport is visible on the others. Set a
