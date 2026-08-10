@@ -3,7 +3,7 @@ site_description: >-
   A high-performance vector database and sub-microsecond key-value store in a
   single Go engine — run it standalone, replicate it across a Raft cluster, or
   embed it directly in your binary.
-site_url: https://rostamlabs.github.io/rostam/
+site_url: https://docs.rostamlabs.com/
 repo_url: https://github.com/rostamlabs/rostam
 repo_name: rostamlabs/rostam
 docs_dir: docs
