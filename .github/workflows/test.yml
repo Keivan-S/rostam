@@ -1,0 +1,326 @@
+name: test
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # The heavy multi-node-cluster packages (root `.`, `./inttest/`, `./cluster/`
+  # and `./shard/`) each stand up 3-node RF=3 Raft clusters whose bring-up needs
+  # a whole 2-core runner to itself: cluster/node.go staggers each cluster's cold
+  # elections to GOMAXPROCS, but that only works if a SECOND heavy package is not
+  # oversubscribing the same runner in parallel. So they run in their own jobs
+  # (concurrent on separate runners) instead of `go test -p 2 ./...`, which used
+  # to overlap them on one runner and thrash elections into flakes.
+  #
+  # `cluster` and `shard` were originally left in the shared -p 2 lane despite
+  # also building 3-node clusters, and flaked there non-deterministically (a
+  # different test failing per run: wasm-registration dispatch, a 256-shard
+  # construction deadline, a raft commit losing leadership). They are isolated
+  # here for the same reason as root/inttest.
+  test-unit:
+    name: build, vet + unit/light packages
+    runs-on: ubuntu-latest
+    env:
+      # The wasm stored-procedure backend (wasmtime) requires cgo.
+      # wasmtime-go ships a prebuilt static lib, so gcc on the runner is enough.
+      # The GPU index is behind `-tags cuda` and is intentionally not tested here.
+      CGO_ENABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Build (default, cgo)
+        run: go build ./...
+
+      - name: Build pure-Go packages without cgo
+        run: CGO_ENABLED=0 go build ./vector/... ./objstore ./cache ./ops
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test (light packages)
+        # Everything EXCEPT the heavy cluster packages, which run isolated below.
+        run: go test -p 2 -timeout 15m $(go list ./... | grep -vE '/rostam$|/rostam/inttest$|/rostam/cluster$|/rostam/shard$')
+
+  test-root:
+    name: root-package integration tests
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@latest
+
+      - name: Test (root package, isolated)
+        # Alone on the runner: its 3-node cluster tests get both cores for bring-up.
+        # gotestsum reruns a transiently-failed test up to twice: the heavy RF=3
+        # cluster tests occasionally miss even widened deadlines when the shared
+        # runner is pathologically contended (~50x slowdown on a bad draw), yet
+        # pass in seconds in isolation. A genuine break fails all 3 attempts; if
+        # >10 distinct tests fail it's treated as a real break and not rerun.
+        run: gotestsum --rerun-fails=2 --packages=. -- -timeout 20m
+
+  test-inttest:
+    name: inttest integration tests
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@latest
+
+      - name: Test (inttest, isolated)
+        # Alone on the runner: its 3-node cluster tests get both cores for bring-up.
+        # gotestsum reruns transient failures (see test-root) — the inttest RF=3
+        # cluster/reshard tests are the most bring-up-heavy and the most exposed to
+        # a badly-contended shared runner; they pass in seconds in isolation.
+        run: gotestsum --rerun-fails=2 --packages=./inttest/ -- -timeout 20m
+
+  test-cluster:
+    name: cluster package tests
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@latest
+
+      - name: Test (cluster, isolated)
+        # Alone on the runner: its 3-node cluster tests get both cores for
+        # bring-up. gotestsum reruns transient failures (see test-root).
+        run: gotestsum --rerun-fails=2 --packages=./cluster/ -- -timeout 20m
+
+  test-shard:
+    name: shard package tests
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@latest
+
+      - name: Test (shard, isolated)
+        # Alone on the runner: its in-memory 3-node raft clusters run with
+        # deliberately aggressive election timings (scaled by cpuScaled) that a
+        # co-tenant package would starve into spurious elections.
+        run: gotestsum --rerun-fails=2 --packages=./shard/ -- -timeout 20m
+
+  cgo-disabled-build:
+    name: cgo-disabled build
+    runs-on: ubuntu-latest
+    env:
+      # The engine must build under CGO_ENABLED=0 (the default for cross-compiles
+      # and static/scratch containers). The wasmtime stored-procedure backend is
+      # cgo-only and lives behind a `//go:build cgo` tag; a `//go:build !cgo` stub
+      # (wasm/wasm_stub.go) keeps the wasm package's exported surface intact so
+      # every importer still compiles. This job guards that split from regressing.
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Build (CGO_ENABLED=0)
+        run: go build ./...
+
+  cross-compile:
+    name: cross-compile (${{ matrix.goos }}/${{ matrix.goarch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: 386
+          - goos: linux
+            goarch: arm
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: 386
+          - goos: windows
+            goarch: amd64
+          - goos: freebsd
+            goarch: amd64
+    env:
+      # Build-only (no test compile, no run) across GOOS/GOARCH pairs the other
+      # jobs never touch — they all build+test linux/amd64 only. This exists
+      # because an untyped int constant sized from a uint32 max (cache/ringbuf.go's
+      # maxValueLen) overflowed `int` on 32-bit and broke linux/386, linux/arm and
+      # windows/386 silently: nothing in the linux/amd64-only lanes above could
+      # ever catch it. CGO_ENABLED=0 because none of these targets have a cgo
+      # toolchain here, and it's also the realistic case for cross-compiled /
+      # static binaries of this engine.
+      CGO_ENABLED: "0"
+      GOOS: ${{ matrix.goos }}
+      GOARCH: ${{ matrix.goarch }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: go build ./...
+
+  test-386:
+    name: 32-bit tests (linux/386)
+    runs-on: ubuntu-latest
+    env:
+      # A linux/386 test BINARY runs natively on an amd64 runner, so unlike the
+      # build-only matrix above this lane actually EXECUTES the suite with a
+      # 32-bit int.
+      #
+      # WHY THAT MATTERS. The wire decoders read lengths with
+      # `int(binary.BigEndian.Uint32(...))`. On 64-bit that conversion is always
+      # exact; on 32-bit a declared length above MaxInt32 widens NEGATIVE, and a
+      # negative length SATISFIES the `len(args) < off+n` bounds checks that are
+      # supposed to reject it — so the decode proceeds and panics on a slice
+      # bound or a negative make(). There are ~180 such conversions in ops/
+      # alone, and auditing them by hand is both laborious and unverifiable;
+      # running the tests where the conversion actually misbehaves is neither.
+      #
+      # SCOPE. The packages that decode untrusted wire bytes. cache/ is
+      # deliberately excluded: its default page budget exceeds a 32-bit process's
+      # ~4 GiB address space and the suite dies of genuine OOM, which is a
+      # property of the test config, not a defect. -short for the same reason the
+      # race lane uses it.
+      #
+      # LIMIT, stated plainly: this catches a widening only where a test feeds a
+      # length large enough to trigger it. It is a real net, not a proof — the
+      # hostile-length cases in ops/wire_bounds_test.go are what make it catch
+      # the class rather than only the paths that happen to see big values.
+      CGO_ENABLED: "0"
+      GOARCH: "386"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Test (32-bit int)
+        run: go test -count=1 -short -timeout 25m ./ops/... ./vector/... ./httpapi/... ./server/...
+
+  race:
+    name: race detector
+    runs-on: ubuntu-latest
+    env:
+      # -race requires cgo; same wasmtime rationale as the `test` job.
+      CGO_ENABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@latest
+
+      - name: Test (race detector)
+        # Enforces the README's "race-clean" claim on the concurrency-critical
+        # packages (per-shard locking in the root package, the cache, ops, and the
+        # vector store). Race runs are heavy: -p 2 avoids the known CPU
+        # oversubscription flakiness (see `make test-serial`) and -timeout 40m
+        # gives the widened deadlines room. Scoped to these packages rather than
+        # ./... to keep the lane within CI's time budget while still exercising
+        # every test that carries data-race assertions. gotestsum reruns transient
+        # failures (a data race is deterministic and re-fails; a contended-runner
+        # timeout is what gets absorbed).
+        #
+        # -short IS PART OF THE CONTRACT, not a shortcut. The heavy differential
+        # suites in vector/ are written to size themselves off it — see
+        # filter_bitset_test.go's gateSharedN ("THE SHORT SIZE EXISTS FOR -race")
+        # and searchability_invariant_test.go, which size their corpora down but
+        # keep every shape — and `make race` has always passed it. This lane did
+        # not, so it ran a 30k-point corpus through ~65 filter shapes twice under
+        # the detector: the vector package alone went from part of a 606s job in
+        # July to blowing the entire 40m budget, and the timeout named whichever
+        # test happened to be in flight (which read like a deadlock and was not).
+        #
+        # What -short costs is corpus SIZE and the recall/measurement tests, which
+        # carry no race assertions; what it keeps is every concurrency test —
+        # growHammer, the grow/remap hammers, the build-concurrent suites — at
+        # full strength, which is the entire point of this lane. The unabridged
+        # corpora still run on every push in the `build, vet + unit/light
+        # packages` job, without -race.
+        run: gotestsum --rerun-fails=2 --packages="./ ./cache/... ./ops/... ./vector/..." -- -race -short -p 2 -timeout 40m
+
+  python-client:
+    name: python client tests
+    runs-on: ubuntu-latest
+    # Runs in parallel with the Go lanes rather than serialized into them. Most
+    # of the suite drives an in-process FakeRostam, but the cross-stack modules
+    # need the real server: they assert that the Python client and the Go server
+    # agree on a byte-level wire, which a fake cannot prove. Without a binary
+    # they skip -- silently -- so this lane builds one. That costs a Go toolchain
+    # and one build; the alternative is a cross-language contract no lane checks.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build rostam-server for the cross-stack tests
+        run: go build -o rostam-server ./cmd/rostam-server
+
+      - name: Install client with test deps
+        # The `test` extra pulls the adapter deps + pytest so the langchain /
+        # llamaindex / haystack tests run instead of skipping.
+        run: pip install -e "clients/python[test]"
+
+      - name: Pytest
+        # -m python runs from clients/python so the `tests` package resolves for
+        # both `from tests._fakestore` and bare `from _fakestore` imports.
+        # ROSTAM_SERVER_BIN is explicit so the cross-stack modules cannot quietly
+        # skip: if the build above produced nothing, they fail rather than pass.
+        run: python -m pytest tests
+        working-directory: clients/python
+        env:
+          ROSTAM_SERVER_BIN: ${{ github.workspace }}/rostam-server

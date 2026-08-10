@@ -1,0 +1,93 @@
+name: docs
+
+# Nothing verified the docs before this: a renamed file or a stale nav entry
+# broke the site silently, and internal pages could be published by simply
+# existing under docs/. --strict turns MkDocs warnings (dead internal links,
+# missing nav targets) into a failed build.
+
+on:
+  push:
+    branches: [main]
+    paths: ['docs/**', 'mkdocs.yml', '.github/workflows/docs.yml']
+  pull_request:
+    paths: ['docs/**', 'mkdocs.yml', '.github/workflows/docs.yml']
+  # The paths filter means an unrelated commit will not redeploy. Manual
+  # dispatch covers the first publish and any forced re-run.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One publish at a time, and never cancel one midway: a half-deployed site is
+# worse than a slightly stale one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install
+        run: pip install mkdocs-material
+
+      - name: Build (strict)
+        run: mkdocs build --strict --site-dir _site
+
+      - name: Internal docs must not be published
+        # exclude_docs is easy to drop in a merge, and the failure mode is
+        # silent publication rather than a broken build -- so assert it.
+        run: |
+          fail=0
+          for path in _site/PRODUCTION-READINESS _site/superpowers; do
+            if [ -e "$path" ]; then
+              echo "::error::$path was published; it must stay in exclude_docs in mkdocs.yml"
+              fail=1
+            fi
+          done
+          exit $fail
+
+      - name: No third-party font requests
+        # The theme sets font:false and self-hosts the same faces as the landing
+        # page. If that regresses, every page silently gains a Google Fonts
+        # request and the shared identity breaks.
+        run: |
+          if grep -rl "fonts.googleapis.com\|fonts.gstatic.com" _site --include='*.html' | head -1 | grep -q .; then
+            echo "::error::pages request Google Fonts; theme.font must stay false"
+            exit 1
+          fi
+          echo "fonts are self-hosted"
+
+      # Only carry the artifact forward for real publishes. A pull_request run
+      # still builds and runs every assertion above -- it just cannot deploy.
+      - name: Upload Pages artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    name: publish to GitHub Pages
+    needs: build
+    # Never from a pull request: a fork PR must not be able to publish. Only a
+    # push to main, or an explicit manual dispatch.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write      # publish the artifact
+      id-token: write   # OIDC token deploy-pages verifies
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

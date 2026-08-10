@@ -1,0 +1,337 @@
+# Changelog
+
+Notable user-visible changes. Entries that alter existing behaviour are marked
+**Breaking** and say what to do about it.
+
+## Unreleased
+
+### Breaking: NaN no longer matches range filters
+
+A point whose numeric payload field is `NaN` previously matched `gte` and `lte`
+against **every** bound, because the comparison classified "neither less nor
+greater" as equal. It now follows IEEE 754: a NaN operand makes the comparison
+unordered, so `gt`, `gte`, `lt` and `lte` are all false — for a NaN field value
+and for a NaN bound alike.
+
+`eq`, `ne` and `in` are unchanged (they compare with `==`, under which NaN was
+never equal to anything), and `is_null`/`is_empty` are unchanged (a NaN is a
+present, non-null value).
+
+**Who is affected:** anyone whose payloads contain NaN, which in practice comes
+from a division by zero or a failed numeric parse upstream. Those points will
+stop appearing in `gte`/`lte` results.
+
+**What to do:** write a real sentinel value rather than NaN if such points should
+remain matchable.
+
+**Why:** the payload index never agreed with the old behaviour — it excluded NaN
+from every range posting list — so a filtered search could already return
+different rows depending on which query path the planner chose. Making NaN
+unordered is what lets the index and the predicate answer the same question, and
+it matches Go, Rust, Milvus and Qdrant. See
+[Metadata filtering](vector/filtering.md#nan-and-range-comparisons).
+
+### Breaking: three misconfigurations now refuse to start instead of serving
+
+All three used to come up and serve traffic (one printed a warning):
+
+- **An open non-loopback bind with no authenticator.** With neither `-keys-file`
+  nor `-api-key` set, binding a non-loopback address is refused at startup,
+  because every request would be served unauthenticated. Loopback-only binds —
+  the dev default — are unaffected. Configure auth, bind `127.0.0.1`, or pass
+  the new `-insecure` flag to run open deliberately (dev/trusted networks only).
+- **Inter-node TLS without a CA.** In cluster mode, `-tls-cert` without
+  `-tls-ca` encrypted the replication listener while authenticating nobody: any
+  peer that completed a TLS handshake could replicate writes. `-tls-ca` is now
+  required whenever `-tls-cert` is set in cluster mode.
+- **Tenant-scoped keys with `-tenant-isolation` off.** A key carrying a real
+  tenant while isolation is off silently crosses tenant boundaries through glob
+  scopes; the old startup warning is now a refusal. Enable `-tenant-isolation`,
+  or mark deliberately cross-tenant keys with `Tenant: "*"`.
+
+See [Security](server/security.md) for the full model.
+
+### Breaking: WASM registration sends the module out of band
+
+`Store.RegisterWASM` now takes the module bytes as a separate argument and
+returns a push report:
+
+```go
+pushReport, err := store.RegisterWASM(ctx, reg, moduleBytes)
+```
+
+`WASMRegistration` no longer carries the bytes inline — the `Bytes` field is
+replaced by a content address computed for you from the module argument — and
+`KeyExtractorHandle` is gone: every WASM op uses the standard extractor, and the
+field's other value could make replicas silently diverge, so it cannot exist.
+Pass the bytes as the new argument and delete any `KeyExtractorHandle`
+assignment; the compiler will point at both sites.
+
+Two behaviour changes ride along. Updating a live module's **bytes** is now
+supported on replicated stores — the version a shard group executes is bound to
+that group's own log, which is what made updates unsafe before — while changing
+a registered op's `Kind` is still refused; use a new op name for that. And the
+push report is part of the result, not diagnostics: when non-empty it names the
+cluster members that did not acknowledge the module bytes and will have to
+fetch them on demand.
+
+### Range filters are no longer a throughput cliff
+
+A range predicate over a high-cardinality field (`id >= N` and friends) used to
+cost a large multiple of the same search unfiltered, most of it spent building a
+candidate set the planner then discarded. Filtered throughput is now close to
+unfiltered for high-pass-rate ranges, with no configuration change and no API
+change. Two new counters expose which acceleration a filtered search used:
+`filter_column_gates_total` and `filter_complement_gates_total`, alongside the
+existing `filter_gates_total`.
+
+Numeric range filters may now build a **column sidecar** — one `float64` per slot
+per range-queried field, at most eight fields at a time, least-recently-used
+evicted beyond that. It is built lazily on the first range query over a field.
+
+The sidecar counts against `MaxBytes`, and **writes always win**: an insert that
+would otherwise be refused reclaims the sidecar and proceeds, so query traffic
+can never make a collection permanently reject writes. `ErrCollectionFull`
+continues to mean what it always meant — the collection's own durable data has
+filled its budget. The `filter_column_drops_total` counter reports how often a
+write had to reclaim columns; a value that climbs steadily means reads and writes
+are fighting over the same bytes and `MaxBytes` wants raising. In the other
+direction, a search on a collection with no byte headroom simply skips the
+sidecar and uses the slower path.
+
+On low-dimensional collections the sidecar is a meaningful fraction of memory —
+a full set of columns is a quarter of the vector data at 64 dimensions and twice
+it at 8 — so size `MaxBytes` with that in mind.
+
+### Filtered searches spend less time re-checking the filter
+
+When a filtered search cannot brute-force the candidate set the payload index
+narrowed, it falls back to graph traversal — and that traversal used to re-derive
+each candidate's filter membership from scratch, a fact the index had already
+established. It now folds the same narrowing plan into a membership bitset and
+consults one bit per candidate instead. No API change, no configuration, and no
+change to which points a filter matches: it is the same plan, read a cheaper way.
+
+### Binary bulk-ingest wire
+
+`/points/bulk` and `/points/batch` now accept a dense binary body, selected by
+`Content-Type: application/octet-stream`, carrying vectors as raw `f32` rather
+than as base-10 JSON text. On a large initial load the JSON encode/decode — not
+the index build — was the larger cost: a 1M × 768d load measured locally at
+roughly **1043 s dropped to roughly 508 s**.
+
+This adds no semantics. Each route decodes a binary body into exactly the request
+its JSON body produces and then runs the identical code, so results are
+unaffected, and any other content type takes the JSON path unchanged. The framing,
+its limits, and its error behaviour are in
+[Binary bulk ingest](api/http.md#binary-bulk-ingest).
+
+### Bulk ingest carries payloads, so filtered workloads get the fast path
+
+A load that needed metadata on each point previously had exactly one route:
+`/points/batch`, one indexed insert per point. The staging path carried ids and
+vectors only, so every filtered workload was pushed off the multi-core bulk build
+and onto the slow inline route. `/points/bulk` now accepts per-point payloads and
+stages them for the same concurrent build. Measured locally at 100k × 768d with a
+single scalar payload per point, ingest went from **760 to 4915 vectors/s
+(6.46×)**; carrying the payloads costs nothing measurable against a vectors-only
+staged load, because they ride a pass that was already visiting every slot.
+
+Content and sparse vectors still have no bulk representation. The staging route
+now **rejects** a point carrying `content`, `sparse`, `ttl_ms`, `key_ttl_ms` or
+`expected_version` with a 400 rather than staging it with those fields quietly
+dropped.
+
+### Queries no longer stall while a collection grows
+
+A collection's per-slot arrays used to be reallocated and copied as it grew, and
+a query arriving at a growth boundary waited for the copy. They now grow in place
+on a reserved address range, so nothing moves and nothing waits. The effect on
+worst-case latency, the virtual-versus-resident memory consequence, and the
+platforms that fall back to the old behaviour are covered in
+[Growing a collection doesn't stall queries](performance.md#growing-a-collection-doesnt-stall-queries).
+
+### Cluster backups and one-shot restore
+
+`-backup-dir`/`-backup-interval` now cover `-cluster` deployments: each node
+streams per-shard artifacts plus the meta catalog, and a fresh same-topology
+cluster is restored by starting every node once with `-restore`. A restore
+fails loud on a topology mismatch or a missing shard artifact rather than
+bringing a shard up empty. See [Backups](server/backups.md).
+
+### A readiness probe that reflects shard leadership
+
+`GET /v1/ready` now answers from cluster state — shard leadership backed by
+per-shard replication-lag and ISR-health metrics — rather than from mere
+process liveness, so a load balancer stops routing to a node that cannot
+actually serve. `/v1/health` remains the liveness check. Both endpoints are
+auth-exempt, since an infrastructure probe carries no token.
+
+### Structured logs, request ids, and an opt-in access log
+
+`-log-format json` switches server logs to one JSON object per line (`text`,
+the default, keeps the historical stderr format); `-log-level` sets the floor.
+`-access-log` emits one structured line per request on every transport — HTTP,
+gRPC and TCP — with a request id (an inbound `X-Request-Id` is reused), the op,
+status, latency, bytes, and a redacted principal; raw tokens are never logged.
+Both new logs are off by default and cost nothing on the hot path when off.
+
+### Experimental: primary-backup replication mode
+
+`-replication-mode=pb` selects a primary-backup/ISR replication engine for
+every shard in place of per-shard Raft; the default (`raft`) is byte-identical
+to previous behaviour. PB mode requires `-min-isr` and a per-node PB address,
+promotes a verified ISR survivor automatically when a primary dies
+(`-pb-auto-failover`, default on within pb mode), and offers
+`-pb-commit-primary` to trade acked-write durability for lower write latency.
+Explicitly experimental — see `shard/pbisr/BENCHMARK.md` for the measured comparison
+it must clear.
+
+### Fixed: a point stored under id 0 was never returned by search
+
+A point inserted with id `0` was stored, live, returned by `Get`, and counted by
+the live-count metric — but no search of any kind returned it, on any index type.
+A collection holding exactly one point, id 0, answered its own vector with an
+empty result set. Search now returns it like any other point.
+
+The same absent-versus-zero confusion reached two `/query` discover cases, both
+also fixed. A discover query with `"target": 0` silently lost its anchor and was
+answered from the mean of its context positives instead of erroring; it now
+anchors on point 0 as written. And a context pair specifying one side as a vector
+and the other as an id — for example `{"positive_vec": [...], "negative": 5}` —
+used to be accepted and searched against an anchor the caller never named. A pair
+must now be wholly the id form or wholly the vector form; a mixed pair is
+rejected with a 400. If you were sending a half-specified pair, it was not doing
+what it appeared to do, and it now fails loudly.
+
+On CUDA builds (`-tags cuda`), the same slot guard ran in the GPU exact-scan
+lanes with a second consequence: a slot freed by a delete keeps a stale id,
+which the old check waved through, so a **deleted** point could resurface in
+GPU search results. The same fix covers both, and is verified on real CUDA
+hardware.
+
+### Fixed: a filter on `$content` returned no rows
+
+Any filter naming the `$content` field returned zero results, even when every
+point matched — for example `And(Eq("tag", "a"), Match("$content", "quick"))`
+over a set in which all points satisfy both clauses. `$content` is deliberately
+not indexed, and the query planner read "no index entries" as "no matching
+points" and returned early without ever evaluating the predicate. The predicate
+is now consulted, and such filters return the rows they always should have. This
+affected every filter operator on `$content`, not just text match.
+
+### Fixed: points could become permanently unsearchable under several workload shapes
+
+Under each of these shapes, a handful of points ended up in the collection —
+byte-correct, live, returned by `Get` and by scans — yet reachable by no search
+at any `ef_search`:
+
+- **The default multi-worker bulk build, and upserts overlapping a reshard**,
+  could link a point against a neighbour that had no usable edges yet, leaving
+  it with no path back from the entry point.
+- **An insert arriving when everything reachable was dead** — every candidate
+  the graph traversal could see being deleted or expired, a reshard's ordinary
+  lazy-delete band and a natural state of any delete-heavy collection — wrote
+  an *empty* edge set for the new point. Worse than orphaning that one point:
+  if it drew a taller level it promoted itself to entry point, severing the
+  whole live graph behind it. Linking now falls back to structural neighbours
+  (still-traversable tombstoned slots) rather than accepting emptiness.
+- **Repeated upsert sweeps at low graph degree** (`m` of about 4–6) fed each
+  reused slot self-loops and one-way upper edges and discarded the edges the
+  slot inherited, thinning the graph below its configured degree with every
+  sweep until points fell off it.
+
+All are fixed, and a standing invariant test now requires every live point to
+be findable by its own vector.
+
+If you loaded a large collection through the bulk build, ran upsert churn, or
+deleted heavily before these fixes, a small number of points may still be
+missing from your search results. The stored data is intact — `Get` and scans
+return those points — but only a re-load on a fixed build puts them back in the
+graph.
+
+### Fixed: a malformed bulk-ingest body could reserve memory before being rejected
+
+The bulk-ingest routes sized their allocations from counts the request itself
+declared, before the bytes backing them arrived — and on the JSON path the
+encoder ran ahead of the authorization check, so an anonymous caller could
+trigger the allocation and only then be told 401. Worse, the JSON path sized
+its buffer from the point count and the first vector's length, two numbers the
+body chooses independently: a measured 289 KB anonymous request allocated
+1.61 GB, and the same shape scaled within the body cap reached an allocation
+no process survives. Requests are now authorized before anything is sized by
+the body, every declared count and length is bounded before it sizes anything,
+and each section of a binary body is read in windows that grow only as bytes
+actually arrive. A body that over-declares its size is refused having consumed
+only what it really sent.
+
+Two related input errors are now rejected at the edge rather than deeper in:
+a bulk-stage batch whose vectors are not all the same length, and a bulk body
+whose payload section ends early. Neither was merely an error before. A ragged
+batch whose short vector sat mid-batch shifted every following row during
+encoding, so ids were reconstructed out of vector bytes — points stored under
+ids nobody sent, with no error anywhere. And the early-ending payload section
+mattered most on a cluster, where such a body could be replicated before it
+was decoded and then bring down every node that applied it.
+
+### Fixed: an upsert into an over-budget collection could resurrect the point it replaced
+
+An upsert reclaims the dead slot of the id it replaces — free it, then
+immediately reuse it — and both quota checks sat between those two steps. An
+upsert refused for being over `MaxVectors`/`MaxBytes` had therefore already
+freed the slot and then abandoned it, with the old id, vector and payload
+still in place and still reachable through the graph's in-edges: a search
+could return the **deleted** point, scored against its stale vector and
+carrying its old payload. A collection over its budget is reachable in the
+first place because the bulk load does not consult the quotas.
+
+The quota verdict now precedes the reclaim, judged against the accounting the
+reclaim is about to produce — so an upsert into a merely *full* collection is
+a replace and still succeeds, while a rejected upsert mutates nothing at all.
+
+### Fixed: loading a snapshot silently dropped most of the collection's config
+
+The snapshot header carries six config fields (dimension, metric, `m`,
+`ef_construction`, `ef_search`, seed). Reading a snapshot rebuilt the live
+config from those six and zeroed everything else, while `Config()` kept
+reporting the original values — so nothing looked wrong. Every path that loads
+a snapshot was affected: a restart with persistence enabled, a backup restore,
+and a Raft snapshot install. After any of them, `MaxVectors`/`MaxBytes` quotas
+were silently lifted, every subsequent insert wrote half the intended level-0
+graph degree, a quantized build silently switched to exact-float navigation,
+and the `max_ef_search` request ceiling vanished. The stored data was never
+harmed; the config now survives the round trip, and only the six
+header-carried fields are taken from the stream.
+
+### Fixed: TTL deadlines could differ between replicas
+
+In a cluster, each replica applying a write stamped TTL deadlines from its
+**own** clock, so replicas at skewed clocks stored different absolute
+deadlines for the same committed write — and could then disagree about whether
+a point was live: different search results, and a different insert-if-absent
+outcome, depending on the replica asked. Every clock-dependent decision in the
+apply path — point TTLs, per-key payload TTLs, expiry-aware liveness for CAS
+and reclaim — now uses a single leader-assigned stamp carried with the entry,
+across dense, multi-vector and named collections. Single-node behaviour is
+unchanged.
+
+### Fixed: a deleted key could come back after a warm restart
+
+In the KV cache, `Del` tombstoned only the in-memory index; nothing was
+recorded on the page, so a warm restart rebuilt the index straight off the
+bytes and the deleted key returned — and in a cluster the restarted node then
+disagreed with its peers forever, because nothing re-applies a delete below
+the applied index. Deletes now append a tombstone entry that outranks every
+earlier copy of the key in the rebuild.
+
+### Fixed: a handler panic no longer takes down the whole process
+
+There was no `recover()` anywhere in the op path, so a panic in any request
+handler — reachable from a malformed frame through the argument decoders —
+crashed the entire node: every shard, every connection. Every transport
+(HTTP, gRPC, TCP) now recovers handler panics into an `internal error`
+response plus a server-side log with the stack; the panic detail never
+reaches the client. The same hardening pass made the `-api-key` comparison
+constant-time and put body-size, idle and write timeouts on the HTTP server
+(the long-running bulk-build route is exempted from the write deadline, which
+otherwise cut it off mid-build on any large corpus).

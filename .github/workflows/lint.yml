@@ -1,0 +1,33 @@
+name: lint
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  golangci-lint:
+    name: golangci-lint
+    runs-on: ubuntu-latest
+    env:
+      # The wasm stored-procedure backend (wasmtime) requires cgo to type-check.
+      # wasmtime-go ships a prebuilt static lib, so gcc on the runner is enough.
+      # The GPU index is behind `-tags cuda` and is intentionally not linted here.
+      CGO_ENABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          # golangci-lint-action manages its own module/build cache.
+          cache: false
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          # Pinned to the latest release (2026-06). Config lives in .golangci.yml (v2 schema).
+          version: v2.12.2

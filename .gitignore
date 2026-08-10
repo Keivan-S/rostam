@@ -1,0 +1,58 @@
+# Binaries
+/bin/
+*.test
+*.out
+
+# Coverage
+*.prof
+coverage.txt
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+
+# Local data dirs we'll use in later phases
+/data/
+/vectors/
+*.bin
+*.sidecar
+
+# Tooling state (oh-my-claudecode / rtk / claude)
+.omc/
+.rtk/
+.claude/
+
+# Confidential business / GTM material — must never be published
+*-gtm-research*.html
+*-gtm-*.html
+
+# Internal security / bug review notes — must never be published
+deepreview/
+
+# Stray local artifacts
+perf-desktop.png
+
+# Python client artifacts
+__pycache__/
+*.pyc
+clients/python/.venv/
+clients/python/dist/
+clients/python/build/
+clients/python/*.egg-info/
+
+# Built server binary
+/rostam-server
+
+# internal agent/dev planning artifacts — never commit
+docs/superpowers/
+logs/
+
+# Build artifact committed by accident in 34fd16b (a 55MB rostam-server binary).
+# .gitignore already covered docs/superpowers/ but not this path.
+.superpowers/
+
+# mkdocs build output (docs/development.md: mkdocs build)
+site/

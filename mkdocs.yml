@@ -1,0 +1,110 @@
+site_name: Rostam
+site_description: >-
+  A high-performance vector database and sub-microsecond key-value store in a
+  single Go engine — run it standalone, replicate it across a Raft cluster, or
+  embed it directly in your binary.
+site_url: https://rostamlabs.github.io/rostam/
+repo_url: https://github.com/rostamlabs/rostam
+repo_name: rostamlabs/rostam
+docs_dir: docs
+
+# Not every file under docs/ is for the public site. MkDocs builds anything it
+# finds, whether or not it appears in `nav` -- so leaving these in only kept them
+# unlinked, not unpublished, and they were reachable by URL.
+#
+#   superpowers/             internal engineering plans and the security/
+#                            operability audit -- untracked (see .gitignore) and
+#                            not user documentation. The audit in particular
+#                            enumerates hardening work by severity; publishing it
+#                            would hand an attacker a prioritised list.
+exclude_docs: |
+  superpowers/
+
+theme:
+  name: material
+  # The landing page self-hosts its faces; the docs load the same files from
+  # docs/assets/fonts via rostam.css. Leaving this unset would pull Roboto from
+  # Google Fonts and quietly break the shared identity (and add a third-party
+  # request on every page).
+  font: false
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.tracking      # URL follows the anchor you are reading
+    - navigation.instant       # SPA-style page loads
+    - navigation.instant.progress
+    - navigation.indexes
+    - toc.follow
+    - content.code.copy
+    - content.code.annotate    # numbered callouts inside code samples
+    - content.tabs.link        # picking "Python" once keeps every tab on Python
+    - search.suggest
+    - search.highlight
+    - search.share
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: rostam-light
+      toggle: { icon: material/brightness-7, name: Dark mode }
+    - media: "(prefers-color-scheme: dark)"
+      scheme: rostam-dark
+      toggle: { icon: material/brightness-4, name: Light mode }
+
+extra_css:
+  - assets/css/rostam.css
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - footnotes
+  - toc:
+      permalink: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.details
+  - pymdownx.keys
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+nav:
+  - Home: index.md
+  - Quickstart: quickstart.md
+  - Concepts:
+      - Architecture: concepts/architecture.md
+      - Deployment modes: concepts/deployment-modes.md
+      - Collections, tenants & aliases: concepts/collections.md
+  - Vector engine:
+      - Collections & indexes: vector/collections-and-indexes.md
+      - Search: vector/search.md
+      - Filtering: vector/filtering.md
+      - Hybrid & full-text: vector/hybrid-search.md
+      - Quantization: vector/quantization.md
+      - Persistence & cold tier: vector/persistence.md
+  - Key-value store:
+      - Overview: kv/overview.md
+      - Custom ops: kv/custom-ops.md
+      - WASM procedures: kv/wasm.md
+      - Cache tuning: kv/cache.md
+  - Server & operations:
+      - Running the server: server/running.md
+      - Clustering: server/clustering.md
+      - Security: server/security.md
+      - Backups & cold tier: server/backups.md
+      - Monitoring: server/monitoring.md
+  - API reference:
+      - HTTP: api/http.md
+      - gRPC: api/grpc.md
+      - Go client: api/go-client.md
+      - Python client: api/python.md
+  - Performance: performance.md
+  - Development: development.md
+  - Changelog: changelog.md

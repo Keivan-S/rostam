@@ -1,0 +1,393 @@
+/* Rostam documentation theme.
+ *
+ * Maps the landing page's design system (rostam-web/src/styles/tokens.css) onto
+ * Material for MkDocs, so docs and site share one identity instead of looking
+ * like two products. Direction, verbatim from the source tokens: a Persian star
+ * chart for engineers — deep lapis night, brass (gold-leaf) accent, turquoise
+ * reserved for code.
+ *
+ * Material is themed entirely through CSS custom properties, so this overrides
+ * its variables rather than fighting its selectors. Keep the token block below
+ * in sync with the landing page; everything else derives from it.
+ */
+
+/* ---- self-hosted faces (no CDN: same files the landing page ships) ---- */
+@font-face {
+  font-family: "Bricolage Grotesque";
+  font-style: normal; font-weight: 600; font-display: swap;
+  src: url("../fonts/bricolage-600.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Bricolage Grotesque";
+  font-style: normal; font-weight: 700; font-display: swap;
+  src: url("../fonts/bricolage-700.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Bricolage Grotesque";
+  font-style: normal; font-weight: 800; font-display: swap;
+  src: url("../fonts/bricolage-800.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Inter";
+  font-style: normal; font-weight: 100 900; font-display: swap;
+  src: url("../fonts/inter.woff2") format("woff2");
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal; font-weight: 100 800; font-display: swap;
+  src: url("../fonts/jetbrainsmono.woff2") format("woff2");
+}
+
+/* ---- the shared palette ---- */
+:root {
+  --ink: #070a13;
+  --lapis: #0d1425;
+  --lapis-2: #121b32;
+  --line: #202b47;
+  --line-soft: #161f38;
+  --starlight: #e9edf6;
+  --slate: #99a3ba;
+  --slate-dim: #6e7994;
+  --brass: #e5a83d;
+  --brass-bright: #f2c160;
+  --brass-ink: #1c1204;
+  --brass-dim: rgba(229, 168, 61, 0.13);
+  --turquoise: #46d6cb;
+
+  --font-display: "Bricolage Grotesque", "Inter", system-ui, sans-serif;
+  --font-body: "Inter", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --radius: 10px;
+  --radius-sm: 6px;
+  --ease: cubic-bezier(0.22, 0.9, 0.3, 1);
+
+  --md-text-font: var(--font-body);
+  --md-code-font: var(--font-mono);
+}
+
+/* ---- light scheme: parchment ground, same brass ----
+ * The landing page commits to night. Docs are read for long stretches, so the
+ * light scheme is a real design rather than an inverted copy: a warm off-white
+ * that keeps brass legible (pure white makes gold look washed out), with the
+ * lapis family retained for headings so the two schemes stay recognisably one
+ * product.
+ */
+[data-md-color-scheme="rostam-light"] {
+  --md-default-bg-color:        #fbfaf7;
+  --md-default-bg-color--light: #f4f2ec;
+  --md-default-fg-color:        #16203a;
+  --md-default-fg-color--light: #4a5670;
+  --md-default-fg-color--lighter: #7a849c;
+  --md-default-fg-color--lightest: #d9dae2;
+
+  --md-primary-fg-color:        #0d1425;
+  --md-primary-bg-color:        #e9edf6;
+  --md-accent-fg-color:         #9a6a12;
+
+  --md-typeset-color:           #16203a;
+  --md-typeset-a-color:         #9a6a12;
+  --md-typeset-mark-color:      var(--brass-dim);
+
+  --md-code-bg-color:           #f2f0ea;
+  --md-code-fg-color:           #16203a;
+  --md-code-hl-string-color:    #0f7d75;
+  --md-code-hl-keyword-color:   #8a3ea8;
+  --md-code-hl-function-color:  #2a5db0;
+  --md-code-hl-number-color:    #9a6a12;
+  --md-code-hl-comment-color:   #7a849c;
+
+  --rostam-rule: #e3e0d7;
+  --rostam-surface: #ffffff;
+}
+
+/* ---- dark scheme: the landing page, verbatim ---- */
+[data-md-color-scheme="rostam-dark"] {
+  --md-default-bg-color:        var(--ink);
+  --md-default-bg-color--light: var(--lapis);
+  --md-default-fg-color:        var(--starlight);
+  --md-default-fg-color--light: var(--slate);
+  --md-default-fg-color--lighter: var(--slate-dim);
+  --md-default-fg-color--lightest: var(--line);
+
+  --md-primary-fg-color:        var(--ink);
+  --md-primary-bg-color:        var(--starlight);
+  --md-accent-fg-color:         var(--brass-bright);
+
+  --md-typeset-color:           var(--starlight);
+  --md-typeset-a-color:         var(--brass);
+  --md-typeset-mark-color:      var(--brass-dim);
+
+  --md-code-bg-color:           var(--lapis);
+  --md-code-fg-color:           var(--starlight);
+  --md-code-hl-string-color:    var(--turquoise);
+  --md-code-hl-keyword-color:   #b48ce0;
+  --md-code-hl-function-color:  #7fb0ff;
+  --md-code-hl-number-color:    var(--brass);
+  --md-code-hl-comment-color:   var(--slate-dim);
+
+  --md-footer-bg-color:         var(--lapis);
+  --md-footer-bg-color--dark:   var(--ink);
+
+  --rostam-rule: var(--line);
+  --rostam-surface: var(--lapis);
+}
+
+/* ---- typography: display face carries headings, body face carries prose ---- */
+.md-typeset h1,
+.md-typeset h2,
+.md-typeset h3,
+.md-typeset h4 {
+  font-family: var(--font-display);
+  letter-spacing: -0.018em;
+  font-weight: 700;
+}
+.md-typeset h1 {
+  font-weight: 800;
+  color: var(--md-default-fg-color);
+  text-wrap: balance;
+}
+.md-typeset h2 {
+  margin-top: 2.4em;
+  padding-top: 0.6em;
+  border-top: 1px solid var(--rostam-rule);
+}
+/* The brand mark should read as the brand, not as nav furniture. */
+.md-header__title,
+.md-nav__title {
+  font-family: var(--font-display);
+  font-weight: 700;
+}
+.md-typeset {
+  font-size: 0.78rem;
+  line-height: 1.72;
+}
+
+/* ---- header: hairline instead of Material's drop shadow ---- */
+.md-header {
+  box-shadow: none;
+  border-bottom: 1px solid var(--rostam-rule);
+  background-color: var(--md-default-bg-color);
+  color: var(--md-default-fg-color);
+}
+.md-header--shadow { box-shadow: none; }
+.md-tabs {
+  background-color: var(--md-default-bg-color);
+  border-bottom: 1px solid var(--rostam-rule);
+}
+
+/* ---- code: the surface that carries turquoise ---- */
+.md-typeset code,
+.md-typeset pre > code {
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+  font-feature-settings: "liga" 0;
+}
+.md-typeset pre > code {
+  border: 1px solid var(--rostam-rule);
+  border-radius: var(--radius);
+}
+.md-typeset :not(pre) > code {
+  border-radius: var(--radius-sm);
+  padding: 0.12em 0.42em;
+}
+
+/* ---- tables: data, so tabular figures and a quiet grid ---- */
+.md-typeset table:not([class]) {
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  border: 1px solid var(--rostam-rule);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.md-typeset table:not([class]) th {
+  font-family: var(--font-display);
+  font-weight: 600;
+  background: var(--md-default-bg-color--light);
+  letter-spacing: 0.01em;
+}
+.md-typeset table:not([class]) td {
+  border-top: 1px solid var(--rostam-rule);
+}
+
+/* ---- links: brass, underlined only on hover ---- */
+.md-typeset a {
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: border-color 160ms var(--ease), color 160ms var(--ease);
+}
+.md-typeset a:hover,
+.md-typeset a:focus-visible {
+  border-bottom-color: currentColor;
+}
+/* Keyboard focus must stay visible even though hover is subtle. */
+.md-typeset a:focus-visible,
+.md-nav__link:focus-visible,
+.md-header__button:focus-visible {
+  outline: 2px solid var(--brass);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
+/* ---- nav: active item marked in brass ---- */
+.md-nav__link--active,
+.md-nav__link--active:focus,
+.md-nav__link--active:hover {
+  color: var(--md-typeset-a-color);
+  font-weight: 600;
+}
+.md-nav__item .md-nav__link:hover { color: var(--md-accent-fg-color); }
+
+/* ---- admonitions ----
+ *
+ * Material ships saturated pastel blocks (a #448aff note, a #00b0ff info) that
+ * fight a parchment/lapis ground. These become hairline cards with a coloured
+ * rail instead.
+ *
+ * Semantic colour is kept SEPARATE from the brass accent and is not flattened
+ * away: a danger block must not look like a tip just because both were themed.
+ * Only the informational families take the accent; warning and danger keep
+ * distinct hues, harmonised to the palette rather than replaced by it.
+ *
+ * The doubled `.admonition.admonition` raises specificity past Material's
+ * per-type rules (`.md-typeset .note`) without resorting to !important.
+ */
+[data-md-color-scheme="rostam-light"] {
+  --rostam-adm-ok: #0f7d5f;
+  --rostam-adm-warn: #c2610a;
+  --rostam-adm-danger: #b3313c;
+}
+[data-md-color-scheme="rostam-dark"] {
+  --rostam-adm-ok: #3fbe8f;
+  --rostam-adm-warn: #f2994a;
+  --rostam-adm-danger: #f0708f;
+}
+
+.md-typeset .admonition,
+.md-typeset details {
+  --rostam-adm: var(--brass);
+  border: 1px solid var(--rostam-rule);
+  border-left: 2px solid var(--rostam-adm);
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+  background: var(--rostam-surface);
+  font-size: 0.72rem;
+}
+
+/* informational families → the accent */
+.md-typeset .admonition.admonition.note,
+.md-typeset .admonition.admonition.info,
+.md-typeset .admonition.admonition.todo,
+.md-typeset .admonition.admonition.abstract,
+.md-typeset .admonition.admonition.summary,
+.md-typeset .admonition.admonition.tldr,
+.md-typeset .admonition.admonition.example,
+.md-typeset .admonition.admonition.quote,
+.md-typeset .admonition.admonition.cite,
+.md-typeset .admonition.admonition.question,
+.md-typeset .admonition.admonition.help,
+.md-typeset .admonition.admonition.faq,
+.md-typeset details.details.note,
+.md-typeset details.details.info { --rostam-adm: var(--brass); }
+
+/* positive */
+.md-typeset .admonition.admonition.tip,
+.md-typeset .admonition.admonition.hint,
+.md-typeset .admonition.admonition.important,
+.md-typeset .admonition.admonition.success,
+.md-typeset .admonition.admonition.check,
+.md-typeset .admonition.admonition.done,
+.md-typeset details.details.tip,
+.md-typeset details.details.success { --rostam-adm: var(--rostam-adm-ok); }
+
+/* caution */
+.md-typeset .admonition.admonition.warning,
+.md-typeset .admonition.admonition.caution,
+.md-typeset .admonition.admonition.attention,
+.md-typeset details.details.warning { --rostam-adm: var(--rostam-adm-warn); }
+
+/* failure states */
+.md-typeset .admonition.admonition.danger,
+.md-typeset .admonition.admonition.error,
+.md-typeset .admonition.admonition.failure,
+.md-typeset .admonition.admonition.fail,
+.md-typeset .admonition.admonition.missing,
+.md-typeset .admonition.admonition.bug,
+.md-typeset details.details.danger,
+.md-typeset details.details.bug { --rostam-adm: var(--rostam-adm-danger); }
+
+/* One border + icon rule for every type, driven by --rostam-adm. Both
+ * declarations are needed: Material's per-type rule sets `border-color` on all
+ * four sides, so overriding only the left edge leaves three coloured ones. */
+.md-typeset .admonition.admonition,
+.md-typeset details.details {
+  border-color: var(--rostam-rule);
+  border-left-color: var(--rostam-adm);
+}
+.md-typeset .admonition.admonition > .admonition-title,
+.md-typeset details.details > summary {
+  font-family: var(--font-display);
+  font-weight: 600;
+  background: transparent;
+  border-bottom: 1px solid var(--rostam-rule);
+}
+.md-typeset .admonition.admonition > .admonition-title::before,
+.md-typeset details.details > summary::before {
+  background-color: var(--rostam-adm);
+}
+/* Material draws a coloured left rule on the title too; fold it away. */
+.md-typeset .admonition.admonition > .admonition-title::after,
+.md-typeset details.details > summary::after {
+  color: var(--rostam-adm);
+}
+
+/* ---- content tabs (curl / Python / Go) ---- */
+.md-typeset .tabbed-labels > label {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 0.68rem;
+  letter-spacing: 0.02em;
+}
+.md-typeset .tabbed-labels > label > [href]:focus-visible {
+  outline: 2px solid var(--brass);
+  outline-offset: 2px;
+}
+.js .md-typeset .tabbed-labels::before { background: var(--brass); }
+
+/* ---- buttons ---- */
+.md-typeset .md-button {
+  border-radius: var(--radius-sm);
+  border-width: 1px;
+  font-family: var(--font-display);
+  font-weight: 600;
+}
+.md-typeset .md-button--primary {
+  background-color: var(--brass);
+  border-color: var(--brass);
+  color: var(--brass-ink);
+}
+.md-typeset .md-button--primary:hover {
+  background-color: var(--brass-bright);
+  border-color: var(--brass-bright);
+  color: var(--brass-ink);
+}
+
+/* ---- search ---- */
+.md-search__form {
+  border-radius: var(--radius-sm);
+  background-color: var(--md-default-bg-color--light);
+}
+.md-search__input::placeholder { color: var(--md-default-fg-color--lighter); }
+
+/* ---- footer ---- */
+.md-footer-meta { background-color: var(--md-default-bg-color--light); }
+
+/* ---- charts embedded from the benchmark keep their own ground ---- */
+.md-typeset img[src*="/bench/"] {
+  border: 1px solid var(--rostam-rule);
+  border-radius: var(--radius);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .md-typeset a { transition: none; }
+}

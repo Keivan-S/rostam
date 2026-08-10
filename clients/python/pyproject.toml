@@ -1,0 +1,42 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "rostam-client"
+version = "0.1.0"
+description = "Dependency-free Python client and LangChain adapter for the Rostam vector store"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+authors = [{ name = "RostamLabs" }]
+keywords = ["vector", "database", "rag", "embeddings", "rostam", "langchain"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Database",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Typing :: Typed",
+]
+dependencies = []  # the core client is standard-library only
+
+[project.optional-dependencies]
+langchain = ["langchain-core>=0.2"]
+llamaindex = ["llama-index-core>=0.10"]
+haystack = ["haystack-ai>=2.0"]
+dev = ["langchain-core>=0.2", "llama-index-core>=0.10", "haystack-ai>=2.0"]
+# `test` pulls the adapter deps (so the langchain/llamaindex/haystack tests run
+# instead of skipping) plus pytest itself, for a single reproducible CI install.
+test = ["rostam-client[dev]", "pytest>=7"]
+
+[project.urls]
+Homepage = "https://github.com/rostamlabs/rostam"
+Source = "https://github.com/rostamlabs/rostam/tree/main/clients/python"
+Documentation = "https://github.com/rostamlabs/rostam/blob/main/docs/api/python.md"
+Issues = "https://github.com/rostamlabs/rostam/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["rostam"]

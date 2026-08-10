@@ -1,0 +1,4 @@
+# Build artifacts produced by the Makefile (nvcc). The .cu/.h/Makefile are the
+# committed sources; the compiled objects/archives are local-only.
+*.o
+*.a

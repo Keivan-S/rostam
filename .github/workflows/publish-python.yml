@@ -1,0 +1,57 @@
+name: publish-python
+
+# Publishes the rostam-client Python distribution to PyPI.
+#
+# Trigger: push a tag of the form `py-v<version>` (e.g. py-v0.1.0), or run the
+# workflow manually from the Actions tab. The tag version and pyproject.toml
+# version must match.
+#
+# Auth uses PyPI Trusted Publishing (OIDC) — no API token stored in the repo.
+# One-time setup on PyPI: add a trusted publisher for project `rostam-client`
+# with owner `rostamlabs`, repo `rostam`, workflow `publish-python.yml`,
+# environment `pypi`. To fall back to a token instead, set a `PYPI_API_TOKEN`
+# secret and pass `password:` to the publish step.
+
+on:
+  push:
+    tags: ["py-v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build wheel + sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Build distribution
+        working-directory: clients/python
+        run: |
+          python -m pip install --upgrade build twine
+          python -m build
+          python -m twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-dist
+          path: clients/python/dist/*
+
+  publish:
+    name: publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write  # OIDC token for Trusted Publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-dist
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist

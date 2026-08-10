@@ -1,0 +1,148 @@
+// SPDX-License-Identifier: Apache-2.0
+
+package server
+
+import (
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/rostamlabs/rostam/cache"
+	"github.com/rostamlabs/rostam/ops"
+	"github.com/rostamlabs/rostam/shard"
+	"github.com/rostamlabs/rostam/vector"
+)
+
+// TestMapResultRedactsInternalError covers finding 039: an internal (non-sentinel,
+// non-classified) error carries identifiable topology detail; mapResult must NOT
+// return it verbatim over the wire — it logs server-side and returns the generic
+// "internal error" payload, mirroring the HTTP edge's writeDispatchError redaction.
+func TestMapResultRedactsInternalError(t *testing.T) {
+	disp := &fakeDispatcher{}
+	const secret = "open /var/lib/rostam/shard-7/partition.idx: no such file; leader 10.0.0.9:7001"
+	status, payload := mapResult(disp, nil, errors.New(secret), "")
+	if status != StatusError {
+		t.Fatalf("status = %d, want StatusError", status)
+	}
+	msg, err := DecodeErrorPayload(payload)
+	if err != nil {
+		t.Fatalf("DecodeErrorPayload: %v", err)
+	}
+	if strings.Contains(msg, "shard-7") || strings.Contains(msg, "10.0.0.9") || strings.Contains(msg, "/var/lib") {
+		t.Fatalf("internal error payload leaked identifiable detail: %q", msg)
+	}
+	if msg != "internal error" {
+		t.Errorf("redacted payload = %q, want %q", msg, "internal error")
+	}
+}
+
+// TestMapResultKeepsClientFacingErrors covers the companion contract of finding 039:
+// classified client-facing signals keep their descriptive payload. The two existing
+// sentinels (NotFound / NotLeader) map to their own status codes, and validation /
+// routing signals (e.g. a dimension mismatch, a stringified "not leader") stay
+// descriptive rather than being redacted.
+func TestMapResultKeepsClientFacingErrors(t *testing.T) {
+	disp := &fakeDispatcher{leader: "10.0.0.2:7001"}
+
+	// cache.ErrNotFound → its own status, unchanged.
+	if status, _ := mapResult(disp, nil, cache.ErrNotFound, ""); status != StatusNotFound {
+		t.Errorf("cache.ErrNotFound status = %d, want StatusNotFound", status)
+	}
+	// shard.ErrNotLeader → its own status, unchanged.
+	if status, _ := mapResult(disp, nil, shard.ErrNotLeader, ""); status != StatusNotLeader {
+		t.Errorf("shard.ErrNotLeader status = %d, want StatusNotLeader", status)
+	}
+
+	// A validation mistake is a client signal → descriptive text preserved.
+	_, payload := mapResult(disp, nil, vector.ErrDimMismatch, "")
+	msg, err := DecodeErrorPayload(payload)
+	if err != nil {
+		t.Fatalf("DecodeErrorPayload: %v", err)
+	}
+	if msg == "internal error" || !strings.Contains(msg, "does not match") {
+		t.Errorf("validation error redacted: got %q, want the descriptive dim-mismatch text", msg)
+	}
+
+	// A stringified leadership transient (the clustered path) stays descriptive so
+	// the caller can see it is retryable rather than an opaque internal fault.
+	_, payload = mapResult(disp, nil, errors.New("shard: not leader for partition 3"), "")
+	msg, _ = DecodeErrorPayload(payload)
+	if msg == "internal error" || !strings.Contains(msg, "not leader") {
+		t.Errorf("leadership transient redacted: got %q", msg)
+	}
+}
+
+// TestMapResultKeepsUnregisteredOpVisible pins the classification of an
+// unregistered op name over the TCP path. cluster.ErrUnknownOp ("cluster: op
+// not registered") and shard.ErrOpNotRegistered ("shard: op not registered")
+// used to match nothing in clientFacingErr and fell into the catch-all, so the
+// caller got the opaque "internal error". That hid the real cause in
+// diagnostics AND stopped the client from rotating: a plain StatusError that is
+// neither NotLeader nor a transport error is returned immediately, so a server
+// that has not yet applied a dynamic WASM registration ended the call instead of
+// deferring to a peer that had.
+//
+// The message is safe to disclose — it only echoes back the op name the caller
+// already sent, with no path, shard id, or host address in it.
+func TestMapResultKeepsUnregisteredOpVisible(t *testing.T) {
+	disp := &fakeDispatcher{}
+	for _, err := range []error{
+		shard.ErrOpNotRegistered,
+		// cluster.ErrUnknownOp's text; the cluster package cannot be imported
+		// here, and the clustered path stringifies it across the Raft boundary
+		// anyway.
+		errors.New("cluster: op not registered"),
+		// cluster.ErrWASMOpNotInThisGroup: the op EXISTS here, but this node will
+		// not propose an invocation into the target shard group's log until it
+		// knows that log carries the registration. Transient and retryable, so it
+		// must reach the client with its text intact — redacting it would leave
+		// the caller unable to tell a wait-and-retry from a server fault.
+		errors.New(`cluster: op not registered in this shard group yet: op "wasm_incr", shard group 2`),
+	} {
+		status, payload := mapResult(disp, nil, err, "")
+		if status != StatusError {
+			t.Fatalf("%v: status = %d, want StatusError", err, status)
+		}
+		msg, decErr := DecodeErrorPayload(payload)
+		if decErr != nil {
+			t.Fatalf("DecodeErrorPayload: %v", decErr)
+		}
+		if msg == "internal error" {
+			t.Errorf("%v: redacted to the generic payload; the caller cannot tell an unknown op from a server fault", err)
+		}
+		if !strings.Contains(msg, "op not registered") {
+			t.Errorf("%v: payload = %q, want the descriptive text", err, msg)
+		}
+	}
+}
+
+// TestMapResultKeepsWASMUpdateRefusalVisible pins cluster.ErrWASMUpdateUnsupported
+// over the TCP path. Updating a live WASM module is an unsupported operation, and
+// the refusal carries the one thing the caller can act on — register the new
+// module under a new op name. Redacted to "internal error" it would read as a
+// server fault and the caller would retry the same unsupported call forever.
+//
+// The message discloses only the op name the caller already sent, the node id it
+// addressed, and the installed epoch: no path, no shard id, no host address.
+func TestMapResultKeepsWASMUpdateRefusalVisible(t *testing.T) {
+	disp := &fakeDispatcher{}
+	// cluster.ErrWASMUpdateUnsupported's text, rebuilt from the const the sentinel
+	// itself is built from: the cluster package cannot be imported here, and the
+	// clustered path stringifies the error across the Raft boundary anyway, so the
+	// const is the only compile-time link between the refusal and this classifier.
+	err := errors.New(`cluster: ` + ops.WASMUpdateUnsupportedMsg + `: op "wasm_incr" is already registered on node n1 (installed epoch 1) and this registration differs from it; register the new module under a NEW op name instead`)
+	status, payload := mapResult(disp, nil, err, "")
+	if status != StatusError {
+		t.Fatalf("status = %d, want StatusError", status)
+	}
+	msg, decErr := DecodeErrorPayload(payload)
+	if decErr != nil {
+		t.Fatalf("DecodeErrorPayload: %v", decErr)
+	}
+	if msg == "internal error" {
+		t.Fatalf("redacted to the generic payload; the caller cannot tell an unsupported operation from a server fault")
+	}
+	if !strings.Contains(msg, "NEW op name") {
+		t.Errorf("payload = %q, want the remedy to survive", msg)
+	}
+}

@@ -1,0 +1,66 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  default: standard
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - revive
+    - gosec
+    - bodyclose
+    - copyloopvar
+  settings:
+    gosec:
+      excludes:
+        # G115: integer-overflow on numeric conversions. Pervasive false positives in
+        # index/codec/offset math; real attacker-controlled bounds are validated at the
+        # decode/validation boundaries (see the pre-publish audit fixes).
+        - G115
+        # G304: file path from a variable. The backup/object-store file paths are
+        # containment-checked against their roots (audit-hardened in backup/fs.go).
+        - G304
+        # G404: math/rand is used only for non-security algorithmic randomness (HNSW
+        # level assignment, kmeans/SOAR seeding, random rotation), never for secrets.
+        - G404
+        # G103: intentional `unsafe` in zero-copy protocol parsing and the arena/SIMD
+        # paths; memory-safety was hand-reviewed in the pre-publish audit.
+        - G103
+        # G706: "log injection via taint" — the flagged values are internal op-name
+        # constants and benchmark/example paths, never attacker-controlled newlines.
+        - G706
+  exclusions:
+    rules:
+      # Test code: ignored cleanup errors, test fixtures, and unclosed response bodies
+      # in short-lived test servers are acceptable and not worth annotating.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec
+          - bodyclose
+      # revive's most opinionated default rules generate high-volume, low-value churn
+      # on this codebase: doc-comment-on-every-export, unused params on interface
+      # implementations, shadowing the Go 1.21 min/max builtins, and ctx-arg ordering.
+      # Keep revive's substantive checks; drop these stylistic ones.
+      - linters:
+          - revive
+        text: '^(exported|unused-parameter|redefines-builtin-id|context-as-argument):'
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/rostamlabs/rostam
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
