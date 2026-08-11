@@ -11,6 +11,7 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from rostam import RostamClient
+from _wire import read_body
 
 DOCS = {}   # id -> {"tokens": [[...]], "metadata": tagged}
 LAST = {}
@@ -32,8 +33,7 @@ class _Handler(BaseHTTPRequestHandler):
         pass
 
     def _body(self):
-        n = int(self.headers.get("Content-Length", 0))
-        return json.loads(self.rfile.read(n)) if n else None
+        return read_body(self.headers, self.rfile)
 
     def _send(self, code, obj):
         b = json.dumps(obj).encode()

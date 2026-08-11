@@ -13,6 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from rostam import RostamClient, RostamError
 from rostam import filters as f
+from _wire import read_body
 from _fakestore import FakeRostam
 
 # Captured requests, newest last; reset per test.
@@ -24,8 +25,7 @@ class _Handler(BaseHTTPRequestHandler):
         pass
 
     def _body(self):
-        n = int(self.headers.get("Content-Length", 0))
-        return json.loads(self.rfile.read(n)) if n else None
+        return read_body(self.headers, self.rfile)
 
     def _record(self):
         body = self._body()

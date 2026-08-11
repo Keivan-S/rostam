@@ -21,6 +21,35 @@ All errors raise `RostamError(message, status)` carrying the HTTP status.
 Metadata is plain Python dicts — the client converts to/from the server's
 tagged value encoding automatically.
 
+## Connections
+
+The client keeps a small pool of connections and reuses them, so a sequence of
+calls does not pay a TCP handshake each time. It is safe to share one client
+across threads: a connection is held by one thread for the length of a request.
+
+```python
+with RostamClient("http://localhost:8080") as c:   # or call c.close()
+    c.search("docs", q, k=10)
+
+RostamClient(url, pool_maxsize=8)    # idle connections kept per client
+```
+
+`close()` releases pooled connections; the client stays usable and reconnects on
+the next call. A server that closes the connection (HTTP/1.0, or
+`Connection: close`) is handled — the client simply does not pool those.
+
+Searches are sent in the [binary query framing](http.md#binary-query-body),
+which skips encoding the query vector as text; at dim=768 that was 31% of the
+request. Against a server too old to understand it, the client detects the
+refusal and falls back to the JSON body for the rest of its life. Pass
+`binary_search=False` to send JSON from the start.
+
+!!! note "Proxies"
+    Connection reuse is built on `http.client`, which — unlike the `urllib`
+    call it replaced — does not consult `HTTP_PROXY`/`HTTPS_PROXY`. A client
+    behind an egress proxy should point `base_url` at the proxy or at a local
+    forwarder.
+
 ## Collections
 
 ```python

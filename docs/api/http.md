@@ -156,6 +156,45 @@ All search bodies accept `filter` and the read options.
 
 `method` is `"rrf"` (default), `"weighted"` (with `alpha`), or `"dbsf"`.
 
+### Binary query body
+
+`/points/search` and `/points/search/docs` also accept a dense binary body,
+selected by `Content-Type: application/octet-stream` — the same selection rule as
+[binary bulk ingest](#binary-bulk-ingest), and the same guarantee: the server
+decodes it into the identical request the JSON body would have produced, then
+runs the identical validation and dispatch. Any other content type takes the
+JSON path unchanged.
+
+```
+magic      "RVQ1"                              4 bytes
+flags      u32     bit0 filter present
+k          u32
+dim        u32     length of the query vector
+rc         u8      read_consistency
+opa        u8      on_partition_unavailable
+_          u16     reserved, must be zero
+staleness  u64     max_staleness (the bound for rc=3)
+query      dim × f32
+filter     [ len u32 ][ len bytes of filter JSON ]   // only when bit0
+```
+
+**Big-endian** throughout, matching `RVB1` and the op wire.
+
+It exists because encoding the query vector dominates a small request: at
+dim=768, k=10 on a kept-alive connection, building the JSON body was 0.258 ms of
+a 0.845 ms search — 31% — against 0.011 ms to write the same vector as bytes,
+and the server's matching decode of those literals disappears with it.
+
+**Limits.** `dim` at most **65,536**, the filter blob at most **1 MiB**, the body
+at most **8 MiB**. `NaN` and `±Inf` are rejected: JSON cannot express them, and
+this body is meant to say exactly what its JSON twin can. Trailing bytes after
+the frame are rejected rather than ignored.
+
+A client that cannot assume a new enough server can simply try it: a server
+without this support hands the body to its JSON decoder and answers
+`400 invalid JSON body: ...`, which is unambiguous enough to fall back on. The
+reference Python client does this automatically.
+
 ## Partitioning (dense)
 
 | Method & path | Description |

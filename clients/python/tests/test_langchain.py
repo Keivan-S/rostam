@@ -22,6 +22,7 @@ except Exception:  # pragma: no cover - exercised only without langchain
     HAVE_LC = False
 
 from rostam import RostamClient
+from _wire import read_body
 
 STORE = {}        # id -> {"content":..., "metadata": tagged}
 LAST = {"body": None, "path": None}
@@ -32,8 +33,7 @@ class _Handler(BaseHTTPRequestHandler):
         pass
 
     def _body(self):
-        n = int(self.headers.get("Content-Length", 0))
-        return json.loads(self.rfile.read(n)) if n else None
+        return read_body(self.headers, self.rfile)
 
     def _send(self, code, obj):
         b = json.dumps(obj).encode()

@@ -9,6 +9,7 @@ faithfully without the Go binary.
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from _wire import read_body
 
 
 def _dec(tv):
@@ -57,8 +58,7 @@ class FakeRostam:
                 pass
 
             def _body(self):
-                n = int(self.headers.get("Content-Length", 0))
-                return json.loads(self.rfile.read(n)) if n else None
+                return read_body(self.headers, self.rfile)
 
             def _send(self, code, obj):
                 b = json.dumps(obj).encode()
