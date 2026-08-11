@@ -1335,7 +1335,7 @@ func missingJSON(missing []uint16) []int {
 func (a *api) search(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	var req searchReq
-	if !decodeBody(w, r, &req) {
+	if !decodeSearchBody(w, r, &req) {
 		return
 	}
 	if !validConsistency(w, req.ReadConsistency, req.OnPartitionUnavailable) {
@@ -1362,7 +1362,7 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 func (a *api) searchDocs(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	var req searchReq
-	if !decodeBody(w, r, &req) {
+	if !decodeSearchBody(w, r, &req) {
 		return
 	}
 	if !validConsistency(w, req.ReadConsistency, req.OnPartitionUnavailable) {

@@ -367,6 +367,16 @@ Documents must carry embeddings; writes use overwrite semantics.
 
 ## Notes
 
+- **Connections.** The client pools and reuses connections, so a sequence of
+  calls does not pay a TCP handshake each time, and it is safe to share one
+  client across threads. Use it as a context manager, or call `close()`, to
+  release the pool; the client stays usable afterwards. Connection reuse is
+  built on `http.client`, which does not consult `HTTP_PROXY`/`HTTPS_PROXY` —
+  behind an egress proxy, point `base_url` at the proxy.
+- **Search encoding.** Searches go out in Rostam's binary query framing rather
+  than as JSON text, which at dim=768 was 31% of the request. Against a server
+  too old to understand it the client notices and falls back to JSON for the
+  rest of its life; `RostamClient(url, binary_search=False)` opts out entirely.
 - **IDs.** Rostam point ids are `uint64`. The client takes integers directly. The
   LangChain adapter accepts string ids: a purely-numeric string is used verbatim,
   anything else is hashed (BLAKE2b) to a stable 64-bit id, so repeated
