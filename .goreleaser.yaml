@@ -6,8 +6,10 @@
 # clustering, and all three transports — is pure Go and identical in these
 # builds; only stored procedures are unavailable, and they fail loudly with
 # "wasm: stored procedures require a cgo build" rather than misbehaving.
-# Users who need them have two supported paths that do carry cgo: the container
-# image, and `go install github.com/rostamlabs/rostam/cmd/rostam-server@latest`.
+# Users who need them have two supported paths. The container image always
+# carries cgo. `go install` carries it only when the build has cgo on — a native
+# build (cgo defaults off when cross-compiling) on a machine with a C compiler:
+#   go install github.com/rostamlabs/rostam/cmd/rostam-server@latest
 version: 2
 
 project_name: rostam
@@ -85,19 +87,22 @@ release:
     ## Install
 
     ```sh
-    # Go toolchain (cgo build — includes WASM stored procedures)
+    # Go toolchain (includes WASM stored procedures when it builds with cgo)
     go install github.com/rostamlabs/rostam/cmd/rostam-server@{{ .Tag }}
 
-    # Container (cgo build; authentication is required)
+    # Container (always a cgo build; authentication is required)
     docker run -p 8080:8080 -e ROSTAM_API_KEY=secret ghcr.io/rostamlabs/rostam:{{ .Tag }}
     ```
 
     The binaries attached below are **pure-Go builds**: everything works except
     WASM stored procedures, which return `wasm: stored procedures require a cgo
-    build`. Use `go install` or the container image if you need them.
+    build`. The container image always includes them. `go install` includes them
+    only when it builds with cgo — a native build (cgo defaults off when
+    cross-compiling) on a machine with a C compiler.
 
     Verify a download against `checksums.txt`:
 
     ```sh
-    sha256sum -c checksums.txt --ignore-missing
+    sha256sum -c checksums.txt --ignore-missing        # Linux
+    shasum -a 256 -c checksums.txt --ignore-missing    # macOS
     ```
