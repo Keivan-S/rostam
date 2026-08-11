@@ -46,23 +46,34 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # Multi-arch image, built NATIVELY on each architecture. The alternative —
+  # one runner emulating arm64 through QEMU — compiles wasmtime under emulation,
+  # which turns a ~3 minute build into tens of minutes. GitHub provides arm64
+  # runners free for public repositories, so there is no reason to emulate.
+  #
+  # Each architecture pushes an untagged manifest by digest; the merge job below
+  # combines those digests into one tagged manifest list. That is the standard
+  # buildx pattern for native multi-arch and the reason the tags are applied
+  # once, at merge time, rather than twice and racing.
   image:
-    name: container image
-    runs-on: ubuntu-latest
+    name: image (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
-      packages: write # push to ghcr.io
-    # Lifted to job level so the steps below can branch on it: a secret cannot be
-    # read from a step-level `if`. Empty when Docker Hub is not configured, which
-    # makes the Docker Hub half skip instead of failing the release.
-    env:
-      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      packages: write
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.tag || github.ref }}
 
-      - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
 
       - uses: docker/login-action@v3
@@ -71,49 +82,69 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Docker Hub is optional: `docker pull rostamlabs/rostam` is shorter and
-      # more discoverable than the ghcr path, but it needs credentials that
-      # ghcr does not. Without them this step and the extra image name are
-      # skipped, and the release still publishes to ghcr.
-      - name: Log in to Docker Hub
-        if: env.DOCKERHUB_USERNAME != ''
-        uses: docker/login-action@v3
+      - id: build
+        uses: docker/build-push-action@v6
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          context: .
+          file: cmd/rostam-server/Dockerfile
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
 
-      - id: images
+      - name: Export the digest
         run: |
-          {
-            echo 'list<<EOF'
-            echo "ghcr.io/${GITHUB_REPOSITORY}"
-            if [ -n "$DOCKERHUB_USERNAME" ]; then echo "${DOCKERHUB_REPO}"; fi
-            echo EOF
-          } >> "$GITHUB_OUTPUT"
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
         env:
-          # A repository variable, so the Docker Hub namespace is not hardcoded
-          # to match the GitHub org — they are separate namespaces.
-          DOCKERHUB_REPO: ${{ vars.DOCKERHUB_REPO || 'rostamlabs/rostam' }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ strategy.job-index }}
+          path: /tmp/digests/*
+          retention-days: 1
+
+  image-manifest:
+    name: image manifest
+    needs: image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ steps.images.outputs.list }}
+          images: ghcr.io/${{ github.repository }}
           tags: |
             type=semver,pattern={{version}},value=${{ inputs.tag || github.ref_name }}
             type=semver,pattern={{major}}.{{minor}},value=${{ inputs.tag || github.ref_name }}
             type=raw,value=latest
 
-      - uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: cmd/rostam-server/Dockerfile
-          # amd64 only: the image is a cgo build, so each platform compiles
-          # wasmtime under QEMU emulation — arm64 takes tens of minutes. Add it
-          # when there is a native arm64 runner or demand for the image.
-          platforms: linux/amd64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Create the manifest list
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf 'ghcr.io/${{ github.repository }}@sha256:%s ' *)
+
+      - name: Verify both architectures are present
+        run: |
+          docker buildx imagetools inspect "ghcr.io/${{ github.repository }}:${VERSION}" \
+            --format '{{ json .Manifest }}' | jq -r '.manifests[].platform | .os + "/" + .architecture'
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
