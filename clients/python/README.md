@@ -16,24 +16,42 @@ pip install rostam-client[langchain] # + the LangChain VectorStore adapter
 
 ## Run a server
 
-The client talks to a Rostam HTTP server. Build and run one from this repo:
+This client speaks **HTTP** — it is built on `urllib`, so the server needs its
+`-http` listener and that is the port you point the client at. (The server also
+offers gRPC and a binary TCP protocol; this client uses neither.)
+
+Neither of these needs a Go toolchain or a checkout:
 
 ```bash
-go build -o rostam-server ./cmd/rostam-server
-./rostam-server -http 127.0.0.1:8080 -data ./data                    # REST/JSON
-./rostam-server -http 127.0.0.1:8080 -grpc 127.0.0.1:9090 -tcp 127.0.0.1:7000
-./rostam-server -http :8080 -api-key "$KEY"                          # reachable, with auth
+# Container. Auth is required because it binds 0.0.0.0 inside the container.
+docker run --rm -p 127.0.0.1:8080:8080 -e ROSTAM_API_KEY=dev-token \
+  -v rostam-data:/data ghcr.io/rostamlabs/rostam:latest -http 0.0.0.0:8080 -data /data
+
+# Prebuilt binary. Verifies the release checksum before installing.
+curl -fsSL https://raw.githubusercontent.com/rostamlabs/rostam/main/install.sh | sh
+rostam-server -http 127.0.0.1:8080 -data ./data
 ```
 
-Note the loopback addresses. With no authenticator configured the server
-**refuses to bind a reachable address** rather than serve an open datastore to
-the network, so a bare `:8080` will not start. To listen beyond loopback, give
-it auth (`-api-key` or `-keys-file`) as in the third line, or pass `-insecure`
-to run open deliberately.
+Then point the client at it:
 
-A single server can expose REST, gRPC, and the binary TCP protocol at once over
-one shared store — a write on any transport is visible on the others. Set a
-transport's flag to `""` to disable it.
+```python
+c = RostamClient("http://localhost:8080", api_key="dev-token")  # container
+c = RostamClient("http://localhost:8080")                       # loopback binary
+```
+
+Without `-data` the store is memory-only and everything is lost when the process
+exits — that is the container's default, which is why the command above mounts a
+volume.
+
+With no authenticator configured the server **refuses to bind a reachable
+address** rather than serve an open datastore to the network. That is why the
+container needs `ROSTAM_API_KEY` while a loopback binary does not, and why a
+bare `-http :8080` will not start. To listen beyond loopback, give it auth
+(`-api-key`/`ROSTAM_API_KEY` or `-keys-file`), or pass `-insecure` to run open
+deliberately.
+
+Building from source stays available for contributors:
+`go build -o rostam-server ./cmd/rostam-server`.
 
 ## Quickstart
 
