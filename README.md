@@ -144,17 +144,28 @@ no server in the picture. Start below; the Go embedding path is
 ## Install
 
 ```sh
-# The server, via the Go toolchain (a cgo build: includes WASM stored procedures)
-go install github.com/rostamlabs/rostam/cmd/rostam-server@latest
+# Prebuilt binary — verifies the release checksum before installing
+curl -fsSL https://raw.githubusercontent.com/rostamlabs/rostam/main/install.sh | sh
 
-# The library
-go get github.com/rostamlabs/rostam
+# Container (amd64 + arm64)
+docker run -p 8080:8080 -e ROSTAM_API_KEY=secret ghcr.io/rostamlabs/rostam:latest
 
-# The Python client
+# Go toolchain
+go install github.com/rostamlabs/rostam/cmd/rostam-server@latest   # the server
+go get github.com/rostamlabs/rostam                                # the library
+
+# Python client
 pip install rostam-client
 ```
 
-Or build the container image — see [below](#or-in-a-container).
+Prefer not to pipe a script into a shell? Download the archive and
+`checksums.txt` from the [latest release](https://github.com/rostamlabs/rostam/releases/latest),
+then `sha256sum -c checksums.txt --ignore-missing` before extracting — that is
+all the script does, plus picking the right file for your platform.
+
+The release binaries are **pure-Go builds**: everything works except WASM stored
+procedures, which return `wasm: stored procedures require a cgo build`. The
+container image and `go install` are cgo builds and include them.
 
 ## Quick start — run the server
 
