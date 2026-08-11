@@ -98,6 +98,7 @@ func main() {
 		go func() { _ = http.ListenAndServe(addr, nil) }() //nolint:gosec,errcheck
 	}
 	showVersion := flag.Bool("version", false, "print the version and exit")
+	helpAll := flag.Bool("help-all", false, "print every flag with its full description (-h prints a grouped summary)")
 	httpAddr := flag.String("http", ":8080", "REST/JSON listen address (\"\" = disabled)")
 	grpcAddr := flag.String("grpc", "", "gRPC listen address (\"\" = disabled)")
 	tcpAddr := flag.String("tcp", "", "binary TCP listen address (\"\" = disabled)")
@@ -212,6 +213,10 @@ func main() {
 	backupTenant := flag.String("backup-tenant", "default", "top-level S3 key prefix (backup namespace) for S3 backup + cold-tier objects: <tenant>/<collection>/<ts>.snap")
 	coldTierAfter := flag.Duration("cold-tier-after", 0, "idle-evict threshold: evict a collection to S3 after it is untouched this long (e.g. 1h); 0 = cold tiering OFF. Requires -backup-bucket")
 	s3PathStyle := flag.Bool("s3-path-style", true, "use path-style S3 addressing (<endpoint>/<bucket>/<key>); true for MinIO/R2/localstack, false for AWS virtual-host")
+	// -h prints the grouped summary. The stock alphabetical dump of 59 flags,
+	// several with paragraph-length descriptions, is the first thing a new
+	// operator meets and it is unreadable.
+	flag.Usage = func() { printGroupedUsage(flag.CommandLine.Output(), flag.CommandLine, false) }
 	flag.Parse()
 
 	// -version answers and exits before anything else is set up: it must work on
@@ -219,6 +224,10 @@ func main() {
 	// and it prints to stdout unshaped by -log-format.
 	if *showVersion {
 		fmt.Println(versionString())
+		return
+	}
+	if *helpAll {
+		printGroupedUsage(os.Stdout, flag.CommandLine, true)
 		return
 	}
 
