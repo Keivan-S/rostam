@@ -25,4 +25,9 @@ __all__ = [
     "TextStore",
 ]
 
-__version__ = "0.1.0"
+# Keep in step with [project] version in pyproject.toml. test_version.py fails
+# when they drift: this constant sat at 0.1.0 through the 0.1.1 release, so
+# anything asking rostam.__version__ was told the wrong release, and nothing
+# noticed. It is a literal rather than an importlib.metadata lookup so that
+# importing the package stays free of a dist-info read.
+__version__ = "0.1.2"
