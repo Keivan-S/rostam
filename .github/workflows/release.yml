@@ -131,10 +131,18 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
+          # Four tags per release:
+          #   0.1.1     type=semver strips the leading v
+          #   0.1       the minor series
+          #   v0.1.1    the form people read off the releases page — v0.1.1's
+          #             notes pointed at :v0.1.1, which did not exist
+          #   latest    only on a real tag push, so re-releasing an OLD tag by
+          #             hand cannot drag latest backwards
           tags: |
             type=semver,pattern={{version}},value=${{ inputs.tag || github.ref_name }}
             type=semver,pattern={{major}}.{{minor}},value=${{ inputs.tag || github.ref_name }}
-            type=raw,value=latest
+            type=raw,value=${{ inputs.tag || github.ref_name }}
+            type=raw,value=latest,enable=${{ inputs.tag == '' }}
 
       - name: Create the manifest list
         working-directory: /tmp/digests
