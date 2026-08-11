@@ -114,6 +114,11 @@ posture: `-nosync`, `-volatile-log`; replication engine: `-replication-mode`
 `-restore` + `-allow-missing-shards` for one-shot cluster disaster recovery.
 → [Backups & cold tier](backups.md)
 
+**Help & version** — `-version` prints the build identity and exits: a release
+tag for a released binary, otherwise the module pseudo-version Go records, with
+a `+dirty` marker when the tree had uncommitted changes. `-h` prints the flags
+grouped by the areas on this page; `-help-all` prints every description in full.
+
 **Logging** — `-log-format` (`text` | `json`), `-log-level`
 (`debug`–`error`), `-access-log` (one structured line per request on every
 transport, principal redacted).

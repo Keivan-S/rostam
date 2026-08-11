@@ -141,6 +141,21 @@ binary TCP protocol from any language — or embed the Go library directly, with
 no server in the picture. Start below; the Go embedding path is
 [further down](#quick-start--vector-search-go-library).
 
+## Install
+
+```sh
+# The server, via the Go toolchain (a cgo build: includes WASM stored procedures)
+go install github.com/rostamlabs/rostam/cmd/rostam-server@latest
+
+# The library
+go get github.com/rostamlabs/rostam
+
+# The Python client
+pip install rostam-client
+```
+
+Or build the container image — see [below](#or-in-a-container).
+
 ## Quick start — run the server
 
 ```sh
