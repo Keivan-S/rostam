@@ -82,12 +82,21 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Labels only — the tags are applied once, at merge time. Without this the
+      # per-platform images carry no OCI provenance, and
+      # org.opencontainers.image.source is what links the package to this repo.
+      - id: labels
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+
       - id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: cmd/rostam-server/Dockerfile
           platforms: ${{ matrix.platform }}
+          labels: ${{ steps.labels.outputs.labels }}
           outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=${{ matrix.platform }}
           cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
@@ -137,12 +146,15 @@ jobs:
           #   v0.1.1    the form people read off the releases page — v0.1.1's
           #             notes pointed at :v0.1.1, which did not exist
           #   latest    only on a real tag push, so re-releasing an OLD tag by
-          #             hand cannot drag latest backwards
+          #             hand cannot drag latest backwards. Gated on the event
+          #             rather than on inputs.tag: the inputs context is unset
+          #             for a push, and relying on how that coerces in a
+          #             comparison is not worth the ambiguity.
           tags: |
             type=semver,pattern={{version}},value=${{ inputs.tag || github.ref_name }}
             type=semver,pattern={{major}}.{{minor}},value=${{ inputs.tag || github.ref_name }}
             type=raw,value=${{ inputs.tag || github.ref_name }}
-            type=raw,value=latest,enable=${{ inputs.tag == '' }}
+            type=raw,value=latest,enable=${{ github.event_name == 'push' }}
 
       - name: Create the manifest list
         working-directory: /tmp/digests
@@ -152,7 +164,13 @@ jobs:
 
       - name: Verify both architectures are present
         run: |
-          docker buildx imagetools inspect "ghcr.io/${{ github.repository }}:${VERSION}" \
-            --format '{{ json .Manifest }}' | jq -r '.manifests[].platform | .os + "/" + .architecture'
+          got=$(docker buildx imagetools inspect "ghcr.io/${GITHUB_REPOSITORY}:${VERSION}" \
+            --format '{{ json .Manifest }}' \
+            | jq -r '.manifests[].platform | select(.architecture != "unknown") | .os + "/" + .architecture' \
+            | sort -u)
+          echo "published platforms:"; echo "$got" | sed 's/^/  /'
+          for want in linux/amd64 linux/arm64; do
+            echo "$got" | grep -qx "$want" || { echo "::error::$want missing from the manifest list"; exit 1; }
+          done
         env:
           VERSION: ${{ steps.meta.outputs.version }}
