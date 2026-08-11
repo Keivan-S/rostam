@@ -29,12 +29,15 @@ docker run --rm -p 127.0.0.1:8080:8080 -e ROSTAM_API_KEY=dev-token \
 
 # Prebuilt binary. Verifies the release checksum before installing.
 curl -fsSL https://raw.githubusercontent.com/rostamlabs/rostam/main/install.sh | sh
+export PATH="$PATH:$HOME/.local/bin"    # where the installer puts it
 rostam-server -http 127.0.0.1:8080 -data ./data
 ```
 
 Then point the client at it:
 
 ```python
+from rostam import RostamClient
+
 c = RostamClient("http://localhost:8080", api_key="dev-token")  # container
 c = RostamClient("http://localhost:8080")                       # loopback binary
 ```
