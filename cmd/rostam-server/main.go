@@ -222,6 +222,15 @@ func main() {
 		return
 	}
 
+	// Fill anything not given on the command line from ROSTAM_*. This runs
+	// before the logger is built so ROSTAM_LOG_FORMAT/ROSTAM_LOG_LEVEL take
+	// effect on the very first line, and before every fatal() below so a
+	// container configured entirely by environment fails on the same rules a
+	// flag-configured one does.
+	if err := applyEnvDefaults(flag.CommandLine, os.LookupEnv); err != nil {
+		fatal("invalid environment configuration", "err", err)
+	}
+
 	// Install the process-wide structured logger FIRST, so every subsequent line
 	// (including the startup fatals below) renders in the configured format/level.
 	// A bad -log-format/-log-level is itself fatal — but slog.Default is still the

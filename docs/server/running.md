@@ -38,6 +38,45 @@ liveness probe and `GET /v1/ready` the readiness probe — use the latter for
 load-balancer membership, since health stays green on a node that has lost
 quorum. `GET /metrics` serves Prometheus ([Monitoring](monitoring.md)).
 
+## Configuring by environment
+
+Every flag has an environment variable: uppercase the name and replace dashes
+with underscores, prefixed with `ROSTAM_`.
+
+| Flag | Variable |
+|---|---|
+| `-http` | `ROSTAM_HTTP` |
+| `-api-key` | `ROSTAM_API_KEY` |
+| `-pb-auto-failover` | `ROSTAM_PB_AUTO_FAILOVER` |
+| `-wasm-blob-retention` | `ROSTAM_WASM_BLOB_RETENTION` |
+
+This is what makes a container or a Kubernetes ConfigMap workable — otherwise
+59 flags have to be assembled into one command line.
+
+```sh
+docker run -p 8080:8080 \
+  -e ROSTAM_API_KEY=secret \
+  -e ROSTAM_SHARDS=16 \
+  rostam-server
+```
+
+**Precedence is `flag` > `ROSTAM_*` > default.** An explicit flag always wins,
+so a command line can override a baked-in environment without editing it.
+
+Three details worth knowing:
+
+- **Empty is a value, not an absence.** `ROSTAM_GRPC=""` disables the gRPC
+  listener exactly as `-grpc ""` does. A variable that is set-but-empty is
+  honoured; only an unset variable falls through to the default.
+- **A bad value is fatal.** `ROSTAM_SHARDS=sixteen` exits with
+  `ROSTAM_SHARDS="sixteen" is not a valid value for -shards`, naming the
+  variable, the value and the flag. It does not silently keep the default —
+  that is how a node ends up running a configuration nobody chose.
+- **Secrets are the deliberate exception.** For `-api-key` and
+  `-internal-token` the *environment* wins over the flag, because a secret on
+  the command line is visible to other local users through `/proc` and lands in
+  shell history.
+
 ## Flag reference by area
 
 **Authentication** — `-api-key` (single superuser key; prefer the
