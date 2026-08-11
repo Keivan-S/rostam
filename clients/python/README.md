@@ -16,9 +16,9 @@ pip install rostam-client[langchain] # + the LangChain VectorStore adapter
 
 ## Run a server
 
-This client speaks **HTTP** — it is built on `urllib`, so the server needs its
-`-http` listener and that is the port you point the client at. (The server also
-offers gRPC and a binary TCP protocol; this client uses neither.)
+This client speaks **HTTP** — it is built on `http.client`, so the server needs
+its `-http` listener and that is the port you point the client at. (The server
+also offers gRPC and a binary TCP protocol; this client uses neither.)
 
 Neither of these needs a Go toolchain or a checkout:
 
