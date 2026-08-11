@@ -148,7 +148,8 @@ no server in the picture. Start below; the Go embedding path is
 curl -fsSL https://raw.githubusercontent.com/rostamlabs/rostam/main/install.sh | sh
 
 # ...to a system path instead (prompts for sudo; ROSTAM_NO_SUDO refuses)
-curl -fsSL .../install.sh | ROSTAM_INSTALL_DIR=/usr/local/bin sh
+curl -fsSL https://raw.githubusercontent.com/rostamlabs/rostam/main/install.sh \
+  | ROSTAM_INSTALL_DIR=/usr/local/bin sh
 
 # Container (amd64 + arm64)
 docker run -p 8080:8080 -e ROSTAM_API_KEY=secret ghcr.io/rostamlabs/rostam:latest
@@ -163,8 +164,13 @@ pip install rostam-client
 
 Prefer not to pipe a script into a shell? Download the archive and
 `checksums.txt` from the [latest release](https://github.com/rostamlabs/rostam/releases/latest),
-then `sha256sum -c checksums.txt --ignore-missing` before extracting — that is
-all the script does, plus picking the right file for your platform.
+then verify before extracting — that is all the script does, plus picking the
+right file for your platform:
+
+```sh
+sha256sum -c checksums.txt --ignore-missing        # Linux
+shasum -a 256 -c checksums.txt --ignore-missing    # macOS
+```
 
 The release binaries are **pure-Go builds**: everything works except WASM stored
 procedures, which return `wasm: stored procedures require a cgo build`. The

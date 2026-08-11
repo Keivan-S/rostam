@@ -125,6 +125,8 @@ Choose a writable location instead:
 main() {
 	need curl
 	need tar
+	need awk
+	need mktemp
 	detect_platform
 
 	version=${ROSTAM_VERSION:-$(latest_version)}
@@ -137,7 +139,11 @@ main() {
 	asset="${BINARY}_${num}_${PLATFORM}.tar.gz"
 	base="https://github.com/$REPO/releases/download/$version"
 
-	tmp=$(mktemp -d)
+	# BSD mktemp (macOS, FreeBSD) rejects a bare -d and wants a template; GNU
+	# mktemp accepts either. Both platforms are supported by detect_platform, so
+	# the bare form would have failed on two of the three.
+	tmp=$(mktemp -d 2>/dev/null || mktemp -d -t rostam-install) ||
+		die "could not create a temporary directory"
 	# shellcheck disable=SC2064 # expand tmp now, not at trap time
 	trap "rm -rf '$tmp'" EXIT INT TERM
 
