@@ -132,6 +132,32 @@ class TransportTest(unittest.TestCase):
         self.assertIn("k must be between", str(caught.exception))
         self.assertEqual(["application/octet-stream"], RecordingServer.content_types)
 
+    def test_a_filter_too_large_for_the_framing_falls_back_to_json(self):
+        """The binary route caps a filter at 1 MiB; the JSON route allows 32 MiB.
+
+        Sending an oversized filter as RVQ1 would turn a search that used to work
+        into `filter too large` — the client picking an encoding must never
+        shrink what the API accepts.
+        """
+        big = {"op": "in", "field": "sku",
+               "value": {"kind": "strings", "strs": ["x" * 32 for _ in range(40000)]}}
+        c = RostamClient(self.url)
+        c.search("docs", [1.0, 2.0], k=1, filter=big)
+        c.close()
+        self.assertEqual(["application/json"], RecordingServer.content_types)
+        self.assertEqual(big, RecordingServer.search_bodies[0]["filter"])
+
+    def test_k_the_framing_cannot_express_falls_back_to_json(self):
+        """Negative k must not become a struct.error where JSON gives a 400."""
+        RecordingServer.fail_next_with = (400, "k must be between 1 and 65536")
+        c = RostamClient(self.url)
+        with self.assertRaises(RostamError) as caught:
+            c.search("docs", [1.0, 2.0], k=-1)
+        c.close()
+        self.assertEqual(400, caught.exception.status)
+        self.assertEqual(["application/json"], RecordingServer.content_types,
+                         "an unencodable k should take the JSON path, not raise struct.error")
+
     def test_connections_are_reused(self):
         c = RostamClient(self.url)
         for _ in range(12):
@@ -269,18 +295,6 @@ class TimeoutTest(unittest.TestCase):
         finally:
             c._pool.discard(conn)
             c.close()
-
-    def test_k_the_framing_cannot_express_falls_back_to_json(self):
-        """Negative k must not become a struct.error where JSON gives a 400."""
-        RecordingServer.fail_next_with = (400, "k must be between 1 and 65536")
-        c = RostamClient(self.url)
-        with self.assertRaises(RostamError) as caught:
-            c.search("docs", [1.0, 2.0], k=-1)
-        c.close()
-        self.assertEqual(400, caught.exception.status)
-        self.assertEqual(["application/json"], RecordingServer.content_types,
-                         "an unencodable k should take the JSON path, not raise struct.error")
-
 
 class ClosingServer(RecordingServer):
     """A server that closes the connection after every response (HTTP/1.0)."""

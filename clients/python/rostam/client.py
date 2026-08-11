@@ -196,9 +196,13 @@ _RVQ1_FLAG_FILTER = 1 << 0
 # The server refuses a declared dim above this, so a longer vector goes as JSON
 # rather than as a request the server is certain to reject.
 _RVQ1_MAX_DIM = 1 << 16
+# ...and the same for the filter blob. A filter past this is refused by the
+# binary route but well within the JSON route's 32 MiB body, so exceeding it has
+# to mean "send JSON", not "fail" — an `in_` over enough values gets there.
+_RVQ1_MAX_FILTER = 1 << 20
 
 
-def _encode_rvq1(query: Vector, k: int, filter: Optional[Dict[str, Any]]) -> bytearray:
+def _encode_rvq1(query: Vector, k: int, filter_blob: bytes = b"") -> bytearray:
     """Encode a search request in the binary query framing.
 
     Same shape as _encode_bulk on the ingest side, and big-endian for the same
@@ -212,18 +216,14 @@ def _encode_rvq1(query: Vector, k: int, filter: Optional[Dict[str, Any]]) -> byt
     them so that adding them later needs no second wire format.
     """
     vec = array.array("f", query)
-    blob = b""
-    flags = 0
-    if filter:
-        flags |= _RVQ1_FLAG_FILTER
-        blob = json.dumps(filter).encode("utf-8")
+    flags = _RVQ1_FLAG_FILTER if filter_blob else 0
     out = bytearray(struct.pack(">4sIIIBBHQ", _RVQ1_MAGIC, flags, k, len(vec), 0, 0, 0, 0))
     if sys.byteorder == "little":
         vec.byteswap()
     out += vec.tobytes()
-    if blob:
-        out += struct.pack(">I", len(blob))
-        out += blob
+    if filter_blob:
+        out += struct.pack(">I", len(filter_blob))
+        out += filter_blob
     return out
 
 
@@ -473,11 +473,15 @@ class RostamClient:
         # Encoding it here would raise struct.error instead — a different
         # exception type for the same misuse, decided by which encoding the
         # client happened to pick.
-        encodable = 0 <= k <= 0xFFFFFFFF and len(query) <= _RVQ1_MAX_DIM
+        # Encoded once here rather than inside _encode_rvq1, because its SIZE is
+        # part of deciding whether the binary path can carry this request at all.
+        blob = json.dumps(filter).encode("utf-8") if filter else b""
+        encodable = (0 <= k <= 0xFFFFFFFF and len(query) <= _RVQ1_MAX_DIM
+                     and len(blob) <= _RVQ1_MAX_FILTER)
         if self.binary_search and self._binary_search_supported and encodable:
             try:
                 res = self._send(
-                    "POST", path, _encode_rvq1(query, k, filter),
+                    "POST", path, _encode_rvq1(query, k, blob),
                     "application/octet-stream", idempotent=True,
                 )
                 return res or {}
