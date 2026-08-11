@@ -52,6 +52,11 @@ jobs:
     permissions:
       contents: read
       packages: write # push to ghcr.io
+    # Lifted to job level so the steps below can branch on it: a secret cannot be
+    # read from a step-level `if`. Empty when Docker Hub is not configured, which
+    # makes the Docker Hub half skip instead of failing the release.
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -66,10 +71,34 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Docker Hub is optional: `docker pull rostamlabs/rostam` is shorter and
+      # more discoverable than the ghcr path, but it needs credentials that
+      # ghcr does not. Without them this step and the extra image name are
+      # skipped, and the release still publishes to ghcr.
+      - name: Log in to Docker Hub
+        if: env.DOCKERHUB_USERNAME != ''
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - id: images
+        run: |
+          {
+            echo 'list<<EOF'
+            echo "ghcr.io/${GITHUB_REPOSITORY}"
+            if [ -n "$DOCKERHUB_USERNAME" ]; then echo "${DOCKERHUB_REPO}"; fi
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+        env:
+          # A repository variable, so the Docker Hub namespace is not hardcoded
+          # to match the GitHub org — they are separate namespaces.
+          DOCKERHUB_REPO: ${{ vars.DOCKERHUB_REPO || 'rostamlabs/rostam' }}
+
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ${{ steps.images.outputs.list }}
           tags: |
             type=semver,pattern={{version}},value=${{ inputs.tag || github.ref_name }}
             type=semver,pattern={{major}}.{{minor}},value=${{ inputs.tag || github.ref_name }}
