@@ -1,0 +1,90 @@
+name: release
+
+# Publishes release binaries and the container image for a `v*` tag.
+#
+# The Python client releases separately on `py-v*` (publish-python.yml) because
+# it versions independently of the engine — a client fix should not require an
+# engine release, and vice versa. The two tag patterns do not overlap.
+
+on:
+  push:
+    tags: ["v*"]
+  # Lets an existing tag be released after the fact — the v0.1.0 tag predates
+  # this workflow and has no binaries attached.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to release (e.g. v0.1.0)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  binaries:
+    name: binaries
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release and upload artifacts
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # goreleaser derives the version and changelog from tag history, so a
+          # shallow clone produces a wrong version and an empty changelog.
+          fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  image:
+    name: container image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # push to ghcr.io
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ inputs.tag || github.ref_name }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ inputs.tag || github.ref_name }}
+            type=raw,value=latest
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: cmd/rostam-server/Dockerfile
+          # amd64 only: the image is a cgo build, so each platform compiles
+          # wasmtime under QEMU emulation — arm64 takes tens of minutes. Add it
+          # when there is a native arm64 runner or demand for the image.
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

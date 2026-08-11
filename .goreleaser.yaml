@@ -1,0 +1,103 @@
+# Release binaries for rostam-server.
+#
+# CGO_ENABLED=0 ON PURPOSE. The full build links wasmtime-go for WASM stored
+# procedures, and cgo cannot be cross-compiled from one runner without a
+# per-target C toolchain. Everything else — vector search, the KV store,
+# clustering, and all three transports — is pure Go and identical in these
+# builds; only stored procedures are unavailable, and they fail loudly with
+# "wasm: stored procedures require a cgo build" rather than misbehaving.
+# Users who need them have two supported paths that do carry cgo: the container
+# image, and `go install github.com/rostamlabs/rostam/cmd/rostam-server@latest`.
+version: 2
+
+project_name: rostam
+
+# The Python client releases on its own `py-v*` tags. Without this filter
+# goreleaser takes the most recent tag of ANY shape as the version, so a client
+# release silently renames the next engine release's artifacts — a snapshot
+# build produced "rostam-server_py-v0.1.0-SNAPSHOT_linux_amd64.tar.gz".
+git:
+  ignore_tags:
+    - "py-v*"
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: rostam-server
+    main: ./cmd/rostam-server
+    binary: rostam-server
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    # -X main.version is what makes `rostam-server -version` report the release
+    # tag instead of the pseudo-version Go derives for an untagged build.
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    goos:
+      - linux
+      - darwin
+      - windows
+      - freebsd
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      # No demand demonstrated, and each combination is another artifact to
+      # verify. Add them when someone asks.
+      - goos: windows
+        goarch: arm64
+      - goos: freebsd
+        goarch: arm64
+
+archives:
+  - id: default
+    name_template: >-
+      rostam-server_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    # Ship the licence and NOTICE inside the archive: Apache-2.0 §4 asks a
+    # redistributor to carry both, and a downloaded tarball is a redistribution.
+    files:
+      - README.md
+      - LICENSE
+      - NOTICE
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  draft: false
+  prerelease: auto
+  footer: |
+    ## Install
+
+    ```sh
+    # Go toolchain (cgo build — includes WASM stored procedures)
+    go install github.com/rostamlabs/rostam/cmd/rostam-server@{{ .Tag }}
+
+    # Container (cgo build; authentication is required)
+    docker run -p 8080:8080 -e ROSTAM_API_KEY=secret ghcr.io/rostamlabs/rostam:{{ .Tag }}
+    ```
+
+    The binaries attached below are **pure-Go builds**: everything works except
+    WASM stored procedures, which return `wasm: stored procedures require a cgo
+    build`. Use `go install` or the container image if you need them.
+
+    Verify a download against `checksums.txt`:
+
+    ```sh
+    sha256sum -c checksums.txt --ignore-missing
+    ```

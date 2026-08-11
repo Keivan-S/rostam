@@ -41,6 +41,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -96,6 +97,7 @@ func main() {
 		runtime.SetMutexProfileFraction(100)               // sample ~1/100 mutex contention events
 		go func() { _ = http.ListenAndServe(addr, nil) }() //nolint:gosec,errcheck
 	}
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	httpAddr := flag.String("http", ":8080", "REST/JSON listen address (\"\" = disabled)")
 	grpcAddr := flag.String("grpc", "", "gRPC listen address (\"\" = disabled)")
 	tcpAddr := flag.String("tcp", "", "binary TCP listen address (\"\" = disabled)")
@@ -211,6 +213,14 @@ func main() {
 	coldTierAfter := flag.Duration("cold-tier-after", 0, "idle-evict threshold: evict a collection to S3 after it is untouched this long (e.g. 1h); 0 = cold tiering OFF. Requires -backup-bucket")
 	s3PathStyle := flag.Bool("s3-path-style", true, "use path-style S3 addressing (<endpoint>/<bucket>/<key>); true for MinIO/R2/localstack, false for AWS virtual-host")
 	flag.Parse()
+
+	// -version answers and exits before anything else is set up: it must work on
+	// a machine where the config, data dir or listen address would be rejected,
+	// and it prints to stdout unshaped by -log-format.
+	if *showVersion {
+		fmt.Println(versionString())
+		return
+	}
 
 	// Install the process-wide structured logger FIRST, so every subsequent line
 	// (including the startup fatals below) renders in the configured format/level.

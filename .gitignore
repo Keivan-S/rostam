@@ -56,3 +56,6 @@ logs/
 
 # mkdocs build output (docs/development.md: mkdocs build)
 site/
+
+# goreleaser build output
+dist/
