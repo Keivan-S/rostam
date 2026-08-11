@@ -174,7 +174,9 @@ shasum -a 256 -c checksums.txt --ignore-missing    # macOS
 
 The release binaries are **pure-Go builds**: everything works except WASM stored
 procedures, which return `wasm: stored procedures require a cgo build`. The
-container image and `go install` are cgo builds and include them.
+container image always includes them. `go install` includes them only when it
+builds with cgo — a native build (cgo defaults off when cross-compiling) on a
+machine with a C compiler.
 
 ## Quick start — run the server
 

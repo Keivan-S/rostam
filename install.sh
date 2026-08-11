@@ -15,7 +15,9 @@
 #
 # These are PURE-GO builds. Everything works except WASM stored procedures,
 # which return "wasm: stored procedures require a cgo build". If you need them,
-# use the container image or `go install`, both of which are cgo builds.
+# use the container image, which always carries cgo. `go install` carries it
+# only when the build has cgo on: a native build (cgo defaults off when
+# cross-compiling) on a machine with a C compiler.
 #
 # POSIX sh on purpose: this runs on whatever /bin/sh a machine happens to have.
 set -eu
@@ -196,8 +198,9 @@ Next:
   $BINARY -help-all                             # every flag
 Docs: https://docs.rostamlabs.com/server/running/
 
-These are pure-Go builds: WASM stored procedures need the container image or
-'go install github.com/$REPO/cmd/$BINARY@latest'."
+These are pure-Go builds: WASM stored procedures need the container image, or
+'go install github.com/$REPO/cmd/$BINARY@latest' built with cgo (native build,
+C compiler installed)."
 }
 
 main "$@"
