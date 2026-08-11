@@ -38,6 +38,12 @@ RostamClient(url, pool_maxsize=8)    # idle connections kept per client
 the next call. A server that closes the connection (HTTP/1.0, or
 `Connection: close`) is handled — the client simply does not pool those.
 
+A pooled connection can still die while idle, and that is only discovered on the
+next request — after its bytes have been sent. **Reads are retried once on a
+fresh connection; writes are not**, and surface as `RostamError` with
+`status == 0`, because replaying a write could insert twice. Retry those in the
+caller, where the intent is known.
+
 Searches are sent in the [binary query framing](http.md#binary-query-body),
 which skips encoding the query vector as text; at dim=768 that was 31% of the
 request. Against a server too old to understand it, the client detects the

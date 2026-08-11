@@ -1,8 +1,9 @@
 """A dependency-free Python client for Rostam's REST API.
 
-Uses only the standard library (``urllib``), so it installs and runs anywhere
-with no transitive dependencies. Metadata and filter values are converted to and
-from Rostam's tagged wire form automatically — callers work in native Python.
+Uses only the standard library (``http.client``), so it installs and runs
+anywhere with no transitive dependencies. Metadata and filter values are
+converted to and from Rostam's tagged wire form automatically — callers work in
+native Python.
 
     from rostam import RostamClient
     from rostam import filters as f
@@ -158,8 +159,8 @@ def _encode_bulk_body(
 
     Returns the bytearray itself rather than ``bytes(out)``: the copy would
     momentarily double the body, which is the opposite of the point in a function
-    whose whole job is to make a large load cheap. urllib accepts any bytes-like
-    object as request data.
+    whose whole job is to make a large load cheap. http.client accepts any
+    bytes-like object as a request body.
     """
     n = len(ids)
     if len(vectors) != n:
@@ -290,14 +291,13 @@ class _ConnectionPool:
     returned to the pool once its response has been fully read.
     """
 
-    def __init__(self, base_url: str, timeout: float, maxsize: int = 8):
+    def __init__(self, base_url: str, maxsize: int = 8):
         parts = urllib.parse.urlsplit(base_url)
         if parts.scheme not in ("http", "https"):
             raise ValueError(f"base_url must be http:// or https://, got {base_url!r}")
         self._https = parts.scheme == "https"
         self._host = parts.hostname or "localhost"
         self._port = parts.port or (443 if self._https else 80)
-        self._timeout = timeout
         self._maxsize = maxsize
         self._idle: List[Any] = []
         self._lock = threading.Lock()
@@ -307,10 +307,22 @@ class _ConnectionPool:
         return cls(self._host, self._port, timeout=timeout)
 
     def acquire(self, timeout: float):
-        """Return (connection, reused). A reused connection may be dead."""
+        """Return (connection, reused), with `timeout` applied to it.
+
+        The timeout has to be re-applied on every acquire, not just at connect.
+        http.client fixes the socket timeout when the connection is made, so a
+        pooled connection carries whatever timeout its first caller happened to
+        want — and bulk_build asks for 24 hours. Inheriting an earlier 30-second
+        connection would abort a long build at 30 seconds, which urllib never
+        did because it applied the timeout per request.
+        """
         with self._lock:
             if self._idle:
-                return self._idle.pop(), True
+                conn = self._idle.pop()
+                conn.timeout = timeout
+                if conn.sock is not None:
+                    conn.sock.settimeout(timeout)
+                return conn, True
         return self._new(timeout), False
 
     def release(self, conn) -> None:
@@ -353,7 +365,7 @@ class RostamClient:
         # for how an older server is detected and fallen back to automatically.
         self.binary_search = binary_search
         self._binary_search_supported = True
-        self._pool = _ConnectionPool(self.base_url, timeout, maxsize=pool_maxsize)
+        self._pool = _ConnectionPool(self.base_url, maxsize=pool_maxsize)
         self._path_prefix = urllib.parse.urlsplit(self.base_url).path.rstrip("/")
 
     def close(self) -> None:
@@ -368,9 +380,14 @@ class RostamClient:
 
     # ---- transport ----
 
-    def _request(self, method: str, path: str, body: Optional[dict] = None) -> Any:
+    def _request(
+        self, method: str, path: str, body: Optional[dict] = None, *,
+        idempotent: Optional[bool] = None,
+    ) -> Any:
         data = None if body is None else json.dumps(body).encode("utf-8")
-        return self._send(method, path, data, "application/json")
+        if idempotent is None:
+            idempotent = method in ("GET", "HEAD")
+        return self._send(method, path, data, "application/json", idempotent=idempotent)
 
     def _send(
         self,
@@ -379,6 +396,8 @@ class RostamClient:
         data: Optional[Union[bytes, bytearray]],
         content_type: str,
         timeout: Optional[float] = None,
+        *,
+        idempotent: bool = False,
     ) -> Any:
         headers = {"Content-Type": content_type}
         if self.api_key:
@@ -386,13 +405,19 @@ class RostamClient:
         deadline = timeout or self.timeout
         url = self._path_prefix + path
 
-        # One retry, and only for a connection taken from the pool. A server (or
-        # a proxy) is free to close an idle keep-alive connection at any moment,
-        # and it usually does so between our last response and this request — so
-        # the failure arrives when we write, before the server has seen anything
-        # to act on. Retrying a connection we just opened would instead be
-        # retrying a request that may well have been executed.
-        attempts = 2
+        # One retry, and only for a request that is safe to send twice on a
+        # connection taken from the pool.
+        #
+        # A server is free to close an idle keep-alive connection at any moment,
+        # so a pooled connection can be dead before we use it. But the failure
+        # does not reliably arrive while writing: RemoteDisconnected and
+        # BadStatusLine are raised by getresponse(), by which point the request
+        # bytes are on the wire and the server may already have executed them.
+        # Retrying then would replay the write — a second /points insert that
+        # fails on a duplicate id, or a double batch. So the caller says whether
+        # the request can be repeated; reads say yes, writes say nothing and get
+        # an error they can act on.
+        attempts = 2 if idempotent else 1
         while True:
             attempts -= 1
             conn, reused = self._pool.acquire(deadline)
@@ -443,10 +468,17 @@ class RostamClient:
         of a 0.845 ms request — 31% — against 0.011 ms to write the same vector
         as bytes, and the server's matching decode disappears with it.
         """
-        if self.binary_search and self._binary_search_supported and len(query) <= _RVQ1_MAX_DIM:
+        # A k the framing cannot express (negative, or past u32) goes down the
+        # JSON path, where the server answers 400 exactly as it always has.
+        # Encoding it here would raise struct.error instead — a different
+        # exception type for the same misuse, decided by which encoding the
+        # client happened to pick.
+        encodable = 0 <= k <= 0xFFFFFFFF and len(query) <= _RVQ1_MAX_DIM
+        if self.binary_search and self._binary_search_supported and encodable:
             try:
                 res = self._send(
-                    "POST", path, _encode_rvq1(query, k, filter), "application/octet-stream"
+                    "POST", path, _encode_rvq1(query, k, filter),
+                    "application/octet-stream", idempotent=True,
                 )
                 return res or {}
             except RostamError as e:
@@ -462,7 +494,7 @@ class RostamClient:
         body: Dict[str, Any] = {"query": list(query), "k": k}
         if filter:
             body["filter"] = filter
-        return self._request("POST", path, body) or {}
+        return self._request("POST", path, body, idempotent=True) or {}
 
     # ---- collections ----
 

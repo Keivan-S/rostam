@@ -179,6 +179,109 @@ class TransportTest(unittest.TestCase):
         self.assertTrue(all(n == 2 for n in counts), "a desynchronized response would differ")
 
 
+class StaleServer(RecordingServer):
+    """Answers normally, then closes the socket without saying so.
+
+    This is what a real server's idle timeout looks like from the client: the
+    response advertises keep-alive, so the connection goes back in the pool, and
+    the close is only discovered on the *next* request — after its bytes have
+    already been written.
+    """
+
+    requests_seen = []
+
+    def _send(self, code, obj):
+        super()._send(code, obj)
+        self.close_connection = True   # no Connection: close header — that is the point
+
+
+class StaleConnectionTest(unittest.TestCase):
+    """Which requests may be replayed onto a connection that died while idle.
+
+    RemoteDisconnected surfaces from getresponse(), so the request is already on
+    the wire and the server may have executed it. A read can be repeated; a write
+    cannot, and must surface as an error the caller can act on.
+    """
+
+    def setUp(self):
+        StaleServer.content_types = []
+        StaleServer.search_bodies = []
+        StaleServer.connections = 0
+        StaleServer.requests_seen = []
+        StaleServer.fail_binary_as_old_server = False
+        StaleServer.fail_next_with = None
+        self.srv = ThreadingHTTPServer(("127.0.0.1", 0), StaleServer)
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+        self.url = f"http://127.0.0.1:{self.srv.server_address[1]}"
+
+    def tearDown(self):
+        self.srv.shutdown()
+        self.srv.server_close()
+
+    def test_a_search_survives_a_connection_that_died_while_idle(self):
+        c = RostamClient(self.url)
+        self.assertEqual(2, len(c.search("docs", [1.0, 2.0], k=2)))
+        # The pooled connection is now dead; the retry must make this transparent.
+        self.assertEqual(2, len(c.search("docs", [1.0, 2.0], k=2)))
+        c.close()
+
+    def test_a_write_is_not_replayed(self):
+        c = RostamClient(self.url)
+        c.search("docs", [1.0], k=1)          # leaves a dead connection pooled
+        with self.assertRaises(RostamError) as caught:
+            c.upsert("docs", 1, [1.0, 2.0])   # must fail rather than risk a double write
+        c.close()
+        self.assertEqual(0, caught.exception.status, "should surface as a transport error")
+
+
+class TimeoutTest(unittest.TestCase):
+    """A per-call timeout must reach a connection that was already open.
+
+    http.client fixes the socket timeout at connect time, so a pooled connection
+    keeps whatever its first caller asked for. bulk_build asks for 24 hours; if
+    it inherited an earlier 30-second connection the build would abort at 30
+    seconds, which the urllib code it replaced never did.
+    """
+
+    def setUp(self):
+        RecordingServer.content_types = []
+        RecordingServer.search_bodies = []
+        RecordingServer.connections = 0
+        RecordingServer.fail_binary_as_old_server = False
+        RecordingServer.fail_next_with = None
+        self.srv = ThreadingHTTPServer(("127.0.0.1", 0), RecordingServer)
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+        self.url = f"http://127.0.0.1:{self.srv.server_address[1]}"
+
+    def tearDown(self):
+        self.srv.shutdown()
+        self.srv.server_close()
+
+    def test_a_later_call_can_raise_the_timeout_on_a_pooled_connection(self):
+        c = RostamClient(self.url, timeout=5.0)
+        c.search("docs", [1.0], k=1)                 # pools a 5s connection
+        conn, reused = c._pool.acquire(3600.0)
+        try:
+            self.assertTrue(reused, "expected the pooled connection back")
+            self.assertEqual(3600.0, conn.timeout)
+            self.assertEqual(3600.0, conn.sock.gettimeout(),
+                             "the live socket kept the old timeout")
+        finally:
+            c._pool.discard(conn)
+            c.close()
+
+    def test_k_the_framing_cannot_express_falls_back_to_json(self):
+        """Negative k must not become a struct.error where JSON gives a 400."""
+        RecordingServer.fail_next_with = (400, "k must be between 1 and 65536")
+        c = RostamClient(self.url)
+        with self.assertRaises(RostamError) as caught:
+            c.search("docs", [1.0, 2.0], k=-1)
+        c.close()
+        self.assertEqual(400, caught.exception.status)
+        self.assertEqual(["application/json"], RecordingServer.content_types,
+                         "an unencodable k should take the JSON path, not raise struct.error")
+
+
 class ClosingServer(RecordingServer):
     """A server that closes the connection after every response (HTTP/1.0)."""
 
