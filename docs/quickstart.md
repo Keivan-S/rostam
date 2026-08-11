@@ -35,7 +35,22 @@ go run ./cmd/rostam-server -http 127.0.0.1:8080 -data ./data
     `ROSTAM_API_KEY`, or pass `-insecure` to run open deliberately — see
     [Security](server/security.md).
 
-Create a collection, insert a point, and search — with plain curl:
+### In a container
+
+The image binds `0.0.0.0`, so it requires a token. Passing it by environment
+variable keeps the secret out of the process table and out of `docker inspect`:
+
+```sh
+docker build -f cmd/rostam-server/Dockerfile -t rostam-server .
+docker run -p 8080:8080 -e ROSTAM_API_KEY=secret rostam-server
+```
+
+`GET /v1/health` and `/v1/ready` remain auth-exempt so orchestrator probes work
+without the token.
+
+Create a collection, insert a point, and search — with plain curl. These assume
+the loopback server above; against the container, add
+`-H 'Authorization: Bearer secret'` to each call:
 
 ```sh
 # Create a 4-dimensional cosine collection

@@ -161,6 +161,23 @@ curl -s localhost:8080/v1/collections/docs/points/search \
   -d '{"query":[0.1,0.2,0.3,0.4],"k":3}'
 ```
 
+### Or in a container
+
+The image binds `0.0.0.0`, so it **requires authentication** — pass the token by
+environment variable, which keeps it out of the process table and out of
+`docker inspect`:
+
+```sh
+docker build -f cmd/rostam-server/Dockerfile -t rostam-server .
+docker run -p 8080:8080 -e ROSTAM_API_KEY=secret rostam-server
+
+curl -s localhost:8080/v1/collections -H 'Authorization: Bearer secret' \
+  -d '{"name":"docs","config":{"dim":4,"metric":"cosine"}}'
+```
+
+`GET /v1/health` and `/v1/ready` stay auth-exempt, so orchestrator probes work
+without the token. For a deliberately open dev container, append `-insecure`.
+
 Clustering (per-shard Raft, online resharding), auth (RBAC/JWT/mTLS), TLS,
 backups to S3, and Prometheus metrics are flag-driven.
 → [Running the server](./docs/server/running.md) ·

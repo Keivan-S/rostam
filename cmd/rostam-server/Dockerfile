@@ -22,5 +22,14 @@ EXPOSE 8080
 # Single-node, in-memory by default (fast HNSW, no disk). Override the flags to
 # enable persistence / mmap (-persistent-vectors -cluster ... -data /data) or
 # other transports (-grpc :9090 -tcp :7000).
+#
+# AUTHENTICATION IS REQUIRED. The default CMD binds 0.0.0.0, which the server
+# refuses to serve unauthenticated, so pass a key:
+#
+#     docker run -p 8080:8080 -e ROSTAM_API_KEY=<token> rostam-server:latest
+#
+# ROSTAM_API_KEY is read instead of -api-key so the secret never appears in the
+# process table or in `docker inspect`'s Cmd. For a deliberately open dev
+# container, append -insecure to the command instead.
 ENTRYPOINT ["rostam-server"]
 CMD ["-http", "0.0.0.0:8080"]

@@ -373,7 +373,7 @@ func main() {
 	if cfg.Authenticator == nil && !*insecure {
 		for _, a := range []string{*httpAddr, *grpcAddr, *tcpAddr} {
 			if exposedBind(a) {
-				fatal("refusing to bind non-loopback address with NO authentication — every request would be served unauthenticated. Set -keys-file or -api-key to require auth, bind a loopback address (127.0.0.1/localhost), or pass -insecure to run open deliberately (dev/trusted-network only)", "addr", a)
+				fatal("refusing to bind non-loopback address with NO authentication — every request would be served unauthenticated. Set -keys-file, -api-key, or the ROSTAM_API_KEY environment variable to require auth, bind a loopback address (127.0.0.1/localhost), or pass -insecure to run open deliberately (dev/trusted-network only)", "addr", a)
 			}
 		}
 	}
