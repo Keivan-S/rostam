@@ -147,6 +147,9 @@ no server in the picture. Start below; the Go embedding path is
 # Prebuilt binary — verifies the release checksum before installing
 curl -fsSL https://raw.githubusercontent.com/rostamlabs/rostam/main/install.sh | sh
 
+# ...to a system path instead (prompts for sudo; ROSTAM_NO_SUDO refuses)
+curl -fsSL .../install.sh | ROSTAM_INSTALL_DIR=/usr/local/bin sh
+
 # Container (amd64 + arm64)
 docker run -p 8080:8080 -e ROSTAM_API_KEY=secret ghcr.io/rostamlabs/rostam:latest
 

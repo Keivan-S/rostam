@@ -6,6 +6,7 @@
 # Environment:
 #   ROSTAM_VERSION       version to install (default: the latest release)
 #   ROSTAM_INSTALL_DIR   where to put the binary (default: ~/.local/bin)
+#   ROSTAM_NO_SUDO       set to refuse escalation and fail instead
 #
 # The download is verified against the checksums.txt published with the same
 # release, and the script aborts on a mismatch. That check is the reason this
@@ -86,6 +87,39 @@ The download does not match what the release published. Not installing."
 	printf '%s' "$got"
 }
 
+# ---- privileges ------------------------------------------------------------
+
+# choose_writer decides how to write into INSTALL_DIR and sets SUDO to "" or
+# "sudo". The default (~/.local/bin) never needs escalation; a system directory
+# such as /usr/local/bin does, and failing with "permission denied" there is
+# unhelpful when the user deliberately chose it.
+#
+# Escalation is announced before it happens and can be refused with
+# ROSTAM_NO_SUDO. It works under `curl | sh` because sudo reads its password
+# prompt from /dev/tty rather than stdin — stdin is the script itself here.
+choose_writer() {
+	SUDO=""
+	if [ -d "$INSTALL_DIR" ]; then
+		[ -w "$INSTALL_DIR" ] && return
+	else
+		parent=$(dirname "$INSTALL_DIR")
+		[ -d "$parent" ] && [ -w "$parent" ] && return
+	fi
+
+	if [ -n "${ROSTAM_NO_SUDO:-}" ]; then
+		die "$INSTALL_DIR is not writable and ROSTAM_NO_SUDO is set.
+Choose a writable location instead:
+  ROSTAM_INSTALL_DIR=\$HOME/.local/bin"
+	fi
+	command -v sudo >/dev/null 2>&1 || die "$INSTALL_DIR is not writable and sudo is not available.
+Choose a writable location instead:
+  ROSTAM_INSTALL_DIR=\$HOME/.local/bin"
+
+	SUDO="sudo"
+	warn "$INSTALL_DIR is not writable; using sudo to install there.
+  (set ROSTAM_NO_SUDO to refuse, or ROSTAM_INSTALL_DIR to install without root)"
+}
+
 # ---- go --------------------------------------------------------------------
 
 main() {
@@ -121,12 +155,23 @@ See https://github.com/$REPO/releases/tag/$version"
 
 	tar -xzf "$tmp/$asset" -C "$tmp" "$BINARY" || die "could not extract $BINARY from $asset"
 
-	mkdir -p "$INSTALL_DIR" || die "could not create $INSTALL_DIR"
+	choose_writer
+	# shellcheck disable=SC2086 # $SUDO is deliberately unquoted: empty means "no escalation"
+	$SUDO mkdir -p "$INSTALL_DIR" || die "could not create $INSTALL_DIR"
 	# Replace by rename so a running server keeps its open file rather than
 	# having its executable rewritten underneath it.
-	mv "$tmp/$BINARY" "$INSTALL_DIR/$BINARY.new" && mv "$INSTALL_DIR/$BINARY.new" "$INSTALL_DIR/$BINARY" ||
+	# shellcheck disable=SC2086
+	$SUDO mv "$tmp/$BINARY" "$INSTALL_DIR/$BINARY.new" ||
 		die "could not write to $INSTALL_DIR — set ROSTAM_INSTALL_DIR to a writable path"
-	chmod +x "$INSTALL_DIR/$BINARY"
+	# shellcheck disable=SC2086
+	$SUDO mv "$INSTALL_DIR/$BINARY.new" "$INSTALL_DIR/$BINARY" || die "could not replace $INSTALL_DIR/$BINARY"
+	# shellcheck disable=SC2086
+	$SUDO chmod +x "$INSTALL_DIR/$BINARY"
+
+	# Confirm rather than announce: every write above can fail in ways that do
+	# not stop the script (a sudo rule that permits nothing, a full disk), and
+	# printing "installed" for a file that is not there is worse than failing.
+	[ -x "$INSTALL_DIR/$BINARY" ] || die "$INSTALL_DIR/$BINARY is missing or not executable after install"
 
 	log "  installed: $INSTALL_DIR/$BINARY"
 	log ""
