@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/rostamlabs/rostam/actions/workflows/test.yml/badge.svg)](https://github.com/rostamlabs/rostam/actions/workflows/test.yml)
 [![Go 1.26+](https://img.shields.io/badge/go-1.26%2B-00ADD8)](go.mod)
-[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](./LICENSE)
 
 **A high-performance vector database and sub-microsecond key-value store in a
 single Go engine — run it as a standalone server, replicate it across a Raft
@@ -37,9 +37,10 @@ kernels are hand-vectorized.
 > **Status:** Beta. Actively developed and tested (race-clean, benchmarked).
 > APIs may still change ahead of a 1.0 release.
 
-📚 **[Documentation](./docs/index.md)** — quickstart, concepts, guides, and
-full API references (HTTP, gRPC, Go, Python). The [`docs/`](./docs) tree is a
-ready-to-publish MkDocs site ([`mkdocs.yml`](./mkdocs.yml)).
+📚 **[docs.rostamlabs.com](https://docs.rostamlabs.com/)** — quickstart, concepts,
+guides, and full API references (HTTP, gRPC, Go, Python). The site is built from
+the [`docs/`](./docs) tree in this repository ([`mkdocs.yml`](./mkdocs.yml)), so
+it can also be read here or served locally.
 
 ---
 
@@ -217,10 +218,10 @@ without the token. For a deliberately open dev container, append `-insecure`.
 
 Clustering (per-shard Raft, online resharding), auth (RBAC/JWT/mTLS), TLS,
 backups to S3, and Prometheus metrics are flag-driven.
-→ [Running the server](./docs/server/running.md) ·
-[Clustering](./docs/server/clustering.md) ·
-[Security](./docs/server/security.md) ·
-[HTTP API reference](./docs/api/http.md)
+→ [Running the server](https://docs.rostamlabs.com/server/running/) ·
+[Clustering](https://docs.rostamlabs.com/server/clustering/) ·
+[Security](https://docs.rostamlabs.com/server/security/) ·
+[HTTP API reference](https://docs.rostamlabs.com/api/http/)
 
 ## Quick start — Python
 
@@ -245,10 +246,10 @@ hits = c.search("docs", vector=vec, k=10, filter={"tenant": "acme"})
 
 Bulk ingest ships vectors as raw f32 over a binary wire rather than JSON text,
 which is what makes large loads fast — a 1M × 768d load runs in **282 s**.
-→ [Python client docs](./docs/api/python.md)
+→ [Python client docs](https://docs.rostamlabs.com/api/python/)
 
 Other languages talk to the same server over
-[REST](./docs/api/http.md) or [gRPC](./docs/api/grpc.md).
+[REST](https://docs.rostamlabs.com/api/http/) or [gRPC](https://docs.rostamlabs.com/api/grpc/).
 
 ---
 
@@ -283,7 +284,7 @@ diverse, _ := col.SearchMMR(query, 10, vector.MMROpts{Lambda: 0.5})
 Beyond kNN: hybrid dense+sparse fusion (RRF/weighted/DBSF), BM25 full-text,
 recommendation (± examples), discovery, group-by, scroll with order-by, IVF and
 Vamana indexes, binary/PQ quantization with mmap-resident codes, per-collection
-quotas and TTL. → [Vector engine docs](./docs/vector/collections-and-indexes.md)
+quotas and TTL. → [Vector engine docs](https://docs.rostamlabs.com/vector/collections-and-indexes/)
 
 ## Quick start — key-value store (Go library)
 
@@ -320,8 +321,8 @@ Swap the constructor for a different backend — same `Store` interface:
 You can also register **your own Go functions as server-side ops** (atomic
 read-modify-write under the shard lock, no CAS loops) or ship sandboxed,
 fuel-capped **WASM procedures** over the wire to a running cluster.
-→ [KV docs](./docs/kv/overview.md) · [Custom ops](./docs/kv/custom-ops.md) ·
-[WASM](./docs/kv/wasm.md)
+→ [KV docs](https://docs.rostamlabs.com/kv/overview/) · [Custom ops](https://docs.rostamlabs.com/kv/custom-ops/) ·
+[WASM](https://docs.rostamlabs.com/kv/wasm/)
 
 ---
 
@@ -344,7 +345,7 @@ fuel-capped **WASM procedures** over the wire to a running cluster.
 
 `vector/`'s only in-repo dependencies are the stdlib-only `objstore/` package
 and its own `analysis` subpackage — vendor those three as a pure vector
-library. → [Architecture](./docs/concepts/architecture.md)
+library. → [Architecture](https://docs.rostamlabs.com/concepts/architecture/)
 
 ## Micro-benchmarks
 
@@ -385,7 +386,7 @@ machine, so they hold anywhere:
 Reproducible head-to-head comparisons against Redis, Aerospike, Qdrant, Milvus,
 pgvector, and in-memory Go caches live in the separate
 [**`rostam-bench`**](https://github.com/rostamlabs/rostam-bench) repo, so this
-module stays dependency-light. → [Performance](./docs/performance.md)
+module stays dependency-light. → [Performance](https://docs.rostamlabs.com/performance/)
 
 ## Examples
 
@@ -405,7 +406,7 @@ make test    # tests           make race   # race detector
 make bench   # benchmarks      make all    # lint + tests + race + bench
 ```
 
-→ [Development](./docs/development.md) · [CONTRIBUTING.md](./CONTRIBUTING.md) ·
+→ [Development](https://docs.rostamlabs.com/development/) · [CONTRIBUTING.md](./CONTRIBUTING.md) ·
 [SECURITY.md](./SECURITY.md)
 
 ## License
