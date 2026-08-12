@@ -112,6 +112,39 @@ established. It now folds the same narrowing plan into a membership bitset and
 consults one bit per candidate instead. No API change, no configuration, and no
 change to which points a filter matches: it is the same plan, read a cheaper way.
 
+### Binary query wire
+
+`/points/search` and `/points/search/docs` now accept a dense binary body,
+selected by `Content-Type: application/octet-stream` — the ingest wire's
+counterpart on the read side. The query vector travels as raw `f32` instead of
+base-10 text, which it turns out is a large share of a small request: at dim=768,
+k=10 on a kept-alive connection, building the JSON body measured **0.258 ms of a
+0.845 ms search**, against 0.011 ms to write the same vector as bytes. The
+server's matching decode of those literals goes with it.
+
+Adds no semantics, on the same terms as the bulk wire: a binary body decodes into
+exactly the request its JSON body produces, then runs the identical validation
+and dispatch, and any other content type takes the JSON path unchanged. The
+framing, its limits (`dim` ≤ 65,536, filter ≤ 1 MiB, `NaN`/`Inf` refused) and its
+error behaviour are in [Binary query body](api/http.md#binary-query-body).
+
+Clients need no flag day. A server that predates this answers a binary body with
+`400 invalid JSON body: ...`, which is specific enough to fall back on; the
+Python client does so automatically and permanently.
+
+### The Python client reuses connections
+
+`rostam-client` opened a new TCP connection per request. It now keeps a small
+pool, and is still safe to share between threads. Combined with the binary query
+wire, repeated searches measured **724–990/s before and 1911–3179/s after** at
+dim=768 against the same server — non-overlapping ranges, on a laptop.
+
+Reads are retried once when a pooled connection turns out to have been closed
+while idle; writes are not, because that failure surfaces after the request is on
+the wire and a replayed insert is worse than an error. `close()` releases the
+pool. Note that `http.client` does not consult `HTTP_PROXY`/`HTTPS_PROXY` the way
+the previous `urllib` call did.
+
 ### Binary bulk-ingest wire
 
 `/points/bulk` and `/points/batch` now accept a dense binary body, selected by
