@@ -334,7 +334,15 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 			IdleTimeout:    120 * time.Second,
 			MaxHeaderBytes: 1 << 20, // 1 MiB header cap (body caps are enforced per-route via MaxBytesReader)
 		}
-		go func() { _ = srv.httpSrv.Serve(ln) }()
+		// Capture the server in a local, the way the TCP and gRPC goroutines below
+		// already do. Reading srv.httpSrv inside the goroutine races Close, which
+		// sets that field to nil — so a server closed before this goroutine was
+		// first scheduled dereferenced nil and took the process down with it. A
+		// panic in a goroutine cannot be recovered by the caller, so the blast
+		// radius was the whole program, and the window is widest exactly where it
+		// hurts: short-lived servers in tests, and start-then-fail-to-start paths.
+		hs := srv.httpSrv
+		go func() { _ = hs.Serve(ln) }()
 	}
 
 	if cfg.GRPCAddr != "" {
@@ -392,7 +400,17 @@ func (s *Server) GRPCAddr() string {
 }
 
 // TCPAddr returns the bound binary-TCP address, or "" if TCP is disabled.
+//
+// It must consult BOTH transports. The epoll server is stored in epollSrv
+// instead of tcpSrv, and epoll is the default for single-node — so checking only
+// tcpSrv reported "no TCP transport" for the configuration most servers run.
+// The startup log iterates these accessors, which meant `-tcp` came up, accepted
+// connections, and was never announced: an operator reading the log had no way
+// to confirm the listener existed.
 func (s *Server) TCPAddr() string {
+	if s.epollSrv != nil {
+		return s.epollSrv.Addr()
+	}
 	if s.tcpSrv == nil {
 		return ""
 	}
