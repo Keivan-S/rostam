@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -117,6 +118,18 @@ func (s *EpollServer) Start(addr string) error {
 		}
 		return err
 	}
+}
+
+// Addr returns the address this transport serves, without the "tcp://" scheme
+// gnet requires, or "" before Run/Start has been called.
+//
+// It reports the address the engine was ASKED to bind, not one resolved from the
+// listener: gnet's Engine exposes no accessor for the bound address, so a caller
+// that passed port 0 gets ":0" back rather than the port the kernel chose. Every
+// production path names a real port; the caveat matters only to a test that binds
+// ephemerally and then expects to dial what this returns.
+func (s *EpollServer) Addr() string {
+	return strings.TrimPrefix(s.addr, "tcp://")
 }
 
 // Stop gracefully shuts the event engine down (drains, closes listeners); the
