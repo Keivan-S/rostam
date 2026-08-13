@@ -35,6 +35,17 @@ var ErrNoMultiVector = errors.New("vector: no multi-vector collection")
 type CollectionStore struct {
 	dir string
 
+	// ephemeralDir is set when the caller configured no directory. The store
+	// then owns a private temp dir and removes it on Close.
+	//
+	// Without this, an empty dir made every path below RELATIVE: the store wrote
+	// ./vectors/<tenant>/ into whatever working directory the process happened to
+	// have, and read it back on the next run — so a "fresh" store returned
+	// "collection already exists" for a name the caller had never used, and two
+	// independent stores in one process shared a namespace. Both contradict the
+	// documented contract that an empty DataDir means heap mode.
+	ephemeralDir bool
+
 	// persistentCluster makes every collection mmap-backed (off-heap) per node,
 	// for a replicated deployment where Raft (log + FSM snapshot) is the
 	// durability authority and the mmap is a non-authoritative memory layout.
@@ -97,12 +108,35 @@ func OpenCollectionStore(dir string) (*CollectionStore, error) {
 // per-collection sidecar: stale on-disk vector data files are wiped at open and
 // repopulated from the Raft snapshot/log. Used by shard.New in a replicated
 // deployment (shard.Config.PersistentVectors).
-func OpenCollectionStorePersistent(dir string, persistentCluster bool) (*CollectionStore, error) {
+func OpenCollectionStorePersistent(dir string, persistentCluster bool) (store *CollectionStore, retErr error) {
+	// No directory configured means heap mode. Give the store a private temp dir
+	// rather than letting every path resolve relative to the process's working
+	// directory: the on-disk layout below is an implementation detail of the
+	// running store, not something a caller who configured nothing asked to have
+	// written next to their binary — and reading it back on the next run made a
+	// fresh store inherit a previous one's collections.
+	ephemeral := false
+	if dir == "" {
+		td, err := os.MkdirTemp("", "rostam-heap-")
+		if err != nil {
+			return nil, fmt.Errorf("vector: create heap-mode scratch dir: %w", err)
+		}
+		dir, ephemeral = td, true
+		// Every failure path below this point returns without a store, so nothing
+		// will ever call Close to reclaim the directory just created. Deferring on
+		// the named error covers them all — including the ones added later by
+		// someone who never reads this comment.
+		defer func() {
+			if retErr != nil {
+				_ = os.RemoveAll(td)
+			}
+		}()
+	}
 	vd := filepath.Join(dir, "vectors")
 	if err := os.MkdirAll(vd, 0o750); err != nil {
 		return nil, fmt.Errorf("vector: mkdir %s: %w", vd, err)
 	}
-	s := &CollectionStore{dir: dir, persistentCluster: persistentCluster, collections: make(map[string]*Collection), multi: make(map[string]*MultiVectorIndex), named: make(map[string]*NamedCollection)}
+	s := &CollectionStore{dir: dir, ephemeralDir: ephemeral, persistentCluster: persistentCluster, collections: make(map[string]*Collection), multi: make(map[string]*MultiVectorIndex), named: make(map[string]*NamedCollection)}
 
 	// Cluster-persistent: the mmap files are a non-authoritative cache. Wipe any
 	// left by a prior process so Raft (FSM.Restore + log replay) is the single
@@ -1307,6 +1341,15 @@ func (s *CollectionStore) Close() error {
 	// Cold stubs hold no index/goroutine — just drop the catalog maps. Per-collection
 	// lastAccess lives on the Collection objects, which are dropped with s.collections.
 	s.cold = nil
+	// A heap-mode store owns its scratch dir, so it takes it with it — and says so
+	// if it cannot. Reporting success over a directory that is still on disk would
+	// make the ownership contract unobservable exactly when it has been broken,
+	// and "the OS will reclaim it" is not a guarantee any platform actually makes.
+	if s.ephemeralDir && s.dir != "" {
+		if err := os.RemoveAll(s.dir); err != nil {
+			return fmt.Errorf("vector: remove heap-mode scratch dir %s: %w", s.dir, err)
+		}
+	}
 	return nil
 }
 
