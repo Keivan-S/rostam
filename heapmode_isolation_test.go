@@ -5,6 +5,7 @@ package rostam
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/rostamlabs/rostam/ops"
@@ -96,42 +97,46 @@ func TestHeapModeStillRejectsADuplicateInTheSameStore(t *testing.T) {
 }
 
 // The scratch directory a heap-mode store owns must not outlive it.
+//
+// This points TMPDIR at a private directory rather than counting rostam-heap-*
+// entries in the machine-wide temp dir. Counting was racy: any other process
+// creating or removing a matching directory between the snapshots could mask a
+// real leak or invent one — the exact species of flaky test this whole change
+// exists to stamp out.
 func TestHeapModeScratchDirIsRemovedOnClose(t *testing.T) {
+	tmpRoot := t.TempDir()
+	t.Setenv("TMPDIR", tmpRoot) // os.MkdirTemp("") resolves through this
 	t.Chdir(t.TempDir())
-	before, err := os.ReadDir(os.TempDir())
-	if err != nil {
-		t.Skipf("cannot list %s: %v", os.TempDir(), err)
-	}
-	count := func(es []os.DirEntry) int {
-		n := 0
-		for _, e := range es {
-			if e.IsDir() && len(e.Name()) > 12 && e.Name()[:12] == "rostam-heap-" {
-				n++
-			}
-		}
-		return n
-	}
+
 	reg := ops.NewRegistry()
 	if err := ops.RegisterBuiltins(reg); err != nil {
 		t.Fatal(err)
 	}
 	s, err := NewDirect(DirectConfig{Ops: reg})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("NewDirect: %v", err)
 	}
 	if err := s.CreateCollection(context.Background(), "docs", heapConfig()); err != nil {
 		t.Fatalf("CreateCollection: %v", err)
 	}
-	during, _ := os.ReadDir(os.TempDir())
-	if count(during) <= count(before) {
-		t.Skip("could not observe the scratch dir (concurrent tests may share TempDir)")
+
+	// Exactly one scratch dir, and we know which one.
+	created, err := os.ReadDir(tmpRoot)
+	if err != nil {
+		t.Fatal(err)
 	}
+	if len(created) != 1 {
+		t.Fatalf("expected one scratch dir under %s, got %d", tmpRoot, len(created))
+	}
+	scratch := filepath.Join(tmpRoot, created[0].Name())
+	if _, err := os.Stat(scratch); err != nil {
+		t.Fatalf("scratch dir %s not usable: %v", scratch, err)
+	}
+
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	after, _ := os.ReadDir(os.TempDir())
-	if count(after) != count(before) {
-		t.Errorf("scratch dirs before=%d after=%d: Close did not remove the store's own",
-			count(before), count(after))
+	if _, err := os.Stat(scratch); !os.IsNotExist(err) {
+		t.Errorf("scratch dir %s survived Close (stat err: %v)", scratch, err)
 	}
 }

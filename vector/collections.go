@@ -108,7 +108,7 @@ func OpenCollectionStore(dir string) (*CollectionStore, error) {
 // per-collection sidecar: stale on-disk vector data files are wiped at open and
 // repopulated from the Raft snapshot/log. Used by shard.New in a replicated
 // deployment (shard.Config.PersistentVectors).
-func OpenCollectionStorePersistent(dir string, persistentCluster bool) (*CollectionStore, error) {
+func OpenCollectionStorePersistent(dir string, persistentCluster bool) (store *CollectionStore, retErr error) {
 	// No directory configured means heap mode. Give the store a private temp dir
 	// rather than letting every path resolve relative to the process's working
 	// directory: the on-disk layout below is an implementation detail of the
@@ -122,6 +122,15 @@ func OpenCollectionStorePersistent(dir string, persistentCluster bool) (*Collect
 			return nil, fmt.Errorf("vector: create heap-mode scratch dir: %w", err)
 		}
 		dir, ephemeral = td, true
+		// Every failure path below this point returns without a store, so nothing
+		// will ever call Close to reclaim the directory just created. Deferring on
+		// the named error covers them all — including the ones added later by
+		// someone who never reads this comment.
+		defer func() {
+			if retErr != nil {
+				_ = os.RemoveAll(td)
+			}
+		}()
 	}
 	vd := filepath.Join(dir, "vectors")
 	if err := os.MkdirAll(vd, 0o750); err != nil {
@@ -1332,12 +1341,14 @@ func (s *CollectionStore) Close() error {
 	// Cold stubs hold no index/goroutine — just drop the catalog maps. Per-collection
 	// lastAccess lives on the Collection objects, which are dropped with s.collections.
 	s.cold = nil
-	// A heap-mode store owns its scratch dir, so it takes it with it. Failure is
-	// swallowed deliberately: the caller asked to close a store, and a leftover
-	// temp dir is not a reason to report that closing failed. It is under
-	// os.TempDir(), so the system reclaims it regardless.
+	// A heap-mode store owns its scratch dir, so it takes it with it — and says so
+	// if it cannot. Reporting success over a directory that is still on disk would
+	// make the ownership contract unobservable exactly when it has been broken,
+	// and "the OS will reclaim it" is not a guarantee any platform actually makes.
 	if s.ephemeralDir && s.dir != "" {
-		_ = os.RemoveAll(s.dir)
+		if err := os.RemoveAll(s.dir); err != nil {
+			return fmt.Errorf("vector: remove heap-mode scratch dir %s: %w", s.dir, err)
+		}
 	}
 	return nil
 }
