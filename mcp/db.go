@@ -279,12 +279,25 @@ func (s *Server) searchVector(ctx context.Context, explicit []float32, queryText
 	return vecs[0], nil
 }
 
+// searchHit is one hit from the generic search tool: id, content, relevance
+// score, distance, and metadata. Distance is meaningful for dense/hybrid
+// search (nearest-neighbor distance) but has no meaning for a BM25-only
+// recall or a scroll listing — that's why the memory tools use the narrower
+// memoryHit shape (memory.go) instead of this type.
+type searchHit struct {
+	ID       uint64         `json:"id"`
+	Content  string         `json:"content"`
+	Score    float32        `json:"score"`
+	Distance float32        `json:"distance"`
+	Metadata map[string]any `json:"metadata,omitempty"`
+}
+
 // docsToHits converts VectorDocument results (text/dense search, which
 // already carry content and metadata) into the tool's hit shape.
-func docsToHits(docs []rostam.VectorDocument) []memoryHit {
-	hits := make([]memoryHit, len(docs))
+func docsToHits(docs []rostam.VectorDocument) []searchHit {
+	hits := make([]searchHit, len(docs))
 	for i, d := range docs {
-		hits[i] = memoryHit{ID: d.ID, Content: d.Content, Score: d.Score, Distance: d.Distance, Metadata: metadataToJSON(d.Metadata)}
+		hits[i] = searchHit{ID: d.ID, Content: d.Content, Score: d.Score, Distance: d.Distance, Metadata: metadataToJSON(d.Metadata)}
 	}
 	return hits
 }
@@ -294,14 +307,15 @@ func docsToHits(docs []rostam.VectorDocument) []memoryHit {
 // (no content/metadata), so the hits are assembled against a batch fetch by
 // id. GetBatch's return order is not guaranteed to match the fusion ranking,
 // hence the id->point map. Shared by the generic search tool's hybrid mode
-// and memory's recallHybrid.
-func (s *Server) hybridDocs(ctx context.Context, collection string, dense []float32, query string, k int, f rostam.VectorFilter) ([]memoryHit, error) {
+// and memory's recallHybrid, which narrows the result down to memoryHit's
+// shape (dropping Distance, stripping reserved metadata) itself.
+func (s *Server) hybridDocs(ctx context.Context, collection string, dense []float32, query string, k int, f rostam.VectorFilter) ([]searchHit, error) {
 	results, _, err := s.store.VectorHybridText(ctx, collection, dense, query, k, rostam.VectorHybridOpts{Filter: f})
 	if err != nil {
 		return nil, fmt.Errorf("hybrid search: %w", err)
 	}
 	if len(results) == 0 {
-		return []memoryHit{}, nil
+		return []searchHit{}, nil
 	}
 
 	ids := make([]uint64, len(results))
@@ -317,7 +331,7 @@ func (s *Server) hybridDocs(ctx context.Context, collection string, dense []floa
 		byID[p.ID] = p
 	}
 
-	hits := make([]memoryHit, 0, len(results))
+	hits := make([]searchHit, 0, len(results))
 	for _, r := range results {
 		p, ok := byID[r.ID]
 		if !ok {
@@ -327,7 +341,7 @@ func (s *Server) hybridDocs(ctx context.Context, collection string, dense []floa
 		if cv, ok := p.Meta["$content"]; ok && cv.Kind == vector.ValueString {
 			content = cv.Str
 		}
-		hits = append(hits, memoryHit{ID: r.ID, Content: content, Score: r.Score, Distance: r.Distance, Metadata: metadataToJSON(p.Meta)})
+		hits = append(hits, searchHit{ID: r.ID, Content: content, Score: r.Score, Distance: r.Distance, Metadata: metadataToJSON(p.Meta)})
 	}
 	return hits, nil
 }

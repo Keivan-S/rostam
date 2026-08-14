@@ -175,14 +175,15 @@ func (s *Server) removeNamespace(ctx context.Context, ns string) error {
 }
 
 // memoryHit is one recalled (or listed, Task 5) memory: its id, content,
-// relevance score/distance, and user metadata with the reserved fields
-// stripped. Also doubles as the generic search tool's hit shape (Task 6),
-// via the shared hybridDocs helper in db.go.
+// relevance score, and user metadata with the reserved fields stripped. No
+// Distance field: it's meaningless for BM25-only recall and for a scroll
+// listing (no query), and this shape is locked by Task 4's tests. The
+// generic search tool (Task 6) has its own searchHit type in db.go for
+// exactly this reason — see hybridDocs and recallHybrid.
 type memoryHit struct {
 	ID       uint64         `json:"id"`
 	Content  string         `json:"content"`
 	Score    float32        `json:"score"`
-	Distance float32        `json:"distance"`
 	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
@@ -373,22 +374,25 @@ func (s *Server) recallBM25(ctx context.Context, query string, k int, f rostam.V
 }
 
 // recallHybrid runs the dense+BM25 fusion path via the shared hybridDocs
-// helper (db.go), then strips the memory subsystem's reserved metadata
-// fields from each hit's already-JSON-converted metadata — hybridDocs itself
-// is collection-agnostic and leaves metadata untouched, since a generic
-// search caller (Task 6) has no reserved fields to hide.
+// helper (db.go), then narrows each hit down to memoryHit's locked shape:
+// dropping Distance (meaningless for a memory recall) and stripping the
+// memory subsystem's reserved metadata fields. hybridDocs itself is
+// collection-agnostic and leaves metadata/distance untouched, since a
+// generic search caller (Task 6) wants both.
 func (s *Server) recallHybrid(ctx context.Context, query string, k int, f rostam.VectorFilter) (any, error) {
 	dense, err := s.emb.Embed(ctx, []string{query})
 	if err != nil {
 		return nil, fmt.Errorf("mcp: embed query: %w", err)
 	}
-	hits, err := s.hybridDocs(ctx, memCollection, dense[0], query, k, f)
+	docs, err := s.hybridDocs(ctx, memCollection, dense[0], query, k, f)
 	if err != nil {
 		return nil, fmt.Errorf("mcp: recall: %w", err)
 	}
-	for i := range hits {
-		delete(hits[i].Metadata, nsField)
-		delete(hits[i].Metadata, createdField)
+	hits := make([]memoryHit, len(docs))
+	for i, d := range docs {
+		delete(d.Metadata, nsField)
+		delete(d.Metadata, createdField)
+		hits[i] = memoryHit{ID: d.ID, Content: d.Content, Score: d.Score, Metadata: d.Metadata}
 	}
 	return map[string]any{"hits": hits}, nil
 }

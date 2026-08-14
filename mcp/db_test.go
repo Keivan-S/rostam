@@ -79,6 +79,30 @@ func TestCreateCollectionUpsertSearchGet(t *testing.T) {
 	}
 }
 
+// TestSearchResponseHasDistanceKey guards the generic search tool's hit
+// shape {id, content, score, distance, metadata}: unlike the memory tools'
+// memoryHit, search's searchHit type always carries a distance field, across
+// all three modes since they share docsToHits/hybridDocs.
+func TestSearchResponseHasDistanceKey(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t), Embedder: fakeEmbedder{}})
+	c.initialize()
+	c.callTool("create_collection", map[string]any{"name": "docs", "dim": 4}, nil, false)
+	c.callTool("upsert", map[string]any{"collection": "docs", "id": uint64(1), "vector": []float32{1, 0, 0, 0}, "content": "a: fox jumps"}, nil, false)
+
+	for _, mode := range []string{"text", "dense", "hybrid"} {
+		var res struct {
+			Hits []map[string]any `json:"hits"`
+		}
+		c.callTool("search", map[string]any{"collection": "docs", "mode": mode, "query_text": "fox", "vector": []float32{1, 0, 0, 0}}, &res, false)
+		if len(res.Hits) != 1 {
+			t.Fatalf("mode %s: expected 1 hit, got %+v", mode, res.Hits)
+		}
+		if _, ok := res.Hits[0]["distance"]; !ok {
+			t.Fatalf("mode %s: search hit should carry a distance key: %+v", mode, res.Hits[0])
+		}
+	}
+}
+
 func TestUpsertRefusesMemoryCollection(t *testing.T) {
 	c := startServer(t, Config{Store: newHeapStore(t)})
 	c.initialize()

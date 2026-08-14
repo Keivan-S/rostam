@@ -105,6 +105,68 @@ func TestRecallHybridUsesEmbedder(t *testing.T) {
 	}
 }
 
+// TestRecallResponseHasNoDistanceKey guards memoryHit's locked wire shape
+// {id, content, score, metadata}: recall's BM25 path has no notion of
+// nearest-neighbor distance, so a stray "distance" key would be a
+// meaningless signal to callers. Decoded into map[string]any so an
+// unexpected key is visible instead of silently dropped by a typed struct.
+func TestRecallResponseHasNoDistanceKey(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t)})
+	c.initialize()
+	c.callTool("remember", map[string]any{"content": "the deploy password is stored in vault"}, nil, false)
+
+	var rec struct {
+		Hits []map[string]any `json:"hits"`
+	}
+	c.callTool("recall", map[string]any{"query": "deploy password vault"}, &rec, false)
+	if len(rec.Hits) != 1 {
+		t.Fatalf("expected 1 hit, got %+v", rec.Hits)
+	}
+	if _, ok := rec.Hits[0]["distance"]; ok {
+		t.Fatalf("recall hit should not carry a distance key: %+v", rec.Hits[0])
+	}
+}
+
+// TestRecallHybridResponseHasNoDistanceKey is the hybrid-path counterpart:
+// recallHybrid goes through the shared hybridDocs helper (mcp/db.go), which
+// does carry Distance for the generic search tool, so this guards that
+// narrowing the result back down to memoryHit actually drops it.
+func TestRecallHybridResponseHasNoDistanceKey(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t), Embedder: fakeEmbedder{}})
+	c.initialize()
+	c.callTool("remember", map[string]any{"content": "a: dense-close fact"}, nil, false)
+
+	var rec struct {
+		Hits []map[string]any `json:"hits"`
+	}
+	c.callTool("recall", map[string]any{"query": "a unrelated words", "k": 1}, &rec, false)
+	if len(rec.Hits) != 1 {
+		t.Fatalf("expected 1 hit, got %+v", rec.Hits)
+	}
+	if _, ok := rec.Hits[0]["distance"]; ok {
+		t.Fatalf("hybrid recall hit should not carry a distance key: %+v", rec.Hits[0])
+	}
+}
+
+// TestListMemoriesResponseHasNoDistanceKey: list_memories is a scroll, which
+// has no query to rank against, so it must not carry a distance key either.
+func TestListMemoriesResponseHasNoDistanceKey(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t)})
+	c.initialize()
+	c.callTool("remember", map[string]any{"content": "fact one", "namespace": "page"}, nil, false)
+
+	var page struct {
+		Memories []map[string]any `json:"memories"`
+	}
+	c.callTool("list_memories", map[string]any{"namespace": "page"}, &page, false)
+	if len(page.Memories) != 1 {
+		t.Fatalf("expected 1 memory, got %+v", page.Memories)
+	}
+	if _, ok := page.Memories[0]["distance"]; ok {
+		t.Fatalf("list_memories entry should not carry a distance key: %+v", page.Memories[0])
+	}
+}
+
 func TestForgetDeletesAndPrunesEmptyNamespace(t *testing.T) {
 	c := startServer(t, Config{Store: newHeapStore(t)})
 	c.initialize()
