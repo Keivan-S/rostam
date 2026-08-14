@@ -458,35 +458,61 @@ func (s *Server) handleForget(ctx context.Context, raw json.RawMessage) (any, er
 		return nil, fmt.Errorf("mcp: forget: %w", err)
 	}
 
+	// Every point's delete is attempted, even after an earlier one fails:
+	// a batch with a mix of good and bad ids must still empty (and prune)
+	// whatever namespaces it legitimately can, instead of aborting the
+	// whole call and leaving an emptied namespace stuck in the registry.
 	affectedNS := make(map[string]bool, len(points))
 	deleted := make([]uint64, 0, len(points))
+	var delErrs []error
 	for _, p := range points {
 		if nsv, ok := p.Meta[nsField]; ok && nsv.Kind == vector.ValueString {
 			affectedNS[nsv.Str] = true
 		}
 		if _, err := s.store.VectorDelete(ctx, memCollection, p.ID); err != nil {
-			return nil, fmt.Errorf("mcp: forget: deleting id %d: %w", p.ID, err)
+			delErrs = append(delErrs, fmt.Errorf("deleting id %d: %w", p.ID, err))
+			continue
 		}
 		deleted = append(deleted, p.ID)
 	}
 
-	for ns := range affectedNS {
-		nsFilter := rostam.VectorFilter{Op: vector.FilterEq, Field: nsField, Value: vector.NewString(ns)}
-		docs, _, _, err := s.store.VectorScroll(ctx, memCollection, nsFilter, 1, rostam.VectorScrollOpts{})
-		if err != nil {
-			return nil, fmt.Errorf("mcp: forget: checking namespace %q: %w", ns, err)
-		}
-		if len(docs) == 0 {
-			if err := s.removeNamespace(ctx, ns); err != nil {
-				return nil, err
-			}
-		}
+	// Prune every namespace a delete was attempted against, regardless of
+	// whether some of those deletes failed above: a namespace another id in
+	// the same batch emptied must not be left stale in the registry just
+	// because a sibling id failed to delete.
+	if err := s.pruneEmptyNamespaces(ctx, affectedNS); err != nil {
+		delErrs = append(delErrs, err)
+	}
+
+	if len(delErrs) > 0 {
+		return nil, fmt.Errorf("mcp: forget: %w", errors.Join(delErrs...))
 	}
 
 	if missing == nil {
 		missing = []uint64{}
 	}
 	return map[string]any{"deleted": deleted, "missing": missing}, nil
+}
+
+// pruneEmptyNamespaces checks each namespace in ns with a 1-doc scroll probe
+// and drops it from the registry if nothing remains in it. Extracted from
+// handleForget so it can run against whatever was actually deleted even when
+// some deletes in the same batch failed, and so the partial-failure path is
+// unit-testable without needing to inject a store-level fault.
+func (s *Server) pruneEmptyNamespaces(ctx context.Context, ns map[string]bool) error {
+	for n := range ns {
+		nsFilter := rostam.VectorFilter{Op: vector.FilterEq, Field: nsField, Value: vector.NewString(n)}
+		docs, _, _, err := s.store.VectorScroll(ctx, memCollection, nsFilter, 1, rostam.VectorScrollOpts{})
+		if err != nil {
+			return fmt.Errorf("checking namespace %q: %w", n, err)
+		}
+		if len(docs) == 0 {
+			if err := s.removeNamespace(ctx, n); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // listMemoriesArgs is the list_memories tool's decoded input.

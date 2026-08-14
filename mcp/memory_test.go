@@ -4,8 +4,12 @@ package mcp
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/rostamlabs/rostam"
+	"github.com/rostamlabs/rostam/vector"
 )
 
 func TestRememberRecallBM25(t *testing.T) {
@@ -159,6 +163,129 @@ func containsStr(ss []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// failDeleteStore wraps a rostam.Store, forcing VectorDelete to fail for one
+// specific id. It exists to deterministically provoke forget's
+// partial-failure path (some ids delete, one doesn't) without relying on any
+// real engine fault, which the public Store interface has no way to inject.
+type failDeleteStore struct {
+	rostam.Store
+	failID uint64
+}
+
+func (f *failDeleteStore) VectorDelete(ctx context.Context, collection string, id uint64, opts ...rostam.WriteOpts) (bool, error) {
+	if id == f.failID {
+		return false, fmt.Errorf("injected delete failure for id %d", id)
+	}
+	return f.Store.VectorDelete(ctx, collection, id, opts...)
+}
+
+func TestForgetPrunesEmptiedNamespaceDespitePartialFailure(t *testing.T) {
+	failing := &failDeleteStore{Store: newHeapStore(t)}
+	c := startServer(t, Config{Store: failing})
+	c.initialize()
+
+	var a1, a2, b1 struct {
+		ID uint64 `json:"id"`
+	}
+	c.callTool("remember", map[string]any{"content": "a fact one", "namespace": "a"}, &a1, false)
+	c.callTool("remember", map[string]any{"content": "a fact two", "namespace": "a"}, &a2, false)
+	c.callTool("remember", map[string]any{"content": "b fact one", "namespace": "b"}, &b1, false)
+
+	// a2's delete will fail; b1's is the only memory in namespace "b" and
+	// should still delete and prune "b" even though the overall call
+	// reports an error for a2.
+	failing.failID = a2.ID
+
+	msg := c.callTool("forget", map[string]any{"ids": []uint64{a2.ID, b1.ID}}, nil, true)
+	if !strings.Contains(msg, fmt.Sprint(a2.ID)) {
+		t.Fatalf("error should name the failing id %d: %q", a2.ID, msg)
+	}
+
+	var ns struct {
+		Namespaces []string `json:"namespaces"`
+	}
+	c.callTool("list_namespaces", map[string]any{}, &ns, false)
+	if containsStr(ns.Namespaces, "b") {
+		t.Fatalf("namespace \"b\" should be pruned despite a2's delete failure: %+v", ns.Namespaces)
+	}
+	if !containsStr(ns.Namespaces, "a") {
+		t.Fatalf("namespace \"a\" should remain (a2 is still present): %+v", ns.Namespaces)
+	}
+
+	var recB struct {
+		Hits []struct{ ID uint64 } `json:"hits"`
+	}
+	c.callTool("recall", map[string]any{"query": "b fact one", "namespace": "b"}, &recB, false)
+	if len(recB.Hits) != 0 {
+		t.Fatalf("b1 should have been deleted: %+v", recB.Hits)
+	}
+
+	var recA struct {
+		Hits []struct{ ID uint64 } `json:"hits"`
+	}
+	c.callTool("recall", map[string]any{"query": "a fact two", "namespace": "a", "k": 10}, &recA, false)
+	found := false
+	for _, h := range recA.Hits {
+		if h.ID == a2.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("a2's delete should have failed, leaving it recallable: %+v", recA.Hits)
+	}
+}
+
+// TestPruneEmptyNamespacesDirect white-box tests the extracted helper
+// directly (this file is in package mcp), bypassing the JSON-RPC harness so
+// it can drive the Server's memory bootstrap and namespace registry without
+// needing a store-level fault. Given a namespace set spanning one
+// still-occupied and one now-empty namespace, only the empty one should be
+// pruned.
+func TestPruneEmptyNamespacesDirect(t *testing.T) {
+	st := newHeapStore(t)
+	s, err := NewServer(context.Background(), Config{Store: st})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	ctx := context.Background()
+	if err := s.ensureMemory(ctx); err != nil {
+		t.Fatalf("ensureMemory: %v", err)
+	}
+
+	vecs, err := s.emb.Embed(ctx, []string{"still here"})
+	if err != nil {
+		t.Fatalf("embed: %v", err)
+	}
+	md := rostam.VectorMetadata{nsField: vector.NewString("occupied")}
+	if err := st.VectorUpsert(ctx, memCollection, 1, vecs[0], "still here", rostam.VectorInsertOpts{Metadata: md}); err != nil {
+		t.Fatalf("VectorUpsert: %v", err)
+	}
+	if err := s.addNamespace(ctx, "occupied"); err != nil {
+		t.Fatalf("addNamespace(occupied): %v", err)
+	}
+	// "empty" is registered but backed by zero docs, mirroring the state
+	// forget's affectedNS set is in for a namespace whose last id was just
+	// deleted.
+	if err := s.addNamespace(ctx, "empty"); err != nil {
+		t.Fatalf("addNamespace(empty): %v", err)
+	}
+
+	if err := s.pruneEmptyNamespaces(ctx, map[string]bool{"occupied": true, "empty": true}); err != nil {
+		t.Fatalf("pruneEmptyNamespaces: %v", err)
+	}
+
+	ns, err := s.namespaces(ctx)
+	if err != nil {
+		t.Fatalf("namespaces: %v", err)
+	}
+	if !containsStr(ns, "occupied") {
+		t.Fatalf("occupied namespace should remain: %+v", ns)
+	}
+	if containsStr(ns, "empty") {
+		t.Fatalf("empty namespace should have been pruned: %+v", ns)
+	}
 }
 
 func TestListMemoriesPaginates(t *testing.T) {
