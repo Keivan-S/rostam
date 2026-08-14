@@ -68,13 +68,8 @@ func NewServer(ctx context.Context, cfg Config) (*Server, error) {
 	return s, nil
 }
 
-// checkEmbedderIdentity is completed in the memory task; until the memory
-// collection exists there is nothing to validate.
-func (s *Server) checkEmbedderIdentity(ctx context.Context) error { return nil }
-
-// Placeholder registrars completed by later tasks.
-func (s *Server) registerMemoryTools() {}
-func (s *Server) registerDBTools()     {}
+// Placeholder registrar completed by a later task.
+func (s *Server) registerDBTools() {}
 
 func (s *Server) register(t toolDef) { s.tools = append(s.tools, t) }
 
