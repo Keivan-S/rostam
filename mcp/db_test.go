@@ -213,3 +213,133 @@ func TestGetAllowsMemoryCollectionRead(t *testing.T) {
 		t.Fatalf("expected internal __ns field unstripped on generic get: %+v", got.Points[0].Metadata)
 	}
 }
+
+// TestDestructiveToolsAbsentByDefault guards the registration gate itself:
+// delete/delete_by_filter must not appear in tools/list at all (not merely
+// refuse when called) unless Config.Destructive is set.
+func TestDestructiveToolsAbsentByDefault(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t)})
+	c.initialize()
+	names := c.toolNames()
+	for _, want := range []string{"delete", "delete_by_filter"} {
+		for _, n := range names {
+			if n == want {
+				t.Fatalf("tool %q should be absent when Destructive is false; got %v", want, names)
+			}
+		}
+	}
+}
+
+func TestDestructiveToolsPresentWhenEnabled(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t), Destructive: true})
+	c.initialize()
+	names := c.toolNames()
+	for _, want := range []string{"delete", "delete_by_filter"} {
+		found := false
+		for _, n := range names {
+			if n == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("tool %q should be present when Destructive is true; got %v", want, names)
+		}
+	}
+}
+
+func TestDeleteRemovesPoint(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t), Destructive: true})
+	c.initialize()
+	c.callTool("create_collection", map[string]any{"name": "docs", "dim": 4}, nil, false)
+	c.callTool("upsert", map[string]any{"collection": "docs", "id": uint64(1), "vector": []float32{1, 0, 0, 0}, "content": "fox"}, nil, false)
+	c.callTool("upsert", map[string]any{"collection": "docs", "id": uint64(2), "vector": []float32{0, 1, 0, 0}, "content": "whale"}, nil, false)
+
+	var res struct {
+		Deleted []uint64 `json:"deleted"`
+		Missing []uint64 `json:"missing"`
+	}
+	c.callTool("delete", map[string]any{"collection": "docs", "ids": []uint64{1, 999}}, &res, false)
+	if len(res.Deleted) != 1 || res.Deleted[0] != 1 {
+		t.Fatalf("delete deleted: %+v", res.Deleted)
+	}
+	if len(res.Missing) != 1 || res.Missing[0] != 999 {
+		t.Fatalf("delete missing: %+v", res.Missing)
+	}
+
+	var got struct {
+		Points  []struct{ ID uint64 } `json:"points"`
+		Missing []uint64              `json:"missing"`
+	}
+	c.callTool("get", map[string]any{"collection": "docs", "ids": []uint64{1, 2}}, &got, false)
+	if len(got.Points) != 1 || got.Points[0].ID != 2 {
+		t.Fatalf("expected only id 2 to remain: %+v", got.Points)
+	}
+	if len(got.Missing) != 1 || got.Missing[0] != 1 {
+		t.Fatalf("expected id 1 reported missing after delete: %+v", got.Missing)
+	}
+}
+
+func TestDeleteByFilterDeletesOnlyMatches(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t), Destructive: true})
+	c.initialize()
+	c.callTool("create_collection", map[string]any{"name": "docs", "dim": 4}, nil, false)
+	c.callTool("upsert", map[string]any{"collection": "docs", "id": uint64(1), "vector": []float32{1, 0, 0, 0}, "content": "english doc", "metadata": map[string]any{"lang": "en"}}, nil, false)
+	c.callTool("upsert", map[string]any{"collection": "docs", "id": uint64(2), "vector": []float32{0, 1, 0, 0}, "content": "french doc", "metadata": map[string]any{"lang": "fr"}}, nil, false)
+
+	filter := map[string]any{
+		"op":    "eq",
+		"field": "lang",
+		"value": map[string]any{"kind": "string", "str": "en"},
+	}
+	var res struct {
+		DeletedCount int `json:"deleted_count"`
+	}
+	c.callTool("delete_by_filter", map[string]any{"collection": "docs", "filter": filter}, &res, false)
+	if res.DeletedCount != 1 {
+		t.Fatalf("delete_by_filter deleted_count: %+v", res)
+	}
+
+	var got struct {
+		Points  []struct{ ID uint64 } `json:"points"`
+		Missing []uint64              `json:"missing"`
+	}
+	c.callTool("get", map[string]any{"collection": "docs", "ids": []uint64{1, 2}}, &got, false)
+	if len(got.Points) != 1 || got.Points[0].ID != 2 {
+		t.Fatalf("expected only id 2 (fr) to remain: %+v", got.Points)
+	}
+}
+
+func TestDeleteByFilterRefusesMatchAll(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t), Destructive: true})
+	c.initialize()
+	c.callTool("create_collection", map[string]any{"name": "docs", "dim": 4}, nil, false)
+	c.callTool("upsert", map[string]any{"collection": "docs", "id": uint64(1), "vector": []float32{1, 0, 0, 0}, "content": "fox"}, nil, false)
+
+	msg := c.callTool("delete_by_filter", map[string]any{"collection": "docs", "filter": map[string]any{}}, nil, true)
+	if !strings.Contains(msg, "match-all") {
+		t.Fatalf("error should mention match-all, got %q", msg)
+	}
+}
+
+func TestDeleteRefusesMemoryCollection(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t), Destructive: true})
+	c.initialize()
+	msg := c.callTool("delete", map[string]any{"collection": memCollection, "ids": []uint64{1}}, nil, true)
+	if !strings.Contains(msg, "memory") {
+		t.Fatalf("error should mention the memory tools, got %q", msg)
+	}
+}
+
+func TestDeleteByFilterRefusesMemoryCollection(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t), Destructive: true})
+	c.initialize()
+	filter := map[string]any{
+		"op":    "eq",
+		"field": "lang",
+		"value": map[string]any{"kind": "string", "str": "en"},
+	}
+	msg := c.callTool("delete_by_filter", map[string]any{"collection": memCollection, "filter": filter}, nil, true)
+	if !strings.Contains(msg, "memory") {
+		t.Fatalf("error should mention the memory tools, got %q", msg)
+	}
+}

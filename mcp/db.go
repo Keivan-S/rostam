@@ -92,6 +92,113 @@ func (s *Server) registerDBTools() {
 	})
 }
 
+// registerDestructiveTools registers delete and delete_by_filter. Called
+// only when s.destructive is set: unlike the write tools in
+// registerDBTools, these are absent from tools/list entirely on a
+// non-destructive server rather than merely refusing at call time.
+func (s *Server) registerDestructiveTools() {
+	s.register(toolDef{
+		Name:        "delete",
+		Description: "Delete points from a collection by id.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"collection": map[string]any{"type": "string"},
+				"ids":        map[string]any{"type": "array", "items": map[string]any{"type": "integer"}},
+			},
+			"required": []any{"collection", "ids"},
+		},
+		Handler: s.handleDelete,
+	})
+	s.register(toolDef{
+		Name:        "delete_by_filter",
+		Description: "Delete all points in a collection matching a metadata filter.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"collection": map[string]any{"type": "string"},
+				"filter":     map[string]any{"type": "object", "description": `metadata filter using the tagged value form, e.g. {"op":"eq","field":"lang","value":{"kind":"string","str":"en"}}; a match-all (empty) filter is refused`},
+			},
+			"required": []any{"collection", "filter"},
+		},
+		Handler: s.handleDeleteByFilter,
+	})
+}
+
+// deleteArgs is the delete tool's decoded input.
+type deleteArgs struct {
+	Collection string   `json:"collection"`
+	IDs        []uint64 `json:"ids"`
+}
+
+func (s *Server) handleDelete(ctx context.Context, raw json.RawMessage) (any, error) {
+	var args deleteArgs
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return nil, fmt.Errorf("mcp: bad delete args: %w", err)
+	}
+	if args.Collection == "" {
+		return nil, fmt.Errorf("mcp: delete: collection is required")
+	}
+	if err := rejectMemoryCollection(args.Collection); err != nil {
+		return nil, err
+	}
+	if len(args.IDs) == 0 {
+		return nil, fmt.Errorf("mcp: delete: ids is required and must be non-empty")
+	}
+
+	deleted := make([]uint64, 0, len(args.IDs))
+	missing := make([]uint64, 0)
+	for _, id := range args.IDs {
+		ok, err := s.store.VectorDelete(ctx, args.Collection, id)
+		if err != nil {
+			return nil, fmt.Errorf("mcp: delete: %w", err)
+		}
+		if ok {
+			deleted = append(deleted, id)
+		} else {
+			missing = append(missing, id)
+		}
+	}
+	return map[string]any{"deleted": deleted, "missing": missing}, nil
+}
+
+// deleteByFilterArgs is the delete_by_filter tool's decoded input.
+type deleteByFilterArgs struct {
+	Collection string          `json:"collection"`
+	Filter     json.RawMessage `json:"filter"`
+}
+
+func (s *Server) handleDeleteByFilter(ctx context.Context, raw json.RawMessage) (any, error) {
+	var args deleteByFilterArgs
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return nil, fmt.Errorf("mcp: bad delete_by_filter args: %w", err)
+	}
+	if args.Collection == "" {
+		return nil, fmt.Errorf("mcp: delete_by_filter: collection is required")
+	}
+	if err := rejectMemoryCollection(args.Collection); err != nil {
+		return nil, err
+	}
+
+	f, err := parseFilter(args.Filter)
+	if err != nil {
+		return nil, err
+	}
+	// The gate being open (Destructive=true) authorizes targeted deletes,
+	// not a blanket wipe: an empty/zero filter matches every point in the
+	// collection, so refuse it outright rather than trusting the caller to
+	// mean it.
+	if f.IsZero() {
+		return nil, fmt.Errorf("mcp: delete_by_filter: refusing match-all delete_by_filter; provide a filter")
+	}
+
+	n, err := s.store.VectorDeleteByFilter(ctx, args.Collection, f)
+	if err != nil {
+		return nil, fmt.Errorf("mcp: delete_by_filter: %w", err)
+	}
+	return map[string]any{"deleted_count": n}, nil
+}
+
 // createCollectionArgs is the create_collection tool's decoded input.
 type createCollectionArgs struct {
 	Name     string `json:"name"`

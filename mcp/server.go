@@ -65,6 +65,9 @@ func NewServer(ctx context.Context, cfg Config) (*Server, error) {
 	}
 	s.registerMemoryTools()
 	s.registerDBTools()
+	if s.destructive {
+		s.registerDestructiveTools()
+	}
 	return s, nil
 }
 
