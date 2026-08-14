@@ -63,7 +63,7 @@ across every MCP client pointed at the same machine.
 | `-tls-ca` | — | CA bundle PEM to verify the remote server's certificate (`-connect`). |
 | `-tls-cert` / `-tls-key` | — | Client certificate/key PEM for mTLS (`-connect`; both required together). |
 | `-tls-server-name` | — | Expected server certificate name (SNI + verification) for `-connect`. |
-| `-destructive` | `false` | Register the `delete` and `delete_by_filter` tools for arbitrary collections. Without it, those two tools are absent from `tools/list` entirely — not present-but-refusing. |
+| `-enable-destructive` | `false` | Register the `delete` and `delete_by_filter` tools for arbitrary collections. Without it, those two tools are absent from `tools/list` entirely — not present-but-refusing. |
 
 `-data` and `-connect` are mutually exclusive: pass one or the other, never
 both.
@@ -181,14 +181,14 @@ field — it has no meaning for BM25-only recall or for a plain listing.
 schema and reserved metadata fields belong to the memory tools above, and a
 raw write here could corrupt them. Use `remember`/`recall`/`forget` instead.
 
-### Destructive tools (only with `-destructive`)
+### Destructive tools (only with `-enable-destructive`)
 
 | Tool | Args | Behavior |
 |---|---|---|
 | `delete` | `collection` (required), `ids` (required) | Deletes points by id; a per-id failure doesn't abort the rest of the batch. Returns `{"deleted":[...],"missing":[...],"errors":[...]}` — `errors` is present only when at least one id failed to delete. |
-| `delete_by_filter` | `collection` (required), `filter` (required) | Deletes every point matching `filter`. A match-all (empty/zero) filter is refused even with the gate open — `-destructive` authorizes targeted deletes, not a blanket wipe. |
+| `delete_by_filter` | `collection` (required), `filter` (required) | Deletes every point matching `filter`. A match-all (empty/zero) filter is refused even with the gate open — `-enable-destructive` authorizes targeted deletes, not a blanket wipe. |
 
-Without `-destructive`, `delete` and `delete_by_filter` are absent from
+Without `-enable-destructive`, `delete` and `delete_by_filter` are absent from
 `tools/list` entirely. Memory's `forget` tool is always available regardless
 of this flag — it's scoped to `mcp_memory` only.
 

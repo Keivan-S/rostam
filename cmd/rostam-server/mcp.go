@@ -64,7 +64,7 @@ func runMcpCmd(args []string) {
 	fs.StringVar(&fl.tlsCert, "tls-cert", "", "client certificate PEM for mTLS (-connect; requires -tls-key)")
 	fs.StringVar(&fl.tlsKey, "tls-key", "", "client private key PEM for mTLS (-connect; requires -tls-cert)")
 	fs.StringVar(&fl.tlsServer, "tls-server-name", "", "expected server certificate name (SNI + verification) for -connect")
-	fs.BoolVar(&fl.destructive, "destructive", false, "register delete/delete_by_filter tools for arbitrary collections (off by default)")
+	fs.BoolVar(&fl.destructive, "enable-destructive", false, "register delete/delete_by_filter tools for arbitrary collections (off by default)")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
