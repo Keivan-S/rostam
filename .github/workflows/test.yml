@@ -46,9 +46,41 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: Snapshot the working tree
+        # Taken BEFORE the tests so the check below compares what the run created,
+        # not what a fresh checkout already contains.
+        id: tree-snapshot
+        run: git status --porcelain --ignored=traditional --untracked-files=all | sort > /tmp/tree-before.txt
+
       - name: Test (light packages)
         # Everything EXCEPT the heavy cluster packages, which run isolated below.
         run: go test -p 2 -timeout 15m $(go list ./... | grep -vE '/rostam$|/rostam/inttest$|/rostam/cluster$|/rostam/shard$')
+      - name: Tests must not write into the checkout
+        # A test that persists into the repo is invisible to CI otherwise: a runner
+        # is always the FIRST run, so self-poisoning state never surfaces here, and
+        # gotestsum --rerun-fails retries straight past it. That combination hid a
+        # store writing ./vectors/ into the working directory (#8/#9) while every
+        # job stayed green and the same suite failed on a second local run.
+        #
+        # Ignored files must be included: the directory in question was gitignored,
+        # so a plain `git status --porcelain` check sees nothing at all. And it must
+        # be FILE-level (traditional + untracked-files=all), because --ignored=matching
+        # collapses an ignored directory to one entry — with `vectors/` already
+        # present, a test adding `vectors/default/new.json` leaves both snapshots
+        # byte-identical and the guard reports success.
+        #
+        # Diffing against the pre-test snapshot keeps pre-existing ignored files out
+        # of it, so only paths the run CREATED can fail this.
+        if: ${{ always() && steps.tree-snapshot.outcome == 'success' }}
+        run: |
+          git status --porcelain --ignored=traditional --untracked-files=all | sort > /tmp/tree-after.txt
+          if ! diff -u /tmp/tree-before.txt /tmp/tree-after.txt > /tmp/tree.diff; then
+            echo "::error::the test run wrote into the checkout — see the diff below"
+            cat /tmp/tree.diff
+            exit 1
+          fi
+          echo "working tree unchanged by the test run"
+
 
   test-root:
     name: root-package integration tests
@@ -65,6 +97,12 @@ jobs:
       - name: Install gotestsum
         run: go install gotest.tools/gotestsum@latest
 
+      - name: Snapshot the working tree
+        # Taken BEFORE the tests so the check below compares what the run created,
+        # not what a fresh checkout already contains.
+        id: tree-snapshot
+        run: git status --porcelain --ignored=traditional --untracked-files=all | sort > /tmp/tree-before.txt
+
       - name: Test (root package, isolated)
         # Alone on the runner: its 3-node cluster tests get both cores for bring-up.
         # gotestsum reruns a transiently-failed test up to twice: the heavy RF=3
@@ -73,6 +111,32 @@ jobs:
         # pass in seconds in isolation. A genuine break fails all 3 attempts; if
         # >10 distinct tests fail it's treated as a real break and not rerun.
         run: gotestsum --rerun-fails=2 --packages=. -- -timeout 20m
+      - name: Tests must not write into the checkout
+        # A test that persists into the repo is invisible to CI otherwise: a runner
+        # is always the FIRST run, so self-poisoning state never surfaces here, and
+        # gotestsum --rerun-fails retries straight past it. That combination hid a
+        # store writing ./vectors/ into the working directory (#8/#9) while every
+        # job stayed green and the same suite failed on a second local run.
+        #
+        # Ignored files must be included: the directory in question was gitignored,
+        # so a plain `git status --porcelain` check sees nothing at all. And it must
+        # be FILE-level (traditional + untracked-files=all), because --ignored=matching
+        # collapses an ignored directory to one entry — with `vectors/` already
+        # present, a test adding `vectors/default/new.json` leaves both snapshots
+        # byte-identical and the guard reports success.
+        #
+        # Diffing against the pre-test snapshot keeps pre-existing ignored files out
+        # of it, so only paths the run CREATED can fail this.
+        if: ${{ always() && steps.tree-snapshot.outcome == 'success' }}
+        run: |
+          git status --porcelain --ignored=traditional --untracked-files=all | sort > /tmp/tree-after.txt
+          if ! diff -u /tmp/tree-before.txt /tmp/tree-after.txt > /tmp/tree.diff; then
+            echo "::error::the test run wrote into the checkout — see the diff below"
+            cat /tmp/tree.diff
+            exit 1
+          fi
+          echo "working tree unchanged by the test run"
+
 
   test-inttest:
     name: inttest integration tests
@@ -89,12 +153,44 @@ jobs:
       - name: Install gotestsum
         run: go install gotest.tools/gotestsum@latest
 
+      - name: Snapshot the working tree
+        # Taken BEFORE the tests so the check below compares what the run created,
+        # not what a fresh checkout already contains.
+        id: tree-snapshot
+        run: git status --porcelain --ignored=traditional --untracked-files=all | sort > /tmp/tree-before.txt
+
       - name: Test (inttest, isolated)
         # Alone on the runner: its 3-node cluster tests get both cores for bring-up.
         # gotestsum reruns transient failures (see test-root) — the inttest RF=3
         # cluster/reshard tests are the most bring-up-heavy and the most exposed to
         # a badly-contended shared runner; they pass in seconds in isolation.
         run: gotestsum --rerun-fails=2 --packages=./inttest/ -- -timeout 20m
+      - name: Tests must not write into the checkout
+        # A test that persists into the repo is invisible to CI otherwise: a runner
+        # is always the FIRST run, so self-poisoning state never surfaces here, and
+        # gotestsum --rerun-fails retries straight past it. That combination hid a
+        # store writing ./vectors/ into the working directory (#8/#9) while every
+        # job stayed green and the same suite failed on a second local run.
+        #
+        # Ignored files must be included: the directory in question was gitignored,
+        # so a plain `git status --porcelain` check sees nothing at all. And it must
+        # be FILE-level (traditional + untracked-files=all), because --ignored=matching
+        # collapses an ignored directory to one entry — with `vectors/` already
+        # present, a test adding `vectors/default/new.json` leaves both snapshots
+        # byte-identical and the guard reports success.
+        #
+        # Diffing against the pre-test snapshot keeps pre-existing ignored files out
+        # of it, so only paths the run CREATED can fail this.
+        if: ${{ always() && steps.tree-snapshot.outcome == 'success' }}
+        run: |
+          git status --porcelain --ignored=traditional --untracked-files=all | sort > /tmp/tree-after.txt
+          if ! diff -u /tmp/tree-before.txt /tmp/tree-after.txt > /tmp/tree.diff; then
+            echo "::error::the test run wrote into the checkout — see the diff below"
+            cat /tmp/tree.diff
+            exit 1
+          fi
+          echo "working tree unchanged by the test run"
+
 
   test-cluster:
     name: cluster package tests
@@ -111,10 +207,42 @@ jobs:
       - name: Install gotestsum
         run: go install gotest.tools/gotestsum@latest
 
+      - name: Snapshot the working tree
+        # Taken BEFORE the tests so the check below compares what the run created,
+        # not what a fresh checkout already contains.
+        id: tree-snapshot
+        run: git status --porcelain --ignored=traditional --untracked-files=all | sort > /tmp/tree-before.txt
+
       - name: Test (cluster, isolated)
         # Alone on the runner: its 3-node cluster tests get both cores for
         # bring-up. gotestsum reruns transient failures (see test-root).
         run: gotestsum --rerun-fails=2 --packages=./cluster/ -- -timeout 20m
+      - name: Tests must not write into the checkout
+        # A test that persists into the repo is invisible to CI otherwise: a runner
+        # is always the FIRST run, so self-poisoning state never surfaces here, and
+        # gotestsum --rerun-fails retries straight past it. That combination hid a
+        # store writing ./vectors/ into the working directory (#8/#9) while every
+        # job stayed green and the same suite failed on a second local run.
+        #
+        # Ignored files must be included: the directory in question was gitignored,
+        # so a plain `git status --porcelain` check sees nothing at all. And it must
+        # be FILE-level (traditional + untracked-files=all), because --ignored=matching
+        # collapses an ignored directory to one entry — with `vectors/` already
+        # present, a test adding `vectors/default/new.json` leaves both snapshots
+        # byte-identical and the guard reports success.
+        #
+        # Diffing against the pre-test snapshot keeps pre-existing ignored files out
+        # of it, so only paths the run CREATED can fail this.
+        if: ${{ always() && steps.tree-snapshot.outcome == 'success' }}
+        run: |
+          git status --porcelain --ignored=traditional --untracked-files=all | sort > /tmp/tree-after.txt
+          if ! diff -u /tmp/tree-before.txt /tmp/tree-after.txt > /tmp/tree.diff; then
+            echo "::error::the test run wrote into the checkout — see the diff below"
+            cat /tmp/tree.diff
+            exit 1
+          fi
+          echo "working tree unchanged by the test run"
+
 
   test-shard:
     name: shard package tests
@@ -131,11 +259,29 @@ jobs:
       - name: Install gotestsum
         run: go install gotest.tools/gotestsum@latest
 
+      - name: Snapshot the working tree
+        # Taken BEFORE the tests so the check below compares what the run created,
+        # not what a fresh checkout already contains.
+        id: tree-snapshot
+        run: git status --porcelain --ignored=traditional --untracked-files=all | sort > /tmp/tree-before.txt
+
       - name: Test (shard, isolated)
         # Alone on the runner: its in-memory 3-node raft clusters run with
         # deliberately aggressive election timings (scaled by cpuScaled) that a
         # co-tenant package would starve into spurious elections.
         run: gotestsum --rerun-fails=2 --packages=./shard/ -- -timeout 20m
+      - name: Tests must not write into the checkout
+        # See test-unit for why this exists and why the flags are what they are.
+        if: ${{ always() && steps.tree-snapshot.outcome == 'success' }}
+        run: |
+          git status --porcelain --ignored=traditional --untracked-files=all | sort > /tmp/tree-after.txt
+          if ! diff -u /tmp/tree-before.txt /tmp/tree-after.txt > /tmp/tree.diff; then
+            echo "::error::the test run wrote into the checkout — see the diff below"
+            cat /tmp/tree.diff
+            exit 1
+          fi
+          echo "working tree unchanged by the test run"
+
 
   cgo-disabled-build:
     name: cgo-disabled build
@@ -238,8 +384,26 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Snapshot the working tree
+        # Taken BEFORE the tests so the check below compares what the run created,
+        # not what a fresh checkout already contains.
+        id: tree-snapshot
+        run: git status --porcelain --ignored=traditional --untracked-files=all | sort > /tmp/tree-before.txt
+
       - name: Test (32-bit int)
         run: go test -count=1 -short -timeout 25m ./ops/... ./vector/... ./httpapi/... ./server/...
+      - name: Tests must not write into the checkout
+        # See test-unit for why this exists and why the flags are what they are.
+        if: ${{ always() && steps.tree-snapshot.outcome == 'success' }}
+        run: |
+          git status --porcelain --ignored=traditional --untracked-files=all | sort > /tmp/tree-after.txt
+          if ! diff -u /tmp/tree-before.txt /tmp/tree-after.txt > /tmp/tree.diff; then
+            echo "::error::the test run wrote into the checkout — see the diff below"
+            cat /tmp/tree.diff
+            exit 1
+          fi
+          echo "working tree unchanged by the test run"
+
 
   race:
     name: race detector
@@ -256,6 +420,12 @@ jobs:
 
       - name: Install gotestsum
         run: go install gotest.tools/gotestsum@latest
+
+      - name: Snapshot the working tree
+        # Taken BEFORE the tests so the check below compares what the run created,
+        # not what a fresh checkout already contains.
+        id: tree-snapshot
+        run: git status --porcelain --ignored=traditional --untracked-files=all | sort > /tmp/tree-before.txt
 
       - name: Test (race detector)
         # Enforces the README's "race-clean" claim on the concurrency-critical
@@ -285,6 +455,18 @@ jobs:
         # corpora still run on every push in the `build, vet + unit/light
         # packages` job, without -race.
         run: gotestsum --rerun-fails=2 --packages="./ ./cache/... ./ops/... ./vector/..." -- -race -short -p 2 -timeout 40m
+      - name: Tests must not write into the checkout
+        # See test-unit for why this exists and why the flags are what they are.
+        if: ${{ always() && steps.tree-snapshot.outcome == 'success' }}
+        run: |
+          git status --porcelain --ignored=traditional --untracked-files=all | sort > /tmp/tree-after.txt
+          if ! diff -u /tmp/tree-before.txt /tmp/tree-after.txt > /tmp/tree.diff; then
+            echo "::error::the test run wrote into the checkout — see the diff below"
+            cat /tmp/tree.diff
+            exit 1
+          fi
+          echo "working tree unchanged by the test run"
+
 
   python-client:
     name: python client tests
