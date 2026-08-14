@@ -20,6 +20,22 @@ the highest recall measured. → [How it compares](#how-it-compares)
 | **Replicated cluster** | Per-shard Raft, online resharding, backups to S3, RBAC/JWT/mTLS. |
 | **Embedded library** | Import it into a Go binary. No server, no cgo required. |
 
+### Agent memory over MCP
+
+`rostam-server mcp` runs Rostam as an [MCP](https://modelcontextprotocol.io/)
+stdio server, giving Claude Code, Claude Desktop, Cursor, or any MCP client
+persistent agent memory and vector-DB tools. No daemon, no cloud account, and
+no embedding API key required — memory works out of the box on built-in
+BM25, and pointing it at an OpenAI-compatible endpoint upgrades recall to
+hybrid dense+BM25.
+
+```sh
+claude mcp add rostam -- rostam-server mcp
+```
+
+→ [MCP server](https://docs.rostamlabs.com/server/mcp/) for the full tool
+reference, client config snippets, and embedder configuration.
+
 And two engines, usable together or entirely on their own:
 
 - a **vector search engine** ([`vector/`](./vector)) — HNSW, IVF and Vamana
