@@ -175,11 +175,14 @@ func (s *Server) removeNamespace(ctx context.Context, ns string) error {
 }
 
 // memoryHit is one recalled (or listed, Task 5) memory: its id, content,
-// relevance score, and user metadata with the reserved fields stripped.
+// relevance score/distance, and user metadata with the reserved fields
+// stripped. Also doubles as the generic search tool's hit shape (Task 6),
+// via the shared hybridDocs helper in db.go.
 type memoryHit struct {
 	ID       uint64         `json:"id"`
 	Content  string         `json:"content"`
 	Score    float32        `json:"score"`
+	Distance float32        `json:"distance"`
 	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
@@ -369,47 +372,23 @@ func (s *Server) recallBM25(ctx context.Context, query string, k int, f rostam.V
 	return map[string]any{"hits": hits}, nil
 }
 
-// recallHybrid runs the dense+BM25 fusion path. VectorHybridText returns only
-// ids/scores (no content/metadata), so the hits are joined against a batch
-// fetch by id — GetBatch's return order is not guaranteed to match the
-// fusion ranking, hence the id->point map.
+// recallHybrid runs the dense+BM25 fusion path via the shared hybridDocs
+// helper (db.go), then strips the memory subsystem's reserved metadata
+// fields from each hit's already-JSON-converted metadata — hybridDocs itself
+// is collection-agnostic and leaves metadata untouched, since a generic
+// search caller (Task 6) has no reserved fields to hide.
 func (s *Server) recallHybrid(ctx context.Context, query string, k int, f rostam.VectorFilter) (any, error) {
 	dense, err := s.emb.Embed(ctx, []string{query})
 	if err != nil {
 		return nil, fmt.Errorf("mcp: embed query: %w", err)
 	}
-	results, _, err := s.store.VectorHybridText(ctx, memCollection, dense[0], query, k, rostam.VectorHybridOpts{Filter: f})
+	hits, err := s.hybridDocs(ctx, memCollection, dense[0], query, k, f)
 	if err != nil {
 		return nil, fmt.Errorf("mcp: recall: %w", err)
 	}
-	if len(results) == 0 {
-		return map[string]any{"hits": []memoryHit{}}, nil
-	}
-
-	ids := make([]uint64, len(results))
-	for i, r := range results {
-		ids[i] = r.ID
-	}
-	points, _, err := s.store.VectorGetBatch(ctx, memCollection, ids, false, true)
-	if err != nil {
-		return nil, fmt.Errorf("mcp: recall: fetching hit content: %w", err)
-	}
-	byID := make(map[uint64]rostam.BatchGetPoint, len(points))
-	for _, p := range points {
-		byID[p.ID] = p
-	}
-
-	hits := make([]memoryHit, 0, len(results))
-	for _, r := range results {
-		p, ok := byID[r.ID]
-		if !ok {
-			continue // point vanished between the fusion search and the batch fetch
-		}
-		var content string
-		if cv, ok := p.Meta["$content"]; ok && cv.Kind == vector.ValueString {
-			content = cv.Str
-		}
-		hits = append(hits, memoryHit{ID: r.ID, Content: content, Score: r.Score, Metadata: metadataToJSON(stripReservedMetadata(p.Meta))})
+	for i := range hits {
+		delete(hits[i].Metadata, nsField)
+		delete(hits[i].Metadata, createdField)
 	}
 	return map[string]any{"hits": hits}, nil
 }

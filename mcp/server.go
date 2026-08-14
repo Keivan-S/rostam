@@ -68,9 +68,6 @@ func NewServer(ctx context.Context, cfg Config) (*Server, error) {
 	return s, nil
 }
 
-// Placeholder registrar completed by a later task.
-func (s *Server) registerDBTools() {}
-
 func (s *Server) register(t toolDef) { s.tools = append(s.tools, t) }
 
 func textResult(v any) map[string]any {
