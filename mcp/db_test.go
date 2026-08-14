@@ -279,6 +279,35 @@ func TestDeleteRemovesPoint(t *testing.T) {
 	}
 }
 
+// TestDeleteReportsPartialFailure guards handleDelete's continue-past-errors
+// behavior (mirroring forget's approach in memory.go): a mid-batch
+// VectorDelete failure must not discard the outcome of ids processed before
+// or after it. Uses the same failDeleteStore wrapper as forget's partial-
+// failure test (memory_test.go) to inject a deterministic failure.
+func TestDeleteReportsPartialFailure(t *testing.T) {
+	failing := &failDeleteStore{Store: newHeapStore(t)}
+	c := startServer(t, Config{Store: failing, Destructive: true})
+	c.initialize()
+	c.callTool("create_collection", map[string]any{"name": "docs", "dim": 4}, nil, false)
+	c.callTool("upsert", map[string]any{"collection": "docs", "id": uint64(1), "vector": []float32{1, 0, 0, 0}, "content": "fox"}, nil, false)
+	c.callTool("upsert", map[string]any{"collection": "docs", "id": uint64(2), "vector": []float32{0, 1, 0, 0}, "content": "whale"}, nil, false)
+
+	failing.failID = 2
+
+	var res struct {
+		Deleted []uint64 `json:"deleted"`
+		Missing []uint64 `json:"missing"`
+		Errors  []string `json:"errors"`
+	}
+	c.callTool("delete", map[string]any{"collection": "docs", "ids": []uint64{1, 2}}, &res, false)
+	if len(res.Deleted) != 1 || res.Deleted[0] != 1 {
+		t.Fatalf("expected id 1 to have deleted despite id 2 failing: %+v", res)
+	}
+	if len(res.Errors) != 1 || !strings.Contains(res.Errors[0], "2") {
+		t.Fatalf("expected an error naming id 2: %+v", res)
+	}
+}
+
 func TestDeleteByFilterDeletesOnlyMatches(t *testing.T) {
 	c := startServer(t, Config{Store: newHeapStore(t), Destructive: true})
 	c.initialize()

@@ -99,7 +99,7 @@ func (s *Server) registerDBTools() {
 func (s *Server) registerDestructiveTools() {
 	s.register(toolDef{
 		Name:        "delete",
-		Description: "Delete points from a collection by id.",
+		Description: `Delete points from a collection by id. Returns {"deleted":[...],"missing":[...],"errors":[...]}; a per-id delete failure does not abort the rest of the batch.`,
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -146,12 +146,21 @@ func (s *Server) handleDelete(ctx context.Context, raw json.RawMessage) (any, er
 		return nil, fmt.Errorf("mcp: delete: ids is required and must be non-empty")
 	}
 
+	// Every id's delete is attempted even after an earlier one fails (mirrors
+	// forget's approach in memory.go): a batch with a mix of good and bad ids
+	// must still report which ones actually deleted rather than aborting and
+	// leaving the caller unable to tell "nothing happened" from "some of
+	// this went through". Unlike forget, the failures are surfaced in the
+	// result's errors field rather than as a top-level tool error, so the
+	// partial deleted/missing outcome isn't discarded.
 	deleted := make([]uint64, 0, len(args.IDs))
 	missing := make([]uint64, 0)
+	var errs []string
 	for _, id := range args.IDs {
 		ok, err := s.store.VectorDelete(ctx, args.Collection, id)
 		if err != nil {
-			return nil, fmt.Errorf("mcp: delete: %w", err)
+			errs = append(errs, fmt.Sprintf("id %d: %s", id, err))
+			continue
 		}
 		if ok {
 			deleted = append(deleted, id)
@@ -159,7 +168,15 @@ func (s *Server) handleDelete(ctx context.Context, raw json.RawMessage) (any, er
 			missing = append(missing, id)
 		}
 	}
-	return map[string]any{"deleted": deleted, "missing": missing}, nil
+	return deleteResult{Deleted: deleted, Missing: missing, Errors: errs}, nil
+}
+
+// deleteResult is the delete tool's response shape. Errors is omitted on
+// full success; when present, each entry names the id it came from.
+type deleteResult struct {
+	Deleted []uint64 `json:"deleted"`
+	Missing []uint64 `json:"missing"`
+	Errors  []string `json:"errors,omitempty"`
 }
 
 // deleteByFilterArgs is the delete_by_filter tool's decoded input.
