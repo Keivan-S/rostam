@@ -1,0 +1,171 @@
+// SPDX-License-Identifier: Apache-2.0
+
+package mcp
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+
+	"github.com/rostamlabs/rostam/vector"
+)
+
+func TestJSONToMetadataScalars(t *testing.T) {
+	raw := map[string]json.RawMessage{
+		"s": json.RawMessage(`"x"`), "i": json.RawMessage(`2`),
+		"f": json.RawMessage(`2.5`), "b": json.RawMessage(`true`),
+	}
+	m, err := jsonToMetadata(raw)
+	if err != nil {
+		t.Fatalf("jsonToMetadata: %v", err)
+	}
+	if m["s"].Kind != vector.ValueString || m["s"].Str != "x" {
+		t.Fatalf("s: %+v", m["s"])
+	}
+	if m["i"].Kind != vector.ValueInt || m["i"].Int != 2 {
+		t.Fatalf("i: %+v", m["i"])
+	}
+	if m["f"].Kind != vector.ValueFloat || m["f"].Flt != 2.5 {
+		t.Fatalf("f: %+v", m["f"])
+	}
+	if m["b"].Kind != vector.ValueBool || !m["b"].Bool {
+		t.Fatalf("b: %+v", m["b"])
+	}
+}
+
+func TestJSONToMetadataArrays(t *testing.T) {
+	raw := map[string]json.RawMessage{
+		"strs":   json.RawMessage(`["a","b"]`),
+		"ints":   json.RawMessage(`[1,2]`),
+		"floats": json.RawMessage(`[1,2.5]`),
+	}
+	m, err := jsonToMetadata(raw)
+	if err != nil {
+		t.Fatalf("jsonToMetadata: %v", err)
+	}
+	if m["strs"].Kind != vector.ValueStrings || len(m["strs"].Strs) != 2 || m["strs"].Strs[0] != "a" || m["strs"].Strs[1] != "b" {
+		t.Fatalf("strs: %+v", m["strs"])
+	}
+	if m["ints"].Kind != vector.ValueInts || len(m["ints"].Ints) != 2 || m["ints"].Ints[0] != 1 || m["ints"].Ints[1] != 2 {
+		t.Fatalf("ints: %+v", m["ints"])
+	}
+	if m["floats"].Kind != vector.ValueFloats || len(m["floats"].Flts) != 2 || m["floats"].Flts[0] != 1 || m["floats"].Flts[1] != 2.5 {
+		t.Fatalf("floats: %+v", m["floats"])
+	}
+}
+
+func TestJSONToMetadataRejectsNested(t *testing.T) {
+	_, err := jsonToMetadata(map[string]json.RawMessage{"o": json.RawMessage(`{"a":1}`)})
+	if err == nil {
+		t.Fatal("nested object must be rejected")
+	}
+	if !strings.Contains(err.Error(), "o") {
+		t.Fatalf("error must name the key: %v", err)
+	}
+}
+
+func TestJSONToMetadataRejectsNull(t *testing.T) {
+	if _, err := jsonToMetadata(map[string]json.RawMessage{"n": json.RawMessage(`null`)}); err == nil {
+		t.Fatal("null must be rejected")
+	}
+}
+
+func TestJSONToMetadataRejectsMixedArray(t *testing.T) {
+	if _, err := jsonToMetadata(map[string]json.RawMessage{"m": json.RawMessage(`[1,"a"]`)}); err == nil {
+		t.Fatal("mixed-type array must be rejected")
+	}
+}
+
+func TestJSONToMetadataRejectsNestedArray(t *testing.T) {
+	if _, err := jsonToMetadata(map[string]json.RawMessage{"n": json.RawMessage(`[[1,2],[3,4]]`)}); err == nil {
+		t.Fatal("nested array must be rejected")
+	}
+}
+
+func TestMetadataToJSONInverse(t *testing.T) {
+	m := vector.Metadata{
+		"s":        vector.NewString("x"),
+		"i":        vector.NewInt(2),
+		"f":        vector.NewFloat(2.5),
+		"b":        vector.NewBool(true),
+		"strs":     vector.NewStrings([]string{"a", "b"}),
+		"ints":     vector.NewInts([]int64{1, 2}),
+		"floats":   vector.NewFloats([]float64{1, 2.5}),
+		"$content": vector.NewString("hidden"),
+	}
+	out := metadataToJSON(m)
+	if _, ok := out["$content"]; ok {
+		t.Fatal("$content must be skipped")
+	}
+	if out["s"] != "x" {
+		t.Fatalf("s: %+v", out["s"])
+	}
+	if out["i"] != int64(2) {
+		t.Fatalf("i: %+v", out["i"])
+	}
+	if out["f"] != 2.5 {
+		t.Fatalf("f: %+v", out["f"])
+	}
+	if out["b"] != true {
+		t.Fatalf("b: %+v", out["b"])
+	}
+	strs, ok := out["strs"].([]string)
+	if !ok || len(strs) != 2 || strs[0] != "a" || strs[1] != "b" {
+		t.Fatalf("strs: %+v", out["strs"])
+	}
+	ints, ok := out["ints"].([]int64)
+	if !ok || len(ints) != 2 || ints[0] != 1 || ints[1] != 2 {
+		t.Fatalf("ints: %+v", out["ints"])
+	}
+	floats, ok := out["floats"].([]float64)
+	if !ok || len(floats) != 2 || floats[0] != 1 || floats[1] != 2.5 {
+		t.Fatalf("floats: %+v", out["floats"])
+	}
+}
+
+func TestParseFilterEmpty(t *testing.T) {
+	f, err := parseFilter(nil)
+	if err != nil {
+		t.Fatalf("parseFilter(nil): %v", err)
+	}
+	if !f.IsZero() {
+		t.Fatalf("expected zero filter, got %+v", f)
+	}
+	f, err = parseFilter(json.RawMessage(``))
+	if err != nil {
+		t.Fatalf("parseFilter(empty): %v", err)
+	}
+	if !f.IsZero() {
+		t.Fatalf("expected zero filter, got %+v", f)
+	}
+}
+
+// TestParseFilterCompound verifies vector.Value has no custom UnmarshalJSON
+// (confirmed by grep: no UnmarshalJSON/MarshalJSON method on Value in
+// vector/*.go), so leaf filter values must use the tagged form
+// {"kind":"...", "<field>":...} rather than a bare JSON scalar.
+func TestParseFilterCompound(t *testing.T) {
+	raw := json.RawMessage(`{
+		"op": "and",
+		"and": [
+			{"op": "gte", "field": "price", "value": {"kind": "int", "int": 10}},
+			{"op": "eq", "field": "ok", "value": {"kind": "bool", "bool": true}}
+		]
+	}`)
+	f, err := parseFilter(raw)
+	if err != nil {
+		t.Fatalf("parseFilter: %v", err)
+	}
+	if f.Op != vector.FilterAnd {
+		t.Fatalf("Op: %v", f.Op)
+	}
+	if len(f.And) != 2 {
+		t.Fatalf("And: %+v", f.And)
+	}
+	if f.And[0].Op != vector.FilterGte || f.And[0].Field != "price" || f.And[0].Value.Int != 10 {
+		t.Fatalf("And[0]: %+v", f.And[0])
+	}
+	if f.And[1].Op != vector.FilterEq || f.And[1].Field != "ok" || !f.And[1].Value.Bool {
+		t.Fatalf("And[1]: %+v", f.And[1])
+	}
+}
