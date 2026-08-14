@@ -151,6 +151,29 @@ func (s *Server) addNamespace(ctx context.Context, ns string) error {
 	return s.store.Put(ctx, []byte(kvNamespaces), b, 0)
 }
 
+// removeNamespace drops ns from the namespace list, if present. Called by
+// forget once a namespace's last memory has been deleted.
+func (s *Server) removeNamespace(ctx context.Context, ns string) error {
+	cur, err := s.namespaces(ctx)
+	if err != nil {
+		return err
+	}
+	out := cur[:0]
+	for _, n := range cur {
+		if n != ns {
+			out = append(out, n)
+		}
+	}
+	if len(out) == len(cur) {
+		return nil // ns was not present
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		return fmt.Errorf("mcp: encoding namespace list: %w", err)
+	}
+	return s.store.Put(ctx, []byte(kvNamespaces), b, 0)
+}
+
 // memoryHit is one recalled (or listed, Task 5) memory: its id, content,
 // relevance score, and user metadata with the reserved fields stripped.
 type memoryHit struct {
@@ -160,8 +183,8 @@ type memoryHit struct {
 	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
-// registerMemoryTools registers remember and recall. Task 5 appends
-// forget/list_memories/list_namespaces to the same registrar.
+// registerMemoryTools registers remember, recall, forget, list_memories, and
+// list_namespaces.
 func (s *Server) registerMemoryTools() {
 	s.register(toolDef{
 		Name:        "remember",
@@ -191,6 +214,44 @@ func (s *Server) registerMemoryTools() {
 			"required": []any{"query"},
 		},
 		Handler: s.handleRecall,
+	})
+	s.register(toolDef{
+		Name:        "forget",
+		Description: "Delete stored memories by id.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"ids": map[string]any{
+					"type":        "array",
+					"items":       map[string]any{"type": "integer"},
+					"description": "ids of the memories to delete",
+				},
+			},
+			"required": []any{"ids"},
+		},
+		Handler: s.handleForget,
+	})
+	s.register(toolDef{
+		Name:        "list_memories",
+		Description: "List stored memories in a namespace, paginated.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"namespace": map[string]any{"type": "string", "description": `namespace to list (default "default")`},
+				"limit":     map[string]any{"type": "integer", "description": "max memories per page (default 50, max 500)"},
+				"cursor":    map[string]any{"type": "string", "description": "resume-after cursor from a previous call's next_cursor"},
+			},
+		},
+		Handler: s.handleListMemories,
+	})
+	s.register(toolDef{
+		Name:        "list_namespaces",
+		Description: "List all known memory namespaces.",
+		InputSchema: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		},
+		Handler: s.handleListNamespaces,
 	})
 }
 
@@ -368,4 +429,121 @@ func stripReservedMetadata(md rostam.VectorMetadata) rostam.VectorMetadata {
 		out[k] = v
 	}
 	return out
+}
+
+// forgetArgs is the forget tool's decoded input.
+type forgetArgs struct {
+	IDs []uint64 `json:"ids"`
+}
+
+// handleForget deletes memories by id and prunes any namespace left empty by
+// the deletion. Ids not found in the collection are reported back as
+// "missing" rather than erroring, so a caller can forget a batch without
+// first checking which ids still exist.
+func (s *Server) handleForget(ctx context.Context, raw json.RawMessage) (any, error) {
+	var args forgetArgs
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return nil, fmt.Errorf("mcp: bad forget args: %w", err)
+	}
+	if len(args.IDs) == 0 {
+		return nil, fmt.Errorf("mcp: forget: ids is required and must be non-empty")
+	}
+
+	if err := s.ensureMemory(ctx); err != nil {
+		return nil, err
+	}
+
+	points, missing, err := s.store.VectorGetBatch(ctx, memCollection, args.IDs, false, true)
+	if err != nil {
+		return nil, fmt.Errorf("mcp: forget: %w", err)
+	}
+
+	affectedNS := make(map[string]bool, len(points))
+	deleted := make([]uint64, 0, len(points))
+	for _, p := range points {
+		if nsv, ok := p.Meta[nsField]; ok && nsv.Kind == vector.ValueString {
+			affectedNS[nsv.Str] = true
+		}
+		if _, err := s.store.VectorDelete(ctx, memCollection, p.ID); err != nil {
+			return nil, fmt.Errorf("mcp: forget: deleting id %d: %w", p.ID, err)
+		}
+		deleted = append(deleted, p.ID)
+	}
+
+	for ns := range affectedNS {
+		nsFilter := rostam.VectorFilter{Op: vector.FilterEq, Field: nsField, Value: vector.NewString(ns)}
+		docs, _, _, err := s.store.VectorScroll(ctx, memCollection, nsFilter, 1, rostam.VectorScrollOpts{})
+		if err != nil {
+			return nil, fmt.Errorf("mcp: forget: checking namespace %q: %w", ns, err)
+		}
+		if len(docs) == 0 {
+			if err := s.removeNamespace(ctx, ns); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	if missing == nil {
+		missing = []uint64{}
+	}
+	return map[string]any{"deleted": deleted, "missing": missing}, nil
+}
+
+// listMemoriesArgs is the list_memories tool's decoded input.
+type listMemoriesArgs struct {
+	Namespace string `json:"namespace"`
+	Limit     int    `json:"limit"`
+	Cursor    string `json:"cursor"`
+}
+
+// handleListMemories pages through a namespace's memories in id order.
+// Score is left at its zero value on every hit: scroll has no query to rank
+// results against.
+func (s *Server) handleListMemories(ctx context.Context, raw json.RawMessage) (any, error) {
+	var args listMemoriesArgs
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return nil, fmt.Errorf("mcp: bad list_memories args: %w", err)
+	}
+	ns := args.Namespace
+	if ns == "" {
+		ns = defaultNS
+	}
+	limit := args.Limit
+	switch {
+	case limit <= 0:
+		limit = 50
+	case limit > 500:
+		limit = 500
+	}
+
+	if err := s.ensureMemory(ctx); err != nil {
+		return nil, err
+	}
+
+	nsFilter := rostam.VectorFilter{Op: vector.FilterEq, Field: nsField, Value: vector.NewString(ns)}
+	docs, _, cursor, err := s.store.VectorScroll(ctx, memCollection, nsFilter, limit, rostam.VectorScrollOpts{Cursor: args.Cursor})
+	if err != nil {
+		return nil, fmt.Errorf("mcp: list_memories: %w", err)
+	}
+	memories := make([]memoryHit, len(docs))
+	for i, d := range docs {
+		memories[i] = memoryHit{ID: d.ID, Content: d.Content, Metadata: metadataToJSON(stripReservedMetadata(d.Metadata))}
+	}
+	return map[string]any{"memories": memories, "next_cursor": cursor}, nil
+}
+
+// handleListNamespaces reports every namespace currently holding at least
+// one memory.
+func (s *Server) handleListNamespaces(ctx context.Context, _ json.RawMessage) (any, error) {
+	if err := s.ensureMemory(ctx); err != nil {
+		return nil, err
+	}
+	ns, err := s.namespaces(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if ns == nil {
+		ns = []string{}
+	}
+	return map[string]any{"namespaces": ns}, nil
 }
