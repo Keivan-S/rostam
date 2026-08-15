@@ -53,6 +53,24 @@ rostam-server llm-proxy
 → [LLM caching proxy](https://docs.rostamlabs.com/server/llm-proxy/) for
 flags, cache-scoping rules, and what's never cached.
 
+## RAG in a box
+
+`rostam-server rag` chunks and indexes your documents, then answers
+questions from them with cited sources — no separate vector-store setup or
+ingestion pipeline required:
+
+```sh
+rostam-server rag ingest ./docs
+rostam-server rag ask "How does the LLM proxy decide what's cacheable?"
+```
+
+Retrieval works out of the box on BM25 full-text search; pointing it at an
+OpenAI-compatible embedder upgrades it to dense vector search. `rag query`
+does retrieval alone, with no LLM required.
+
+→ [RAG CLI](https://docs.rostamlabs.com/server/rag/) for flags,
+embedded-vs-remote mode, and supported file types.
+
 And two engines, usable together or entirely on their own:
 
 - a **vector search engine** ([`vector/`](./vector)) — HNSW, IVF and Vamana
