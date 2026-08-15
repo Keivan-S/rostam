@@ -1,0 +1,183 @@
+// SPDX-License-Identifier: Apache-2.0
+
+package llmproxy
+
+import (
+	"encoding/json"
+	"strconv"
+	"strings"
+
+	"github.com/cespare/xxhash/v2"
+
+	"github.com/rostamlabs/rostam/semcache"
+)
+
+// chatRequest is the subset of the OpenAI chat-completions request body the
+// proxy needs to judge cacheability and derive a cache key. Raw holds the
+// original body so it can be forwarded verbatim on a miss or passthrough —
+// the proxy never needs to re-encode a request it didn't answer itself.
+type chatRequest struct {
+	Model       string          `json:"model"`
+	Messages    []chatMessage   `json:"messages"`
+	Temperature *float64        `json:"temperature,omitempty"` // nil => 1.0 (OpenAI default)
+	MaxTokens   int             `json:"max_tokens,omitempty"`
+	N           int             `json:"n,omitempty"`
+	Stream      bool            `json:"stream,omitempty"`
+	Tools       []chatTool      `json:"tools,omitempty"`
+	Raw         json.RawMessage `json:"-"` // original body, forwarded verbatim on miss/passthrough
+}
+
+// chatMessage holds Content undecoded because OpenAI allows either a plain
+// string or an array of typed parts (text/image/etc). Only the string form is
+// cacheable — an array means we cannot safely reduce the message to text.
+type chatMessage struct {
+	Role    string          `json:"role"`
+	Content json.RawMessage `json:"content"` // string OR array; array => uncacheable
+}
+
+// chatTool is the minimal shape needed to pull a tool name out of the
+// request's tool list; everything else in the tool definition is irrelevant
+// to cache scoping.
+type chatTool struct {
+	Function struct {
+		Name string `json:"name"`
+	} `json:"function"`
+}
+
+// chatResponse is decode-tolerant on purpose: it captures just enough of an
+// upstream response to decide whether the call is cacheable and to store the
+// answer, without choking on fields OpenAI adds over time.
+type chatResponse struct {
+	Choices []struct {
+		Message struct {
+			Content   string          `json:"content"`
+			ToolCalls json.RawMessage `json:"tool_calls,omitempty"`
+		} `json:"message"`
+		FinishReason string `json:"finish_reason"`
+	} `json:"choices"`
+	Usage struct {
+		CompletionTokens int `json:"completion_tokens"`
+	} `json:"usage"`
+}
+
+// parseChatRequest decodes a chat-completions request body and stashes the
+// original bytes in Raw for verbatim forwarding.
+func parseChatRequest(body []byte) (*chatRequest, error) {
+	var req chatRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		return nil, err
+	}
+	req.Raw = body
+	return &req, nil
+}
+
+// temperature returns the effective sampling temperature, applying OpenAI's
+// default of 1.0 when the client omitted the field. A caller cannot
+// distinguish "not sent" from "sent as 0" without the pointer, and the two
+// mean different things for cache scoping.
+func (r *chatRequest) temperature() float64 {
+	if r.Temperature == nil {
+		return 1.0
+	}
+	return *r.Temperature
+}
+
+// contentString returns the message content as a string, and false if the
+// content is not a JSON string (i.e. it's the array-of-parts form).
+func (m chatMessage) contentString() (string, bool) {
+	var s string
+	if err := json.Unmarshal(m.Content, &s); err != nil {
+		return "", false
+	}
+	return s, true
+}
+
+// cacheIdentity reduces a request to the prompt text and scope semcache needs
+// to look up or store an answer. It returns ok=false when the request shape
+// isn't safely reducible to text: any message with array-form content, or
+// n > 1 (multiple choices can't be represented by a single cached answer).
+func (r *chatRequest) cacheIdentity(tenant string) (prompt string, scope semcache.Scope, ok bool) {
+	if r.N > 1 {
+		return "", semcache.Scope{}, false
+	}
+
+	var promptBuf strings.Builder
+	var systemParts []string
+
+	for _, msg := range r.Messages {
+		content, isString := msg.contentString()
+		if !isString {
+			return "", semcache.Scope{}, false
+		}
+
+		if msg.Role == "system" {
+			systemParts = append(systemParts, content)
+			continue
+		}
+
+		promptBuf.WriteString(msg.Role)
+		promptBuf.WriteByte('\x00')
+		promptBuf.WriteString(content)
+		promptBuf.WriteByte('\x1e')
+	}
+
+	tools := make([]string, 0, len(r.Tools))
+	for _, t := range r.Tools {
+		tools = append(tools, t.Function.Name)
+	}
+
+	scope = semcache.Scope{
+		Model:       r.Model,
+		System:      strings.Join(systemParts, "\n"),
+		Tools:       tools,
+		Temperature: r.temperature(),
+		MaxTokens:   r.MaxTokens,
+		Tenant:      tenant,
+	}
+	return promptBuf.String(), scope, true
+}
+
+// synthesizeResponse builds a non-streaming chat-completions response body
+// for a cache hit, in the exact shape a real OpenAI response would have so
+// clients can't tell the difference. prompt_tokens is always 0 because the
+// prompt was never sent upstream on a hit.
+func synthesizeResponse(model, answer string, outTokens int) []byte {
+	resp := map[string]any{
+		"id":     "rostam-cache",
+		"object": "chat.completion",
+		"model":  model,
+		"choices": []map[string]any{
+			{
+				"index": 0,
+				"message": map[string]any{
+					"role":    "assistant",
+					"content": answer,
+				},
+				"finish_reason": "stop",
+			},
+		},
+		"usage": map[string]any{
+			"prompt_tokens":     0,
+			"completion_tokens": outTokens,
+			"total_tokens":      outTokens,
+		},
+	}
+	// The shape above is fixed and always marshals cleanly; an error here
+	// would mean a bug in this function, not bad input.
+	b, err := json.Marshal(resp)
+	if err != nil {
+		panic("llmproxy: synthesizeResponse: " + err.Error())
+	}
+	return b
+}
+
+// tenantOf derives a cache-scope tenant identity from a request's
+// Authorization header, so one client's cached answers are never served to
+// another. The header is hashed rather than stored raw — the tenant value
+// ends up in cache metadata, and a credential doesn't belong there.
+func tenantOf(authHeader string) string {
+	if authHeader == "" {
+		return ""
+	}
+	return strconv.FormatUint(xxhash.Sum64String(authHeader), 16)
+}
