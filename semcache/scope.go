@@ -20,6 +20,7 @@ type Scope struct {
 	Tools       []string // tool names available to the call (order-independent)
 	Temperature float64  // sampling temperature
 	MaxTokens   int      // max output tokens
+	Tenant      string   // caller identity hash (prevents one client's cached answers from being served to another; never a raw credential)
 }
 
 // key returns a stable hex digest of the scope plus the embedding model. Tool
@@ -43,6 +44,8 @@ func (s Scope) key(embedModel string) string {
 	b.WriteString(strconv.FormatFloat(s.Temperature, 'g', 6, 64))
 	b.WriteString("\x00maxtok=")
 	b.WriteString(strconv.Itoa(s.MaxTokens))
+	b.WriteString("\x00ten=")
+	b.WriteString(s.Tenant)
 
 	return strconv.FormatUint(xxhash.Sum64String(b.String()), 16)
 }
