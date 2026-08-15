@@ -34,10 +34,11 @@ builds:
       - CGO_ENABLED=0
     flags:
       - -trimpath
-    # -X main.version is what makes `rostam-server -version` report the release
+    # -X ...buildinfo.version is what makes `rostam-server -version` and the MCP
+    # server's initialize response both report the release
     # tag instead of the pseudo-version Go derives for an untagged build.
     ldflags:
-      - -s -w -X main.version={{ .Version }}
+      - -s -w -X github.com/rostamlabs/rostam/internal/buildinfo.version={{ .Version }}
     goos:
       - linux
       - darwin
