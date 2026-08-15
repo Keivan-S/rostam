@@ -51,6 +51,87 @@ func TestMVConfigMarkerIVFRoundtrip(t *testing.T) {
 	}
 }
 
+// TestFlushPersistentCoversMultiVector: FlushPersistent is the whole-store
+// shutdown hook — directStore.Close calls it and nothing else — but it used to
+// walk only the dense collections. A Persistent multi-vector collection's mmap
+// files are on disk either way; the meta + maps sidecars that make them
+// readable again are written only by FlushMultiVector, so one that was never
+// flushed by name came back EMPTY after a completely clean close.
+//
+// Deliberately never calls FlushMultiVector: FlushPersistent has to be
+// sufficient on its own, because that is the only thing an embedded caller
+// closing a store actually gets.
+func TestFlushPersistentCoversMultiVector(t *testing.T) {
+	const dim = 16
+	dir := t.TempDir()
+	cs, err := OpenCollectionStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cs.CreateMultiVector("docs", MultiVectorConfig{Dim: dim, Quant: QuantSQ8, RescoreFactor: 3, Persistent: true}); err != nil {
+		t.Fatalf("create multi-vector: %v", err)
+	}
+	// A dense Persistent collection alongside it: the dense side must keep
+	// working, and a store with both is the realistic shape.
+	dcfg := DefaultConfig()
+	dcfg.Dim, dcfg.Persistent, dcfg.Quant = dim, true, QuantSQ8
+	if err := cs.CreateCollection("dense", dcfg); err != nil {
+		t.Fatalf("create dense: %v", err)
+	}
+
+	rng := rand.New(rand.NewSource(11))
+	for id := uint64(1); id <= 12; id++ {
+		if err := cs.MultiAdd("docs", id, randTokens(rng, 4, dim), Metadata{"id": NewInt(int64(id))}); err != nil {
+			t.Fatalf("multi add %d: %v", id, err)
+		}
+	}
+	dvec := randTokens(rng, 1, dim)[0]
+	if err := cs.Insert("dense", 1, dvec, 0, nil, nil); err != nil {
+		t.Fatalf("dense insert: %v", err)
+	}
+	query := randTokens(rng, 4, dim)
+	before, err := cs.MultiSearch("docs", query, 5, MultiSearchOpts{CandidatesPerToken: 200})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before) == 0 {
+		t.Fatal("no multi-vector results before the close")
+	}
+
+	if err := cs.FlushPersistent(); err != nil {
+		t.Fatalf("FlushPersistent: %v", err)
+	}
+	if err := cs.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	cs2, err := OpenCollectionStore(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer cs2.Close()
+
+	after, err := cs2.MultiSearch("docs", query, 5, MultiSearchOpts{CandidatesPerToken: 200})
+	if err != nil {
+		t.Fatalf("multi search after reopen: %v", err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("multi-vector collection came back with %d results, want %d — FlushPersistent did not cover it", len(after), len(before))
+	}
+	for i := range before {
+		if after[i].ID != before[i].ID {
+			t.Errorf("rank %d: id %d after reopen, want %d", i, after[i].ID, before[i].ID)
+		}
+	}
+	dense, err := cs2.SearchDocs("dense", dvec, 1, Filter{})
+	if err != nil {
+		t.Fatalf("dense search after reopen: %v", err)
+	}
+	if len(dense) != 1 || dense[0].ID != 1 {
+		t.Errorf("the dense side must still be covered too: %+v", dense)
+	}
+}
+
 // TestCollectionStoreMultiVectorPersistentReopen exercises the store path: a
 // Persistent multi-vector collection survives Flush + store close + reopen, with
 // its documents and MaxSim ranking intact (instant-restart from the mmap files +

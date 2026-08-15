@@ -1319,7 +1319,8 @@ func (s *CollectionStore) HybridSearch(name string, dense []float32, sparse Spar
 }
 
 // FlushPersistent flushes every Persistent collection's instant-restart
-// sidecar, and reports the joined failures rather than the first.
+// sidecar — dense AND multi-vector — and reports the joined failures rather
+// than the first.
 //
 // A Persistent collection keeps its vectors and level-0 graph in mmap files, so
 // those bytes already survive process exit — but the sidecar that makes them
@@ -1331,24 +1332,45 @@ func (s *CollectionStore) HybridSearch(name string, dense []float32, sparse Spar
 // contract for a whole store at once, without reaching into each collection's
 // config to find out which ones care.
 //
-// Non-persistent collections are deliberately skipped: their Flush writes a full
-// snapshot, which is a caller's explicit choice, not something a shutdown should
-// do behind their back. WAL collections are skipped for the opposite reason —
-// every op is already logged, so replay reconstructs them without a checkpoint.
+// Multi-vector collections are covered because they have exactly the same
+// hazard: CreateMultiVector with Persistent set mmaps the inner index and
+// writes its meta + maps sidecars only from FlushMultiVector, so one skipped
+// here reopens empty after a perfectly clean Close. directStore.Close relies on
+// this method alone, and an embedded caller can create a persistent MV
+// collection through the ordinary API.
+//
+// What is deliberately skipped, and why:
+//
+//   - Non-persistent (heap) collections. Their Flush writes a full snapshot,
+//     which is a caller's explicit choice, not something a shutdown should do
+//     behind their back.
+//   - WAL collections, dense or multi-vector. Every op is already logged, so
+//     replay reconstructs them without a checkpoint. (WAL and Persistent are
+//     mutually exclusive by construction in both flavours.)
+//   - Named collections. They have no mmap-Persistent mode at all — only heap
+//     or WAL — so both exclusions above already cover them and FlushNamed has
+//     nothing to contribute here.
 func (s *CollectionStore) FlushPersistent() error {
 	// A heap-mode store's scratch dir goes away with it at Close, so every byte
 	// written here would be deleted moments later.
 	if s.ephemeralDir {
 		return nil
 	}
-	// Names are snapshotted under the lock and flushed outside it: Flush itself
-	// takes the store lock via Acquire, and serializing a large index can be slow
-	// enough that holding the write lock across it would stall every reader.
+	// Names are snapshotted under the lock and flushed outside it: the flushes
+	// themselves take the store lock via Acquire/AcquireMulti, and serializing a
+	// large index can be slow enough that holding the write lock across it would
+	// stall every reader.
 	s.mu.RLock()
 	names := make([]string, 0, len(s.collections))
 	for name, c := range s.collections {
 		if c.cfg.Persistent && !c.cfg.WAL {
 			names = append(names, name)
+		}
+	}
+	multi := make([]string, 0, len(s.multi))
+	for name, mv := range s.multi {
+		if mv.persistent {
+			multi = append(multi, name)
 		}
 	}
 	s.mu.RUnlock()
@@ -1357,6 +1379,11 @@ func (s *CollectionStore) FlushPersistent() error {
 	for _, name := range names {
 		if err := s.Flush(name); err != nil {
 			errs = append(errs, fmt.Errorf("vector: flushing persistent collection %q: %w", name, err))
+		}
+	}
+	for _, name := range multi {
+		if err := s.FlushMultiVector(name); err != nil {
+			errs = append(errs, fmt.Errorf("vector: flushing persistent multi-vector collection %q: %w", name, err))
 		}
 	}
 	return errors.Join(errs...)
