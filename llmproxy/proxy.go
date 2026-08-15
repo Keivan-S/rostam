@@ -44,7 +44,6 @@ var hopByHopHeaders = []string{
 type Config struct {
 	Cache    *semcache.Cache // required
 	Upstream *url.URL        // required
-	MaxTemp  float64         // cacheability ceiling (proxy-level; also set on the semcache Config by the caller)
 	Mode     string          // "exact" | "semantic" — surfaced verbatim in /stats, not otherwise used here
 	Logger   *slog.Logger
 	Client   *http.Client // nil => &http.Client{Timeout: 5 * time.Minute}
@@ -65,7 +64,6 @@ type stats struct {
 type Server struct {
 	cache    *semcache.Cache
 	upstream *url.URL
-	maxTemp  float64
 	mode     string
 	log      *slog.Logger
 	client   *http.Client
@@ -93,7 +91,6 @@ func NewServer(cfg Config) (*Server, error) {
 	return &Server{
 		cache:    cfg.Cache,
 		upstream: cfg.Upstream,
-		maxTemp:  cfg.MaxTemp,
 		mode:     cfg.Mode,
 		log:      log,
 		client:   client,

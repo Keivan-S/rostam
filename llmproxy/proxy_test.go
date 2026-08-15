@@ -532,6 +532,86 @@ func (zeroReader) Read(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// A chat-completions body over the 16 MiB cap is refused with an
+// OpenAI-shaped 413 and never reaches upstream: the cache path buffers the
+// whole body to parse it, so the cap is what keeps a single client from
+// making the proxy allocate without bound.
+func TestProxy_OversizedChatBodyReturns413(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	upstream.script(chatPath, scriptedResponse{body: chatCompletionJSON(t, "never reached", "stop", 1)})
+	proxy := newProxy(t, upstream, nil)
+
+	// A valid JSON body whose padding pushes it past maxBodyBytes.
+	filler := strings.Repeat("x", maxBodyBytes+1024)
+	body := `{"model":"gpt-4","messages":[{"role":"user","content":"` + filler + `"}]}`
+
+	resp, respBody := postChat(t, proxy.URL, body, nil)
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", resp.StatusCode)
+	}
+
+	var errBody struct {
+		Error struct {
+			Message string `json:"message"`
+			Type    string `json:"type"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(respBody, &errBody); err != nil {
+		t.Fatalf("unmarshal error body: %v; body=%s", err, respBody)
+	}
+	if errBody.Error.Type != "invalid_request_error" {
+		t.Fatalf("error.type = %q, want invalid_request_error", errBody.Error.Type)
+	}
+	if errBody.Error.Message == "" {
+		t.Fatalf("error.message is empty")
+	}
+	if n := upstream.requestCount(chatPath); n != 0 {
+		t.Fatalf("upstream requests = %d, want 0 (an oversized body must be refused locally)", n)
+	}
+}
+
+// n > 1 asks for several completions, which one cached answer cannot stand in
+// for: the request passes through uncacheable and nothing is stored.
+func TestProxy_NGreaterThanOnePassesThroughUncacheable(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	upstream.script(chatPath, scriptedResponse{body: chatCompletionJSON(t, "one of two", "stop", 3)})
+	proxy := newProxy(t, upstream, nil)
+
+	body := `{"model":"gpt-4","n":2,"messages":[{"role":"user","content":"give me two answers"}]}`
+
+	resp1, _ := postChat(t, proxy.URL, body, nil)
+	if resp1.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp1.StatusCode)
+	}
+	if got := resp1.Header.Get("x-rostam-cache"); got != "uncacheable" {
+		t.Fatalf("x-rostam-cache = %q, want uncacheable", got)
+	}
+
+	// Repeat: still uncacheable, still reaching upstream.
+	postChat(t, proxy.URL, body, nil)
+	if n := upstream.requestCount(chatPath); n != 2 {
+		t.Fatalf("upstream requests = %d, want 2", n)
+	}
+
+	statsResp, statsBody := getStats(t, proxy.URL)
+	if statsResp.StatusCode != http.StatusOK {
+		t.Fatalf("/stats status = %d, want 200", statsResp.StatusCode)
+	}
+	var st struct {
+		Uncacheable float64 `json:"uncacheable"`
+		Stored      float64 `json:"stored"`
+	}
+	if err := json.Unmarshal(statsBody, &st); err != nil {
+		t.Fatalf("unmarshal /stats: %v; body=%s", err, statsBody)
+	}
+	if st.Uncacheable != 2 {
+		t.Fatalf("uncacheable = %v, want 2", st.Uncacheable)
+	}
+	if st.Stored != 0 {
+		t.Fatalf("stored = %v, want 0 (an n>1 request must never be stored)", st.Stored)
+	}
+}
+
 // (g) malformed JSON on the cache path returns an OpenAI-shaped 400 error.
 func TestProxy_MalformedJSONReturns400(t *testing.T) {
 	upstream := newFakeUpstream(t)

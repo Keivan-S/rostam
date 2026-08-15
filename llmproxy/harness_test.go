@@ -211,7 +211,6 @@ func newProxy(t *testing.T, upstream *fakeUpstream, embedder semcache.Embedder) 
 	srv, err := NewServer(Config{
 		Cache:    cache,
 		Upstream: upstreamURL,
-		MaxTemp:  1.0,
 		Mode:     "exact",
 	})
 	if err != nil {

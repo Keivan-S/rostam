@@ -39,9 +39,9 @@ curl http://localhost:8484/v1/chat/completions \
   -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"What is the capital of France?"}]}'
 ```
 
-The response carries an `x-rostam-cache` header (`hit`, `miss`, or `bypass`)
-so you can see, at a glance, which requests are actually costing you
-generation tokens.
+The response carries an `x-rostam-cache` header (`hit`, `miss`, `uncacheable`,
+or `bypass`) so you can see, at a glance, which requests are actually costing
+you generation tokens.
 
 ## Exact vs. semantic mode
 
@@ -69,12 +69,20 @@ match if **both** their prompt and their scope agree:
   so it's never cached.
 - **Scope**: `model`, the concatenated `system` message(s), the requested
   `tools`' names, the effective `temperature`, `max_tokens`, a hash of the
-  `Authorization` header (tenancy — see below), and the embedder identity (so
+  caller's credential headers (tenancy — see below), the embedder identity (so
   switching embedders never mixes cached answers from a different embedding
-  space).
+  space), and a hash of **every remaining field in the request body**.
+
+That last part matters: `response_format`, `seed`, `top_p`, `stop`,
+`frequency_penalty` and anything else a provider adds all partition the cache,
+so a request asking for JSON is never answered with prose cached from the
+identical messages. Only `messages` (that's the prompt) and `stream` /
+`stream_options` are excluded — the streaming and non-streaming forms of one
+call deliberately share an answer. The hash is computed over the parsed body,
+so key order and whitespace don't matter.
 
 Two prompts that are textually identical but differ in model, system prompt,
-tools, temperature, `max_tokens`, or caller never share a cache entry.
+tools, any sampling parameter, or caller never share a cache entry.
 
 ## Flags
 
@@ -132,6 +140,8 @@ from (or written to) the cache:
 - A response with `tool_calls` present.
 - `n` greater than 1 (multiple choices can't be represented by one cached
   answer).
+- `stream_options` (e.g. `{"include_usage": true}`) — it asks for a stream
+  shape a cache replay cannot reproduce.
 - Non-string message content — the array-of-parts (multimodal) form.
 - A response whose `finish_reason` isn't `"stop"` (truncated, length-limited,
   content-filtered, etc.).
@@ -218,6 +228,10 @@ their own.
   variant) well enough to cache it; every other route is opaque passthrough.
   It does not cache `/v1/embeddings`, `/v1/completions`, or any
   provider-specific endpoint.
+- **No single-flight.** Concurrent identical requests that all arrive before
+  the first one's answer is stored each reach the upstream once — the cache
+  deduplicates across time, not within a burst. A cold start that fans out N
+  copies of the same prompt pays for N generations.
 - **Streaming replay doesn't preserve upstream cadence.** A cache hit on a
   `stream: true` request is replayed as a synthetic SSE stream with a fixed
   three-chunk shape (role, content, finish) — fewer, larger chunks than the

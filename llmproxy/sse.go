@@ -207,10 +207,16 @@ func relayAndCapture(dst http.ResponseWriter, src io.Reader) (streamResult, erro
 		fl.Flush()
 
 		line := bytes.TrimRight(raw, "\r\n")
-		data, isData := strings.CutPrefix(string(line), "data: ")
+		data, isData := strings.CutPrefix(string(line), "data:")
 		if !isData {
 			continue
 		}
+		// Per the SSE spec a single space after the colon is optional
+		// padding, not part of the value. OpenAI sends it; other
+		// OpenAI-compatible servers write "data:{...}" and used to be
+		// captured as nothing at all — the client still got the stream
+		// relayed verbatim above, but the answer was never cached.
+		data = strings.TrimPrefix(data, " ")
 		if data == "[DONE]" {
 			result.clean = true
 			continue

@@ -237,7 +237,6 @@ func llmproxySetup(fl llmproxyFlags, lookupEnv func(string) (string, bool)) (llm
 	proxy, err := llmproxy.NewServer(llmproxy.Config{
 		Cache:    cache,
 		Upstream: upstream,
-		MaxTemp:  fl.maxTemp,
 		Mode:     mode,
 	})
 	if err != nil {

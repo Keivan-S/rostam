@@ -325,6 +325,53 @@ func TestProxy_StreamingRequestUpstream500RelayedNotCached(t *testing.T) {
 	}
 }
 
+// (h) the space after "data:" is optional padding in the SSE spec, and
+// several OpenAI-compatible servers omit it. The capture side required it, so
+// against those upstreams every chunk decoded as nothing: the client got its
+// stream (relayed verbatim), but the answer was never cached and every
+// request paid full price.
+func TestProxy_StreamingSpacelessDataPrefixIsCaptured(t *testing.T) {
+	lines := []string{
+		"data:{\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}\n\n",
+		"data:{\"choices\":[{\"index\":0,\"delta\":{\"content\":\"space\"},\"finish_reason\":null}]}\n\n",
+		"data:{\"choices\":[{\"index\":0,\"delta\":{\"content\":\"less\"},\"finish_reason\":null}]}\n\n",
+		"data:{\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+		"data:[DONE]\n\n",
+	}
+	upstream := newFakeUpstream(t)
+	upstream.script(chatPath, scriptedResponse{sse: true, lines: lines})
+	proxy := newProxy(t, upstream, nil)
+
+	streamBody := `{"model":"gpt-4","stream":true,"messages":[{"role":"user","content":"no padding please"}]}`
+	nonStreamBody := `{"model":"gpt-4","messages":[{"role":"user","content":"no padding please"}]}`
+
+	resp1, body1 := postChat(t, proxy.URL, streamBody, nil)
+	if got := resp1.Header.Get("x-rostam-cache"); got != "miss" {
+		t.Fatalf("streaming request x-rostam-cache = %q, want miss", got)
+	}
+	// The relay stays byte-for-byte: the proxy re-pads nothing.
+	if got, want := string(body1), strings.Join(lines, ""); got != want {
+		t.Fatalf("relayed body = %q, want %q (verbatim)", got, want)
+	}
+
+	// Read the captured answer back through a non-streaming request for the
+	// same identity: a hit proves the space-less chunks were decoded.
+	resp2, body2 := postChat(t, proxy.URL, nonStreamBody, nil)
+	if got := resp2.Header.Get("x-rostam-cache"); got != "hit" {
+		t.Fatalf("follow-up x-rostam-cache = %q, want hit (space-less data: lines must still be captured)", got)
+	}
+	var decoded chatResponse
+	if err := json.Unmarshal(body2, &decoded); err != nil {
+		t.Fatalf("unmarshal cached response: %v", err)
+	}
+	if len(decoded.Choices) != 1 || decoded.Choices[0].Message.Content != "spaceless" {
+		t.Fatalf("cached content = %+v, want %q", decoded.Choices, "spaceless")
+	}
+	if n := upstream.requestCount(chatPath); n != 1 {
+		t.Fatalf("upstream requests = %d, want 1", n)
+	}
+}
+
 // (e) usage-chunk completion_tokens land in tokens_saved once the answer is
 // served from a subsequent cache hit, and /stats counts streaming hits and
 // misses exactly like non-streaming ones (a gap Task 5 left open).
