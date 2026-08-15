@@ -191,26 +191,41 @@ func TestSearchDefaultModeNoEmbedder(t *testing.T) {
 	}
 }
 
-func TestGetAllowsMemoryCollectionRead(t *testing.T) {
+// TestGetRefusesMemoryCollection and TestSearchRefusesMemoryCollection cover
+// the reads that used to be allowed through. Neither generic reader applies
+// the __ns filter that recall/list_memories do, so both were a way to read
+// every namespace's memories at once — get additionally handed back the
+// internal __ns metadata naming the namespace each one belongs to. Namespaces
+// are the memory subsystem's only isolation boundary; the generic readers must
+// not be a hole in it.
+func TestGetRefusesMemoryCollection(t *testing.T) {
 	c := startServer(t, Config{Store: newHeapStore(t)})
 	c.initialize()
 	var r struct {
 		ID uint64 `json:"id"`
 	}
-	c.callTool("remember", map[string]any{"content": "hello"}, &r, false)
+	c.callTool("remember", map[string]any{"content": "hello", "namespace": "private"}, &r, false)
 
-	var got struct {
-		Points []struct {
-			ID       uint64         `json:"id"`
-			Metadata map[string]any `json:"metadata"`
-		} `json:"points"`
+	msg := c.callTool("get", map[string]any{"collection": memCollection, "ids": []uint64{r.ID}}, nil, true)
+	if !strings.Contains(msg, "memory") {
+		t.Fatalf("error should mention the memory tools, got %q", msg)
 	}
-	c.callTool("get", map[string]any{"collection": memCollection, "ids": []uint64{r.ID}}, &got, false)
-	if len(got.Points) != 1 {
-		t.Fatalf("get on mcp_memory: %+v", got.Points)
+	if strings.Contains(msg, "hello") || strings.Contains(msg, nsField) {
+		t.Fatalf("rejection must not leak the memory or its namespace field: %q", msg)
 	}
-	if _, ok := got.Points[0].Metadata[nsField]; !ok {
-		t.Fatalf("expected internal __ns field unstripped on generic get: %+v", got.Points[0].Metadata)
+}
+
+func TestSearchRefusesMemoryCollection(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t)})
+	c.initialize()
+	c.callTool("remember", map[string]any{"content": "the deploy password lives in vault", "namespace": "private"}, nil, false)
+
+	msg := c.callTool("search", map[string]any{"collection": memCollection, "query_text": "deploy password"}, nil, true)
+	if !strings.Contains(msg, "memory") {
+		t.Fatalf("error should mention the memory tools, got %q", msg)
+	}
+	if strings.Contains(msg, "vault") {
+		t.Fatalf("rejection must not leak the memory contents: %q", msg)
 	}
 }
 

@@ -11,13 +11,21 @@ import (
 	"github.com/rostamlabs/rostam/vector"
 )
 
-// rejectMemoryCollection guards the four mutating tools (create_collection,
-// upsert, delete, delete_by_filter) against touching mcp_memory directly:
-// that collection's schema, reserved
+// rejectMemoryCollection guards EVERY generic tool (create_collection, upsert,
+// search, get, delete, delete_by_filter) against touching mcp_memory directly.
+//
+// For the writes, the reason is corruption: that collection's schema, reserved
 // metadata fields, and embedder-identity bootstrap are all owned by the
-// remember/recall/forget tools in memory.go, and a raw write here could
-// corrupt them. Reads (search, get) have no such hazard and are allowed
-// through unchanged.
+// remember/recall/forget tools in memory.go.
+//
+// For the reads, the reason is namespace isolation. recall and list_memories
+// always AND a __ns filter into their query and strip the reserved fields out
+// of what they return; generic search and get do neither, so they were a way
+// to read every namespace's memories at once and to see the internal __ns
+// metadata that says which namespace each one came from. Namespaces are the
+// only isolation the memory subsystem has, so the generic readers are refused
+// here rather than taught the memory schema: the memory tools are the whole
+// interface to mcp_memory.
 func rejectMemoryCollection(collection string) error {
 	if collection == memCollection {
 		return fmt.Errorf("mcp: %q is reserved for the memory tools; use remember/recall/forget instead", memCollection)
@@ -359,6 +367,9 @@ func (s *Server) handleSearch(ctx context.Context, raw json.RawMessage) (any, er
 	if args.Collection == "" {
 		return nil, fmt.Errorf("mcp: search: collection is required")
 	}
+	if err := rejectMemoryCollection(args.Collection); err != nil {
+		return nil, err
+	}
 	k := args.K
 	if k == 0 {
 		k = 10
@@ -521,6 +532,9 @@ func (s *Server) handleGet(ctx context.Context, raw json.RawMessage) (any, error
 	}
 	if args.Collection == "" {
 		return nil, fmt.Errorf("mcp: get: collection is required")
+	}
+	if err := rejectMemoryCollection(args.Collection); err != nil {
+		return nil, err
 	}
 	if len(args.IDs) == 0 {
 		return nil, fmt.Errorf("mcp: get: ids is required and must be non-empty")

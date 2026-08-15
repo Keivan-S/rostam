@@ -198,11 +198,18 @@ field — it has no meaning for BM25-only recall or for a plain listing.
 | `search` | `collection` (required), `mode` (`text`\|`dense`\|`hybrid`; default `text` with no embedder, `hybrid` with one), `query_text`, `vector`, `k` (default 10), `filter` | Text search, dense nearest-neighbor, or dense+BM25 hybrid fusion. In `dense`/`hybrid` mode, an omitted `vector` is derived by embedding `query_text` (requires an embedder). Returns `{hits: [{id, content, score, distance, metadata}]}`. |
 | `get` | `collection` (required), `ids` (required), `with_vector` (default `false`) | Fetches points by id. Returns `{points: [{id, content, metadata, vector?}], missing: [...]}`. |
 
-`create_collection`, `upsert`, `delete`, and `delete_by_filter` all refuse the
-`mcp_memory` collection — its schema and reserved metadata fields belong to the
-memory tools above, and a raw write here could corrupt them. Use
-`remember`/`recall`/`forget` instead. Reads (`search`, `get`) are allowed
-through: they have no such hazard.
+**Every** generic tool — `create_collection`, `upsert`, `search`, `get`,
+`delete`, and `delete_by_filter` — refuses the `mcp_memory` collection. The
+memory tools above are its only interface.
+
+For the writes, the reason is corruption: `mcp_memory`'s schema, reserved
+metadata fields, and embedder-identity bootstrap belong to
+`remember`/`recall`/`forget`. For the reads, the reason is namespace
+isolation: `recall` and `list_memories` always scope their query to one
+namespace and strip the reserved fields out of what they return, while
+`search` and `get` do neither — so allowing them here would let any client
+read every namespace's memories at once, and see the internal field naming
+which namespace each one came from.
 
 ### Destructive tools (only with `-enable-destructive`)
 
