@@ -5,16 +5,38 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
 )
+
+// syncBuffer is a mutex-protected byte buffer. os/exec copies the child's
+// stderr into it from an internal goroutine that runs until Wait returns,
+// while the test reads it (via String, through %s) while the child may still
+// be running -- a plain strings.Builder or bytes.Buffer would race there.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
 
 // mcpProc is one `rostam-server mcp` child process driven over its stdio wire,
 // the way an MCP client drives it.
@@ -23,7 +45,7 @@ type mcpProc struct {
 	cmd  *exec.Cmd
 	in   io.WriteCloser
 	out  *bufio.Scanner
-	logs *strings.Builder
+	logs *syncBuffer
 	id   int
 }
 
@@ -57,7 +79,7 @@ func startMcp(t *testing.T, bin, dataDir string) *mcpProc {
 	if err != nil {
 		t.Fatalf("stdout pipe: %v", err)
 	}
-	logs := &strings.Builder{}
+	logs := &syncBuffer{}
 	cmd.Stderr = logs
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("starting %s: %v", bin, err)
