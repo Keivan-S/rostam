@@ -249,6 +249,36 @@ engine-only CPU-seconds:
 ![Load wall-clock time and engine-only CPU-seconds for the six engines: Rostam loads in 282 seconds using the fewest multi-threaded CPU-seconds, while Redis and Weaviate take over 1,350 seconds](assets/bench/load-cpu-light.svg#only-light)
 ![Load wall-clock time and engine-only CPU-seconds for the six engines: Rostam loads in 282 seconds using the fewest multi-threaded CPU-seconds, while Redis and Weaviate take over 1,350 seconds](assets/bench/load-cpu-dark.svg#only-dark)
 
+### The query wire
+
+Rostam takes a query vector either as JSON text or as raw `f32` over a binary
+framing. **The comparison above was swept over JSON**, which is the slower of
+the two, so it measures the engine through its least efficient transport.
+
+Isolating the wire on the same box and corpus — three same-session pairs, each
+loading once and then running both arms against that single index:
+
+| Pair | Corpus loaded by | JSON | Binary | Ratio |
+|---|---|--:|--:|--:|
+| 1 | JSON | 2,718.3 QPS | 3,163.2 QPS | 1.164x |
+| 2 | binary | 2,738.9 QPS | 3,177.8 QPS | 1.160x |
+| 3 | JSON | 2,776.8 QPS | 3,276.6 QPS | 1.180x |
+
+**+16.8% throughput, and −19% on single-client p99** — 7.8–7.9 ms over JSON
+against 6.2–6.5 ms over the binary wire. (Throughput comes from the concurrent
+stage and the latency from the serial one, as VectorDBBench measures them.)
+
+Pair 2 reverses which arm loads the corpus and which inherits the warm index;
+the advantage does not move, which is what separates a transport effect from a
+page-cache one. Recall is identical within every pair to four decimals, so this
+buys throughput without changing which points come back.
+
+Sweeping the comparison over the binary wire would not be a thumb on the scale:
+VectorDBBench drives Milvus over gRPC and every other engine through its own
+native SDK, so Rostam was the only one measured through a text protocol. The
+table is nevertheless left exactly as measured — see the caveats below for why
+re-running one arm of it would cost more than it bought.
+
 ### Read the caveats with the numbers
 
 They are what make the numbers honest:
@@ -259,6 +289,12 @@ They are what make the numbers honest:
 - **The QPS figures are floors, not ceilings.** The benchmark client shares
   the same 12 cores with the engine, and the system runs oversubscribed at
   high concurrency — which penalises the fastest engine hardest.
+- **The comparison ran over Rostam's JSON wire**, and its binary query framing
+  measures +16.8% on the same box (above), so every ratio in the table is
+  conservative by roughly that much. They stay as measured: the competitor arms
+  were not re-run, and splicing a re-measured Rostam arm into same-session
+  competitor numbers would destroy the one property that makes a ratio mean
+  anything.
 - **Comparators were tuned up, not down.** pgvector was given
   `maintenance_work_mem=6GB`, 11 parallel maintenance workers and a raised
   `/dev/shm` (its defaults build HNSW single-threaded in a 64MB buffer, and

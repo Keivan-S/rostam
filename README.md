@@ -81,6 +81,9 @@ Two caveats that bound all of this, and they are not footnotes: every number is
 **same-session**, because this hardware drifts up to **42%** between sessions on
 unchanged code; and the benchmark client shares the box, which penalises the
 *fastest* engine hardest — so the throughput figures are **floors, not ceilings**.
+Floors in one more way: the sweep runs over Rostam's JSON wire, and its binary
+query framing measures **+16.8% QPS and −19% single-client p99** on the same box
+and corpus.
 
 Full per-ef curves, per-engine CPU accounting, the filter case, three paired A/B
 controls and the complete methodology (including where the data cuts *against*

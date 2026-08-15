@@ -122,6 +122,18 @@ k=10 on a kept-alive connection, building the JSON body measured **0.258 ms of a
 0.845 ms search**, against 0.011 ms to write the same vector as bytes. The
 server's matching decode of those literals goes with it.
 
+That is the mechanism; the effect on a real corpus was measured separately, on a
+dedicated 12-core EPYC Genoa server against Cohere-1M at `k=100`, `m=16`,
+`ef_construction=200`, `ef_search=300`. Three same-session pairs, each loading
+the corpus once and then running both wires against that one index, gave
+**2,718 / 2,739 / 2,777 QPS over JSON against 3,163 / 3,178 / 3,277 over the
+binary wire — +16.8%** — with single-client p99 falling from 7.8–7.9 ms to
+6.2–6.5 ms. One of the three pairs reverses which arm loads the corpus and which
+inherits the warm index, and the advantage does not move, which is what
+distinguishes a transport effect from a page-cache one. Recall is identical
+within every pair to four decimals: the binary path returns the same answers,
+sooner.
+
 Adds no semantics, on the same terms as the bulk wire: a binary body decodes into
 exactly the request its JSON body produces, then runs the identical validation
 and dispatch, and any other content type takes the JSON path unchanged. The
@@ -138,6 +150,11 @@ Python client does so automatically and permanently.
 pool, and is still safe to share between threads. Combined with the binary query
 wire, repeated searches measured **724–990/s before and 1911–3179/s after** at
 dim=768 against the same server — non-overlapping ranges, on a laptop.
+
+That figure is the two changes together and cannot be divided between them; it
+is also a laptop measuring a small index, where per-request overhead dominates
+in a way it does not at scale. For the query wire on its own, on server hardware
+and a 1M corpus, see [Binary query wire](#binary-query-wire) above.
 
 Reads are retried once when a pooled connection turns out to have been closed
 while idle; writes are not, because that failure surfaces after the request is on
