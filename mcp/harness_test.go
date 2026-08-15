@@ -6,7 +6,6 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"testing"
 
@@ -39,17 +38,32 @@ type testClient struct {
 
 func startServer(t *testing.T, cfg Config) *testClient {
 	t.Helper()
+	c, _ := startServerStop(t, cfg)
+	return c
+}
+
+// startServerStop is startServer plus an explicit stop func: it closes the
+// client's write end (ending Serve) and blocks until the server goroutine has
+// returned. A test that closes and reopens a data dir needs that ordering —
+// the store must not be closed while a handler is still running against it.
+func startServerStop(t *testing.T, cfg Config) (*testClient, func()) {
+	t.Helper()
 	s, err := NewServer(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
 	cr, cw := io.Pipe() // client -> server
 	sr, sw := io.Pipe() // server -> client
-	go func() { _ = s.Serve(cr, sw); _ = sw.Close() }()
+	done := make(chan struct{})
+	go func() { defer close(done); _ = s.Serve(cr, sw); _ = sw.Close() }()
 	t.Cleanup(func() { _ = cw.Close() })
 	sc := bufio.NewScanner(sr)
 	sc.Buffer(make([]byte, 64<<10), maxLine)
-	return &testClient{t: t, in: cw, out: sc}
+	stop := func() {
+		_ = cw.Close() // io.PipeWriter.Close is idempotent
+		<-done
+	}
+	return &testClient{t: t, in: cw, out: sc}, stop
 }
 
 // rpc sends a request and returns the raw result; fails the test on a
@@ -148,5 +162,3 @@ func (c *testClient) toolNames() []string {
 	}
 	return names
 }
-
-var _ = fmt.Sprintf // keep fmt imported while tasks grow this file

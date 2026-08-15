@@ -34,10 +34,11 @@ func (s *Server) registerDBTools() {
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"name":      map[string]any{"type": "string", "description": "collection name"},
-				"dim":       map[string]any{"type": "integer", "description": "vector dimensionality"},
-				"metric":    map[string]any{"type": "string", "description": `distance metric: "cosine", "l2", or "dot" (default "cosine")`},
-				"full_text": map[string]any{"type": "boolean", "description": "enable BM25 full-text indexing (default true)"},
+				"name":       map[string]any{"type": "string", "description": "collection name"},
+				"dim":        map[string]any{"type": "integer", "description": "vector dimensionality"},
+				"metric":     map[string]any{"type": "string", "description": `distance metric: "cosine", "l2", or "dot" (default "cosine")`},
+				"full_text":  map[string]any{"type": "boolean", "description": "enable BM25 full-text indexing (default true)"},
+				"persistent": map[string]any{"type": "boolean", "description": "store the collection on disk so its contents survive a restart (default true); false makes it in-memory only, lost when the server exits"},
 			},
 			"required": []any{"name", "dim"},
 		},
@@ -217,11 +218,32 @@ func (s *Server) handleDeleteByFilter(ctx context.Context, raw json.RawMessage) 
 }
 
 // createCollectionArgs is the create_collection tool's decoded input.
+// Persistent is a pointer so an omitted field is distinguishable from an
+// explicit false: omitted means persistent (see handleCreateCollection).
 type createCollectionArgs struct {
-	Name     string `json:"name"`
-	Dim      int    `json:"dim"`
-	Metric   string `json:"metric"`
-	FullText *bool  `json:"full_text"`
+	Name       string `json:"name"`
+	Dim        int    `json:"dim"`
+	Metric     string `json:"metric"`
+	FullText   *bool  `json:"full_text"`
+	Persistent *bool  `json:"persistent"`
+}
+
+// applyPersistence turns cfg into a collection whose contents survive a
+// restart, and is the single place the MCP server's durability choice lives.
+//
+// Persistent (mmap-backed vectors + graph, reopened by mapping the files) is
+// the ONLY durability mode reachable from here: the alternative, WAL, is not
+// carried by ops.EncodeCreateCollectionArgs, and CreateCollection goes through
+// that encoder in embedded mode exactly as it does over -connect — so asking
+// for a WAL would be silently dropped in both.
+//
+// Persistent requires a quantizer (mmap-backed vector storage stores codes), so
+// SQ8 comes with it. It costs nothing in answer quality: the mmap holds the
+// full-precision float32 vectors and the int8 codes are only used to navigate
+// the graph, with the over-collected shortlist rescored on the real floats.
+func applyPersistence(cfg *vector.Config) {
+	cfg.Persistent = true
+	cfg.Quant = vector.QuantSQ8
 }
 
 func (s *Server) handleCreateCollection(ctx context.Context, raw json.RawMessage) (any, error) {
@@ -260,6 +282,12 @@ func (s *Server) handleCreateCollection(ctx context.Context, raw json.RawMessage
 	}
 	if fullText {
 		cfg.FullText = &vector.FullTextConfig{}
+	}
+	// Persistent by default: an MCP client creating a collection through a
+	// long-lived memory server means it to still be there tomorrow, and a
+	// silently heap-only collection looks identical until the process exits.
+	if args.Persistent == nil || *args.Persistent {
+		applyPersistence(&cfg)
 	}
 
 	if err := s.store.CreateCollection(ctx, args.Name, cfg); err != nil {

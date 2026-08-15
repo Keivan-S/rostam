@@ -84,6 +84,7 @@ func (s *Server) ensureMemory(ctx context.Context) error {
 		// no opinion on; only Dim/Metric/FullText are memory-specific.
 		cfg := vector.DefaultConfig()
 		cfg.Dim, cfg.Metric, cfg.FullText = s.emb.Dim(), vector.Cosine, &vector.FullTextConfig{}
+		applyPersistence(&cfg)
 		if err := s.store.CreateCollection(ctx, memCollection, cfg); err != nil {
 			s.memErr = fmt.Errorf("mcp: creating memory collection: %w", err)
 			return
