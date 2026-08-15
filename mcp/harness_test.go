@@ -101,6 +101,24 @@ func (c *testClient) rpc(method string, params any, wantErr bool) json.RawMessag
 	return resp.Result
 }
 
+// raw writes one already-encoded line and returns the whole decoded response.
+// rpc builds a well-formed 2.0 envelope by construction, so an envelope-level
+// test (bad version, missing method, malformed id) has to bypass it.
+func (c *testClient) raw(line string) map[string]json.RawMessage {
+	c.t.Helper()
+	if _, err := c.in.Write([]byte(line + "\n")); err != nil {
+		c.t.Fatalf("write: %v", err)
+	}
+	if !c.out.Scan() {
+		c.t.Fatalf("no response to %q: %v", line, c.out.Err())
+	}
+	var resp map[string]json.RawMessage
+	if err := json.Unmarshal(c.out.Bytes(), &resp); err != nil {
+		c.t.Fatalf("bad response line %q: %v", c.out.Text(), err)
+	}
+	return resp
+}
+
 func (c *testClient) initialize() {
 	c.t.Helper()
 	c.rpc("initialize", map[string]any{"protocolVersion": "2025-06-18"}, false)

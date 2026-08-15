@@ -42,8 +42,17 @@ type Server struct {
 	tools       []toolDef
 	initialized bool
 
-	memOnce sync.Once // lazy mcp_memory bootstrap
-	memErr  error
+	// Lazy mcp_memory bootstrap. A mutex plus a succeeded-flag rather than a
+	// sync.Once: Once would latch a transient first failure for the lifetime
+	// of the process, and only success may be latched here. See ensureMemory.
+	memMu    sync.Mutex
+	memReady bool
+
+	// dispatchMu is held for the whole of one tool call, and by Shutdown. It
+	// is what lets a caller close the Store safely while Serve is still parked
+	// on its input: see Shutdown.
+	dispatchMu sync.Mutex
+	stopped    bool
 }
 
 func NewServer(ctx context.Context, cfg Config) (*Server, error) {
@@ -106,13 +115,49 @@ func (s *Server) Serve(r io.Reader, w io.Writer) error {
 		case err != nil:
 			return err
 		}
+		// Envelope validation runs BEFORE the notification check: an object
+		// with a broken envelope cannot be trusted to be a notification just
+		// because its id did not parse, so it is answered (with a null id
+		// where none was usable) rather than silently swallowed.
+		if verr := req.validate(); verr != nil {
+			if werr := c.replyError(errorID(req.ID), codeInvalidRequest, "invalid request: "+verr.Error()); werr != nil {
+				return werr
+			}
+			continue
+		}
 		if req.ID == nil { // notification: never answered
 			continue
 		}
-		if err := s.dispatch(ctx, c, req); err != nil {
+		s.dispatchMu.Lock()
+		if s.stopped {
+			s.dispatchMu.Unlock()
+			return nil // Shutdown: the Store may already be closed
+		}
+		err = s.dispatch(ctx, c, req)
+		s.dispatchMu.Unlock()
+		if err != nil {
 			return err // write failure: the client is gone
 		}
 	}
+}
+
+// Shutdown stops the session from handling any further request and waits for
+// the one in flight, if any, to return. It is safe to call from another
+// goroutine, and safe to call more than once.
+//
+// It exists so a caller can close the Store on a signal. Serve reads from a
+// blocking stdin, and there is no portable way to interrupt that read from
+// outside — closing the file does not reliably unblock it (the fd is not
+// registered with the runtime poller) and would race the in-flight read
+// against fd reuse. So Shutdown does not try to make Serve return. It
+// guarantees the weaker but sufficient thing: after it returns, no handler is
+// running and none will start, which is exactly the condition Store.Close
+// needs. Serve's goroutine may stay parked on a read that never completes; in
+// the signal path the process is exiting anyway.
+func (s *Server) Shutdown() {
+	s.dispatchMu.Lock()
+	defer s.dispatchMu.Unlock()
+	s.stopped = true
 }
 
 func (s *Server) dispatch(ctx context.Context, c *conn, req *request) error {

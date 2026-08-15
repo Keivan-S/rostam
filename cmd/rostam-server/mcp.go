@@ -11,8 +11,10 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
+	"syscall"
 	"time"
 
 	rostam "github.com/rostamlabs/rostam"
@@ -166,7 +168,33 @@ func runMcpCmd(args []string) {
 		fatal("mcp: server init failed", "err", err)
 	}
 
-	serveErr := srv.Serve(os.Stdin, os.Stdout)
+	// An MCP client that goes away closes stdin and Serve returns on its own.
+	// A supervisor stopping the server sends SIGINT or SIGTERM instead, and the
+	// default disposition for both is to kill the process immediately — before
+	// the close below, which is where persistent collections write the
+	// instant-restart sidecars that make their mmap files readable again. Every
+	// memory since the last flush would be lost on an ordinary, deliberate
+	// shutdown.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- srv.Serve(os.Stdin, os.Stdout) }()
+
+	var serveErr error
+	select {
+	case serveErr = <-serveDone:
+	case <-sigCh:
+		// Shutdown waits for any tool call in flight and stops the loop from
+		// starting another — the exact condition the close below needs. Serve's
+		// goroutine may stay parked on a read from stdin that will never
+		// complete, which is fine: nothing is running against the store, and
+		// this process is about to exit. See mcp.Server.Shutdown for why
+		// interrupting that read is not attempted.
+		srv.Shutdown()
+	}
+
 	// Close before unlocking: the store's own shutdown writes to the data dir
 	// (persistent collections flush their instant-restart sidecars), so releasing
 	// the lock first would let a waiting process in mid-write.
@@ -276,6 +304,13 @@ func embedderFromEnv(lookupEnv func(string) (string, bool)) (semcache.Embedder, 
 	dim, err := strconv.Atoi(dimStr)
 	if err != nil {
 		return nil, fmt.Errorf("rostam-server: ROSTAM_EMBED_DIM=%q is not a valid integer: %w", dimStr, err)
+	}
+	// Atoi is happy with 0 and negatives, and neither is a dimension. Caught
+	// here so the documented fail-fast holds: otherwise startup succeeds and
+	// the misconfiguration only surfaces later, as a collection-creation or
+	// embedding failure inside the first memory tool call.
+	if dim <= 0 {
+		return nil, fmt.Errorf("rostam-server: ROSTAM_EMBED_DIM=%q must be a positive integer", dimStr)
 	}
 	apiKey, _ := lookupEnv("ROSTAM_EMBED_API_KEY")
 	oe := semcache.NewOpenAIEmbedder(apiKey, model, dim)

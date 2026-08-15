@@ -20,12 +20,11 @@ import (
 // Reserved names for the memory subsystem's collection, KV bookkeeping keys,
 // and metadata fields. Callers of remember/recall never see these directly.
 const (
-	memCollection = "mcp_memory"       // the vector collection backing remember/recall
-	nsField       = "__ns"             // metadata field: the memory's namespace
-	createdField  = "__created_unix"   // metadata field: unix-seconds creation time
-	defaultNS     = "default"          // namespace used when the caller omits one
-	kvEmbedder    = "__mcp/embedder"   // KV key: the embedIdentity this store was bootstrapped with
-	kvNamespaces  = "__mcp/namespaces" // KV key: JSON array of known namespaces
+	memCollection = "mcp_memory"     // the vector collection backing remember/recall
+	nsField       = "__ns"           // metadata field: the memory's namespace
+	createdField  = "__created_unix" // metadata field: unix-seconds creation time
+	defaultNS     = "default"        // namespace used when the caller omits one
+	kvEmbedder    = "__mcp/embedder" // KV key: the embedIdentity this store was bootstrapped with
 )
 
 // embedIdentity fingerprints the embedder a data dir's mcp_memory collection
@@ -39,6 +38,16 @@ type embedIdentity struct {
 	Hybrid bool   `json:"hybrid"`
 }
 
+// identityReadAttempts / identityReadBackoff bound the wait for a concurrent
+// bootstrapper to finish writing the embedder identity key. The gap between
+// its CreateCollection and its Put is one round trip, so a couple of retries
+// is generous; the point of the bound is that a creator which died in that gap
+// must surface as an error rather than an indefinite hang.
+const (
+	identityReadAttempts = 3
+	identityReadBackoff  = 50 * time.Millisecond
+)
+
 // checkEmbedderIdentity compares the configured embedder against the one
 // recorded in KV, if any. No record yet means the memory collection has
 // never been bootstrapped, so there is nothing to conflict with.
@@ -50,6 +59,13 @@ func (s *Server) checkEmbedderIdentity(ctx context.Context) error {
 		}
 		return fmt.Errorf("mcp: reading stored embedder identity: %w", err)
 	}
+	return s.matchStoredIdentity(raw)
+}
+
+// matchStoredIdentity decodes a recorded identity and checks it against this
+// run's embedder. Shared by the startup check and the concurrent-bootstrap
+// path, which must apply exactly the same rule to the identity it reads back.
+func (s *Server) matchStoredIdentity(raw []byte) error {
 	var stored embedIdentity
 	if err := json.Unmarshal(raw, &stored); err != nil {
 		return fmt.Errorf("mcp: decoding stored embedder identity: %w", err)
@@ -63,123 +79,147 @@ func (s *Server) checkEmbedderIdentity(ctx context.Context) error {
 }
 
 // ensureMemory lazily bootstraps the mcp_memory collection on first use:
-// creates it, records the embedder identity that owns it, and seeds an empty
-// namespace list. Guarded by s.memOnce so concurrent tool calls only
-// bootstrap once; the result (including any error) is cached in s.memErr for
-// every caller.
+// creates it and records the embedder identity that owns it.
+//
+// Only SUCCESS is latched. sync.Once used to guard this and cached whatever
+// the first attempt produced, error included — so one canceled context, one
+// not-leader reply, or one transport blip on the very first memory tool call
+// left every later remember/recall/forget in the process failing with that
+// stale error forever, long after the store recovered. A failed attempt now
+// leaves the latch closed and the next caller tries again.
 func (s *Server) ensureMemory(ctx context.Context) error {
-	s.memOnce.Do(func() {
-		_, err := s.store.Get(ctx, []byte(kvEmbedder))
-		if err == nil {
-			// Already bootstrapped; checkEmbedderIdentity already verified this
-			// run's embedder matches, so there is nothing left to do.
-			return
-		}
-		if !errors.Is(err, rostam.ErrNotFound) {
-			s.memErr = fmt.Errorf("mcp: reading stored embedder identity: %w", err)
-			return
-		}
-		// vector.DefaultConfig fills in the HNSW build knobs (M/EfConstruction/
-		// EfSearch) that Config.Validate requires but the memory collection has
-		// no opinion on; only Dim/Metric/FullText are memory-specific.
-		cfg := vector.DefaultConfig()
-		cfg.Dim, cfg.Metric, cfg.FullText = s.emb.Dim(), vector.Cosine, &vector.FullTextConfig{}
-		applyPersistence(&cfg)
-		if err := s.store.CreateCollection(ctx, memCollection, cfg); err != nil {
-			s.memErr = fmt.Errorf("mcp: creating memory collection: %w", err)
-			return
-		}
-		id := embedIdentity{Model: s.emb.Model(), Dim: s.emb.Dim(), Hybrid: s.hybrid}
-		b, err := json.Marshal(id)
-		if err != nil {
-			s.memErr = fmt.Errorf("mcp: encoding embedder identity: %w", err)
-			return
-		}
-		if err := s.store.Put(ctx, []byte(kvEmbedder), b, 0); err != nil {
-			s.memErr = fmt.Errorf("mcp: storing embedder identity: %w", err)
-			return
-		}
-		if err := s.store.Put(ctx, []byte(kvNamespaces), []byte("[]"), 0); err != nil {
-			s.memErr = fmt.Errorf("mcp: storing namespace list: %w", err)
-			return
-		}
-	})
-	return s.memErr
+	s.memMu.Lock()
+	defer s.memMu.Unlock()
+	if s.memReady {
+		return nil
+	}
+	if err := s.bootstrapMemory(ctx); err != nil {
+		return err
+	}
+	s.memReady = true
+	return nil
 }
+
+// bootstrapMemory is one bootstrap attempt. The caller holds s.memMu.
+func (s *Server) bootstrapMemory(ctx context.Context) error {
+	_, err := s.store.Get(ctx, []byte(kvEmbedder))
+	if err == nil {
+		// Already bootstrapped; checkEmbedderIdentity already verified this
+		// run's embedder matches, so there is nothing left to do.
+		return nil
+	}
+	if !errors.Is(err, rostam.ErrNotFound) {
+		return fmt.Errorf("mcp: reading stored embedder identity: %w", err)
+	}
+	// vector.DefaultConfig fills in the HNSW build knobs (M/EfConstruction/
+	// EfSearch) that Config.Validate requires but the memory collection has
+	// no opinion on; only Dim/Metric/FullText are memory-specific.
+	cfg := vector.DefaultConfig()
+	cfg.Dim, cfg.Metric, cfg.FullText = s.emb.Dim(), vector.Cosine, &vector.FullTextConfig{}
+	applyPersistence(&cfg)
+	switch err := s.store.CreateCollection(ctx, memCollection, cfg); {
+	case err == nil:
+	case isCollectionExists(err):
+		// A second session bootstrapped between our existence check and this
+		// call — routine in remote mode, where several `mcp -connect` processes
+		// share one store. The collection this server needs now exists, so the
+		// race is won by joining it, not by failing.
+		return s.awaitStoredIdentity(ctx)
+	default:
+		return fmt.Errorf("mcp: creating memory collection: %w", err)
+	}
+	id := embedIdentity{Model: s.emb.Model(), Dim: s.emb.Dim(), Hybrid: s.hybrid}
+	b, err := json.Marshal(id)
+	if err != nil {
+		return fmt.Errorf("mcp: encoding embedder identity: %w", err)
+	}
+	if err := s.store.Put(ctx, []byte(kvEmbedder), b, 0); err != nil {
+		return fmt.Errorf("mcp: storing embedder identity: %w", err)
+	}
+	return nil
+}
+
+// isCollectionExists reports whether err is "that collection is already
+// there". Embedded mode returns vector.ErrCollectionExists directly; over
+// -connect the same failure arrives as a reconstructed error whose chain does
+// not survive the wire, so the message is matched as well.
+func isCollectionExists(err error) bool {
+	return errors.Is(err, vector.ErrCollectionExists) ||
+		strings.Contains(err.Error(), "collection already exists")
+}
+
+// awaitStoredIdentity reads back the embedder identity a concurrent creator
+// recorded and verifies it matches this run's configuration.
+//
+// The other session writes the identity key one round trip AFTER creating the
+// collection, so reading it immediately can legitimately miss it; a few
+// bounded retries cover that window. Exhausting them means the other creator
+// died mid-bootstrap, which this run reports rather than proceeding against a
+// collection whose embedder it was never able to check.
+func (s *Server) awaitStoredIdentity(ctx context.Context) error {
+	for attempt := range identityReadAttempts {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(identityReadBackoff):
+			}
+		}
+		raw, err := s.store.Get(ctx, []byte(kvEmbedder))
+		switch {
+		case err == nil:
+			return s.matchStoredIdentity(raw)
+		case errors.Is(err, rostam.ErrNotFound):
+			continue
+		default:
+			return fmt.Errorf("mcp: reading stored embedder identity: %w", err)
+		}
+	}
+	return fmt.Errorf("mcp: the %q collection already exists but carries no embedder identity after %d reads; a concurrent bootstrap looks to have failed part-way, leaving a collection whose embedder cannot be verified",
+		memCollection, identityReadAttempts)
+}
+
+// firstEmbedding pulls the single vector an Embed of one text should have
+// produced.
+//
+// Every embed call in this package passes exactly one string, so it is
+// tempting to index [0] straight away — but the embedder is not necessarily
+// ours. semcache's OpenAI-compatible embedder is an HTTP client pointed at
+// whatever ROSTAM_EMBED_ENDPOINT names, and a response with a short or empty
+// data array decodes into a short slice with a nil error. Indexing that panics
+// the dispatch goroutine and takes the session down, so a result that is not
+// exactly one usable vector is reported as the bad response it is.
+func firstEmbedding(vecs [][]float32) ([]float32, error) {
+	if len(vecs) == 0 {
+		return nil, errors.New("mcp: the embedder returned no vectors for one input")
+	}
+	if len(vecs[0]) == 0 {
+		return nil, errors.New("mcp: the embedder returned an empty vector")
+	}
+	return vecs[0], nil
+}
+
+// jsSafeIDMask keeps a generated id inside the range JSON numbers represent
+// exactly (2^53-1). See memoryID.
+const jsSafeIDMask = uint64(1)<<53 - 1
 
 // memoryID derives a memory's point id from its namespace and content, so
 // remembering the same fact twice (in the same namespace) upserts the same
 // point instead of accumulating duplicates.
-func memoryID(ns, content string) uint64 {
-	return xxhash.Sum64String(ns + "\x00" + content)
-}
-
-// namespaces returns the known namespace list. An absent KV key (memory
-// never bootstrapped) is reported as an empty list, not an error.
-func (s *Server) namespaces(ctx context.Context) ([]string, error) {
-	raw, err := s.store.Get(ctx, []byte(kvNamespaces))
-	if err != nil {
-		if errors.Is(err, rostam.ErrNotFound) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("mcp: reading namespace list: %w", err)
-	}
-	var ns []string
-	if err := json.Unmarshal(raw, &ns); err != nil {
-		return nil, fmt.Errorf("mcp: decoding namespace list: %w", err)
-	}
-	return ns, nil
-}
-
-// addNamespace records ns in the namespace list if it is not already there,
-// keeping the list sorted.
 //
-// This is a read-modify-write on a single KV key with no CAS or lock, which is
-// safe only because Serve dispatches one request at a time over the stdio wire:
-// no two tool calls are ever in flight together in a session. Nothing else in
-// this package is concurrency-safe either (removeNamespace has the same shape),
-// so if dispatch ever goes concurrent, the registry needs a compare-and-swap
-// loop before anything else here is looked at.
-func (s *Server) addNamespace(ctx context.Context, ns string) error {
-	cur, err := s.namespaces(ctx)
-	if err != nil {
-		return err
-	}
-	for _, n := range cur {
-		if n == ns {
-			return nil
-		}
-	}
-	cur = append(cur, ns)
-	sort.Strings(cur)
-	b, err := json.Marshal(cur)
-	if err != nil {
-		return fmt.Errorf("mcp: encoding namespace list: %w", err)
-	}
-	return s.store.Put(ctx, []byte(kvNamespaces), b, 0)
-}
-
-// removeNamespace drops ns from the namespace list, if present. Called by
-// forget once a namespace's last memory has been deleted.
-func (s *Server) removeNamespace(ctx context.Context, ns string) error {
-	cur, err := s.namespaces(ctx)
-	if err != nil {
-		return err
-	}
-	out := cur[:0]
-	for _, n := range cur {
-		if n != ns {
-			out = append(out, n)
-		}
-	}
-	if len(out) == len(cur) {
-		return nil // ns was not present
-	}
-	b, err := json.Marshal(out)
-	if err != nil {
-		return fmt.Errorf("mcp: encoding namespace list: %w", err)
-	}
-	return s.store.Put(ctx, []byte(kvNamespaces), b, 0)
+// The hash is masked down to 53 bits because the id is handed straight back to
+// the client and comes straight back to forget. Most MCP clients are
+// JavaScript, where a JSON number is an IEEE-754 double: a full-width uint64
+// id is rounded on parse, so the id a client echoes into forget would not be
+// the id it was given, and the memory would come back "missing". 53 bits is
+// where that stops being possible.
+//
+// The narrower space costs nothing real here: 2^53 is about 9x10^15 ids, so
+// even a memory store of a hundred million facts sits far below the birthday
+// threshold, and a collision only ever affects a (namespace, content) pair
+// that would have deduped anyway.
+func memoryID(ns, content string) uint64 {
+	return xxhash.Sum64String(ns+"\x00"+content) & jsSafeIDMask
 }
 
 // memoryHit is one recalled (or listed, Task 5) memory: its id, content,
@@ -310,13 +350,14 @@ func (s *Server) handleRemember(ctx context.Context, raw json.RawMessage) (any, 
 	if err != nil {
 		return nil, fmt.Errorf("mcp: embed content: %w", err)
 	}
+	vec, err := firstEmbedding(vecs)
+	if err != nil {
+		return nil, fmt.Errorf("mcp: embed content: %w", err)
+	}
 
 	id := memoryID(ns, args.Content)
-	if err := s.store.VectorUpsert(ctx, memCollection, id, vecs[0], args.Content, rostam.VectorInsertOpts{Metadata: md}); err != nil {
+	if err := s.store.VectorUpsert(ctx, memCollection, id, vec, args.Content, rostam.VectorInsertOpts{Metadata: md}); err != nil {
 		return nil, fmt.Errorf("mcp: remember: %w", err)
-	}
-	if err := s.addNamespace(ctx, ns); err != nil {
-		return nil, err
 	}
 	return map[string]any{"id": id, "namespace": ns}, nil
 }
@@ -341,8 +382,10 @@ func (s *Server) handleRecall(ctx context.Context, raw json.RawMessage) (any, er
 	if ns == "" {
 		ns = defaultNS
 	}
+	// <= 0, not == 0: a client can send "k": -1, and a negative k reaching the
+	// search call is the same nonsense as a zero one. Matches list_memories.
 	k := args.K
-	if k == 0 {
+	if k <= 0 {
 		k = 5
 	}
 
@@ -392,7 +435,11 @@ func (s *Server) recallHybrid(ctx context.Context, query string, k int, f rostam
 	if err != nil {
 		return nil, fmt.Errorf("mcp: embed query: %w", err)
 	}
-	docs, err := s.hybridDocs(ctx, memCollection, dense[0], query, k, f)
+	vec, err := firstEmbedding(dense)
+	if err != nil {
+		return nil, fmt.Errorf("mcp: embed query: %w", err)
+	}
+	docs, err := s.hybridDocs(ctx, memCollection, vec, query, k, f)
 	if err != nil {
 		return nil, fmt.Errorf("mcp: recall: %w", err)
 	}
@@ -427,11 +474,14 @@ type forgetArgs struct {
 	IDs []uint64 `json:"ids"`
 }
 
-// handleForget deletes memories by id and prunes any namespace left empty by
-// the deletion. Ids not found in the collection are reported back as
-// "missing" rather than erroring, so a caller can forget a batch without
-// first checking which ids still exist; per-id failures land in "errors" for
-// the same reason (see forgetResult).
+// handleForget deletes memories by id. Ids not found in the collection are
+// reported back as "missing" rather than erroring, so a caller can forget a
+// batch without first checking which ids still exist; per-id failures land in
+// "errors" for the same reason (see forgetResult).
+//
+// There is no namespace bookkeeping to do afterwards: a namespace is defined
+// by the memories carrying it (see handleListNamespaces), so deleting the last
+// one is all that "removing a namespace" means.
 func (s *Server) handleForget(ctx context.Context, raw json.RawMessage) (any, error) {
 	var args forgetArgs
 	if err := json.Unmarshal(raw, &args); err != nil {
@@ -450,30 +500,19 @@ func (s *Server) handleForget(ctx context.Context, raw json.RawMessage) (any, er
 		return nil, fmt.Errorf("mcp: forget: %w", err)
 	}
 
-	// Every point's delete is attempted, even after an earlier one fails:
-	// a batch with a mix of good and bad ids must still empty (and prune)
-	// whatever namespaces it legitimately can, instead of aborting the
-	// whole call and leaving an emptied namespace stuck in the registry.
-	affectedNS := make(map[string]bool, len(points))
+	// Every point's delete is attempted, even after an earlier one fails: a
+	// batch with a mix of good and bad ids must still delete whatever it
+	// legitimately can, instead of aborting the whole call and leaving the
+	// caller unable to tell "nothing happened" from "some of this went
+	// through".
 	deleted := make([]uint64, 0, len(points))
 	var delErrs []string
 	for _, p := range points {
-		if nsv, ok := p.Meta[nsField]; ok && nsv.Kind == vector.ValueString {
-			affectedNS[nsv.Str] = true
-		}
 		if _, err := s.store.VectorDelete(ctx, memCollection, p.ID); err != nil {
 			delErrs = append(delErrs, fmt.Sprintf("id %d: %s", p.ID, err))
 			continue
 		}
 		deleted = append(deleted, p.ID)
-	}
-
-	// Prune every namespace a delete was attempted against, regardless of
-	// whether some of those deletes failed above: a namespace another id in
-	// the same batch emptied must not be left stale in the registry just
-	// because a sibling id failed to delete.
-	if err := s.pruneEmptyNamespaces(ctx, affectedNS); err != nil {
-		delErrs = append(delErrs, err.Error())
 	}
 
 	if missing == nil {
@@ -492,27 +531,6 @@ type forgetResult struct {
 	Deleted []uint64 `json:"deleted"`
 	Missing []uint64 `json:"missing"`
 	Errors  []string `json:"errors,omitempty"`
-}
-
-// pruneEmptyNamespaces checks each namespace in ns with a 1-doc scroll probe
-// and drops it from the registry if nothing remains in it. Extracted from
-// handleForget so it can run against whatever was actually deleted even when
-// some deletes in the same batch failed, and so the partial-failure path is
-// unit-testable without needing to inject a store-level fault.
-func (s *Server) pruneEmptyNamespaces(ctx context.Context, ns map[string]bool) error {
-	for n := range ns {
-		nsFilter := rostam.VectorFilter{Op: vector.FilterEq, Field: nsField, Value: vector.NewString(n)}
-		docs, _, _, err := s.store.VectorScroll(ctx, memCollection, nsFilter, 1, rostam.VectorScrollOpts{})
-		if err != nil {
-			return fmt.Errorf("checking namespace %q: %w", n, err)
-		}
-		if len(docs) == 0 {
-			if err := s.removeNamespace(ctx, n); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
 }
 
 // listMemoriesArgs is the list_memories tool's decoded input.
@@ -558,18 +576,55 @@ func (s *Server) handleListMemories(ctx context.Context, raw json.RawMessage) (a
 	return map[string]any{"memories": memories, "next_cursor": cursor}, nil
 }
 
-// handleListNamespaces reports every namespace currently holding at least
-// one memory.
+// nsScanPage is how many memories one list_namespaces page pulls. Only each
+// doc's __ns field is kept, so the page size trades round trips against
+// per-page memory, and memory sets are small.
+const nsScanPage = 500
+
+// handleListNamespaces reports every namespace currently holding at least one
+// memory, by scrolling the collection and collecting the distinct __ns values.
+//
+// This used to read a KV registry that remember appended to and forget pruned.
+// That registry was a read-modify-write on one key with no CAS, correct only
+// under the assumption of a single session — which does not hold in remote
+// mode, where several `mcp -connect` processes share one store and each has
+// its own Server. Two of them interleaving could drop a namespace from the
+// list permanently while its memories sat there, and no later operation would
+// ever notice.
+//
+// A scan costs more than the registry's single Get, but it cannot be wrong:
+// the memories ARE the namespace list. It also deletes the whole class of
+// bookkeeping bugs the registry needed (seeding it at bootstrap, appending on
+// remember, pruning on forget, and keeping all three consistent when a batch
+// half-failed).
 func (s *Server) handleListNamespaces(ctx context.Context, _ json.RawMessage) (any, error) {
 	if err := s.ensureMemory(ctx); err != nil {
 		return nil, err
 	}
-	ns, err := s.namespaces(ctx)
-	if err != nil {
-		return nil, err
+	seen := make(map[string]struct{})
+	var cursor string
+	for {
+		// A zero filter is match-all: every memory, every namespace.
+		docs, _, next, err := s.store.VectorScroll(ctx, memCollection, rostam.VectorFilter{}, nsScanPage, rostam.VectorScrollOpts{Cursor: cursor})
+		if err != nil {
+			return nil, fmt.Errorf("mcp: list_namespaces: %w", err)
+		}
+		for _, d := range docs {
+			if v, ok := d.Metadata[nsField]; ok && v.Kind == vector.ValueString {
+				seen[v.Str] = struct{}{}
+			}
+		}
+		// A cursor that does not advance would loop forever; treat it as
+		// exhausted rather than trusting the backend to always terminate.
+		if next == "" || next == cursor {
+			break
+		}
+		cursor = next
 	}
-	if ns == nil {
-		ns = []string{}
+	out := make([]string, 0, len(seen))
+	for n := range seen {
+		out = append(out, n)
 	}
-	return map[string]any{"namespaces": ns}, nil
+	sort.Strings(out)
+	return map[string]any{"namespaces": out}, nil
 }

@@ -11,13 +11,21 @@ import (
 	"github.com/rostamlabs/rostam/vector"
 )
 
-// rejectMemoryCollection guards the four mutating tools (create_collection,
-// upsert, delete, delete_by_filter) against touching mcp_memory directly:
-// that collection's schema, reserved
+// rejectMemoryCollection guards EVERY generic tool (create_collection, upsert,
+// search, get, delete, delete_by_filter) against touching mcp_memory directly.
+//
+// For the writes, the reason is corruption: that collection's schema, reserved
 // metadata fields, and embedder-identity bootstrap are all owned by the
-// remember/recall/forget tools in memory.go, and a raw write here could
-// corrupt them. Reads (search, get) have no such hazard and are allowed
-// through unchanged.
+// remember/recall/forget tools in memory.go.
+//
+// For the reads, the reason is namespace isolation. recall and list_memories
+// always AND a __ns filter into their query and strip the reserved fields out
+// of what they return; generic search and get do neither, so they were a way
+// to read every namespace's memories at once and to see the internal __ns
+// metadata that says which namespace each one came from. Namespaces are the
+// only isolation the memory subsystem has, so the generic readers are refused
+// here rather than taught the memory schema: the memory tools are the whole
+// interface to mcp_memory.
 func rejectMemoryCollection(collection string) error {
 	if collection == memCollection {
 		return fmt.Errorf("mcp: %q is reserved for the memory tools; use remember/recall/forget instead", memCollection)
@@ -52,7 +60,7 @@ func (s *Server) registerDBTools() {
 			"type": "object",
 			"properties": map[string]any{
 				"collection": map[string]any{"type": "string"},
-				"id":         map[string]any{"type": "integer", "description": "point id"},
+				"id":         idSchema("point id"),
 				"vector":     map[string]any{"type": "array", "items": map[string]any{"type": "number"}, "description": "explicit embedding; omit to auto-embed content when an embedder is configured"},
 				"content":    map[string]any{"type": "string", "description": "text content (BM25-indexed, and auto-embedded when vector is omitted)"},
 				"metadata":   map[string]any{"type": "object", "description": "optional metadata"},
@@ -85,7 +93,7 @@ func (s *Server) registerDBTools() {
 			"type": "object",
 			"properties": map[string]any{
 				"collection":  map[string]any{"type": "string"},
-				"ids":         map[string]any{"type": "array", "items": map[string]any{"type": "integer"}},
+				"ids":         idsSchema("ids of the points to fetch"),
 				"with_vector": map[string]any{"type": "boolean", "description": "include each point's raw vector (default false)"},
 			},
 			"required": []any{"collection", "ids"},
@@ -106,7 +114,7 @@ func (s *Server) registerDestructiveTools() {
 			"type": "object",
 			"properties": map[string]any{
 				"collection": map[string]any{"type": "string"},
-				"ids":        map[string]any{"type": "array", "items": map[string]any{"type": "integer"}},
+				"ids":        idsSchema("ids of the points to delete"),
 			},
 			"required": []any{"collection", "ids"},
 		},
@@ -130,7 +138,7 @@ func (s *Server) registerDestructiveTools() {
 // deleteArgs is the delete tool's decoded input.
 type deleteArgs struct {
 	Collection string   `json:"collection"`
-	IDs        []uint64 `json:"ids"`
+	IDs        []jsonID `json:"ids"`
 }
 
 func (s *Server) handleDelete(ctx context.Context, raw json.RawMessage) (any, error) {
@@ -158,7 +166,7 @@ func (s *Server) handleDelete(ctx context.Context, raw json.RawMessage) (any, er
 	deleted := make([]uint64, 0, len(args.IDs))
 	missing := make([]uint64, 0)
 	var errs []string
-	for _, id := range args.IDs {
+	for _, id := range idsToUint64(args.IDs) {
 		ok, err := s.store.VectorDelete(ctx, args.Collection, id)
 		if err != nil {
 			errs = append(errs, fmt.Sprintf("id %d: %s", id, err))
@@ -300,7 +308,7 @@ func (s *Server) handleCreateCollection(ctx context.Context, raw json.RawMessage
 // upsertArgs is the upsert tool's decoded input.
 type upsertArgs struct {
 	Collection string                     `json:"collection"`
-	ID         uint64                     `json:"id"`
+	ID         jsonID                     `json:"id"`
 	Vector     []float32                  `json:"vector"`
 	Content    string                     `json:"content"`
 	Metadata   map[string]json.RawMessage `json:"metadata"`
@@ -327,7 +335,9 @@ func (s *Server) handleUpsert(ctx context.Context, raw json.RawMessage) (any, er
 		if err != nil {
 			return nil, fmt.Errorf("mcp: upsert: embed content: %w", err)
 		}
-		vec = vecs[0]
+		if vec, err = firstEmbedding(vecs); err != nil {
+			return nil, fmt.Errorf("mcp: upsert: embed content: %w", err)
+		}
 	}
 
 	md, err := jsonToMetadata(args.Metadata)
@@ -335,10 +345,11 @@ func (s *Server) handleUpsert(ctx context.Context, raw json.RawMessage) (any, er
 		return nil, err
 	}
 
-	if err := s.store.VectorUpsert(ctx, args.Collection, args.ID, vec, args.Content, rostam.VectorInsertOpts{Metadata: md}); err != nil {
+	id := uint64(args.ID)
+	if err := s.store.VectorUpsert(ctx, args.Collection, id, vec, args.Content, rostam.VectorInsertOpts{Metadata: md}); err != nil {
 		return nil, fmt.Errorf("mcp: upsert: %w", err)
 	}
-	return map[string]any{"id": args.ID}, nil
+	return map[string]any{"id": id}, nil
 }
 
 // searchArgs is the search tool's decoded input.
@@ -359,8 +370,12 @@ func (s *Server) handleSearch(ctx context.Context, raw json.RawMessage) (any, er
 	if args.Collection == "" {
 		return nil, fmt.Errorf("mcp: search: collection is required")
 	}
+	if err := rejectMemoryCollection(args.Collection); err != nil {
+		return nil, err
+	}
+	// <= 0, not == 0: a negative k is as unusable as a zero one.
 	k := args.K
-	if k == 0 {
+	if k <= 0 {
 		k = 10
 	}
 	f, err := parseFilter(args.Filter)
@@ -429,7 +444,11 @@ func (s *Server) searchVector(ctx context.Context, explicit []float32, queryText
 	if err != nil {
 		return nil, fmt.Errorf("mcp: search: embed query_text: %w", err)
 	}
-	return vecs[0], nil
+	vec, err := firstEmbedding(vecs)
+	if err != nil {
+		return nil, fmt.Errorf("mcp: search: embed query_text: %w", err)
+	}
+	return vec, nil
 }
 
 // searchHit is one hit from the generic search tool: id, content, relevance
@@ -502,7 +521,7 @@ func (s *Server) hybridDocs(ctx context.Context, collection string, dense []floa
 // getArgs is the get tool's decoded input.
 type getArgs struct {
 	Collection string   `json:"collection"`
-	IDs        []uint64 `json:"ids"`
+	IDs        []jsonID `json:"ids"`
 	WithVector bool     `json:"with_vector"`
 }
 
@@ -522,11 +541,14 @@ func (s *Server) handleGet(ctx context.Context, raw json.RawMessage) (any, error
 	if args.Collection == "" {
 		return nil, fmt.Errorf("mcp: get: collection is required")
 	}
+	if err := rejectMemoryCollection(args.Collection); err != nil {
+		return nil, err
+	}
 	if len(args.IDs) == 0 {
 		return nil, fmt.Errorf("mcp: get: ids is required and must be non-empty")
 	}
 
-	points, missing, err := s.store.VectorGetBatch(ctx, args.Collection, args.IDs, args.WithVector, true)
+	points, missing, err := s.store.VectorGetBatch(ctx, args.Collection, idsToUint64(args.IDs), args.WithVector, true)
 	if err != nil {
 		return nil, fmt.Errorf("mcp: get: %w", err)
 	}

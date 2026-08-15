@@ -72,6 +72,28 @@ func TestMcpSetup_Embedder(t *testing.T) {
 			},
 			wantErr: "ROSTAM_EMBED_DIM",
 		},
+		// Atoi parses "0" and "-1" happily, so without an explicit check
+		// startup succeeded with an unusable embedder and the failure only
+		// surfaced later, inside the first memory tool call — the opposite of
+		// the documented fail-fast.
+		{
+			name: "endpoint with zero dim => error naming ROSTAM_EMBED_DIM",
+			env: map[string]string{
+				"ROSTAM_EMBED_ENDPOINT": "http://localhost:11434/v1/embeddings",
+				"ROSTAM_EMBED_MODEL":    "nomic-embed-text",
+				"ROSTAM_EMBED_DIM":      "0",
+			},
+			wantErr: "ROSTAM_EMBED_DIM",
+		},
+		{
+			name: "endpoint with negative dim => error naming ROSTAM_EMBED_DIM",
+			env: map[string]string{
+				"ROSTAM_EMBED_ENDPOINT": "http://localhost:11434/v1/embeddings",
+				"ROSTAM_EMBED_MODEL":    "nomic-embed-text",
+				"ROSTAM_EMBED_DIM":      "-768",
+			},
+			wantErr: "ROSTAM_EMBED_DIM",
+		},
 		{
 			name: "endpoint+model+dim => non-nil embedder with overridden Endpoint",
 			env: map[string]string{

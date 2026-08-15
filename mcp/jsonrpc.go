@@ -37,6 +37,53 @@ type request struct {
 	Params  json.RawMessage `json:"params,omitempty"`
 }
 
+// validate checks the JSON-RPC 2.0 envelope itself, separately from routing.
+// A decode that merely succeeded is not a valid request: {"jsonrpc":"1.0"} and
+// an object with no "method" both unmarshal cleanly into this struct, and
+// answering the first with a 2.0 result or routing the second to
+// method-not-found reports the wrong thing. Both are Invalid Request.
+func (r *request) validate() error {
+	if r.JSONRPC != "2.0" {
+		return fmt.Errorf("jsonrpc must be \"2.0\", got %q", r.JSONRPC)
+	}
+	if r.Method == "" {
+		return errors.New("method is required")
+	}
+	if !validID(r.ID) {
+		return errors.New("id must be a string, a number, or null")
+	}
+	return nil
+}
+
+// validID reports whether an id is one of the shapes JSON-RPC 2.0 allows: a
+// string, a number, or null. A nil RawMessage is an absent id (a
+// notification), which is valid on the wire.
+func validID(id json.RawMessage) bool {
+	if id == nil {
+		return true
+	}
+	var v any
+	if err := json.Unmarshal(id, &v); err != nil {
+		return false
+	}
+	switch v.(type) {
+	case string, float64, nil:
+		return true
+	}
+	return false
+}
+
+// errorID is the id to answer an Invalid Request with: the client's own id
+// when it had a usable one, JSON null when it was absent or malformed. The
+// spec requires the id be echoed where it can be, so a client with several
+// requests in flight can still match the failure to the one that caused it.
+func errorID(id json.RawMessage) json.RawMessage {
+	if id != nil && validID(id) {
+		return id
+	}
+	return json.RawMessage("null")
+}
+
 type rpcError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`

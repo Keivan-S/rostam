@@ -3,6 +3,7 @@
 package mcp
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -191,32 +192,129 @@ func TestSearchDefaultModeNoEmbedder(t *testing.T) {
 	}
 }
 
-func TestGetAllowsMemoryCollectionRead(t *testing.T) {
+// TestGetRefusesMemoryCollection and TestSearchRefusesMemoryCollection cover
+// the reads that used to be allowed through. Neither generic reader applies
+// the __ns filter that recall/list_memories do, so both were a way to read
+// every namespace's memories at once — get additionally handed back the
+// internal __ns metadata naming the namespace each one belongs to. Namespaces
+// are the memory subsystem's only isolation boundary; the generic readers must
+// not be a hole in it.
+func TestGetRefusesMemoryCollection(t *testing.T) {
 	c := startServer(t, Config{Store: newHeapStore(t)})
 	c.initialize()
 	var r struct {
 		ID uint64 `json:"id"`
 	}
-	c.callTool("remember", map[string]any{"content": "hello"}, &r, false)
+	c.callTool("remember", map[string]any{"content": "hello", "namespace": "private"}, &r, false)
 
-	var got struct {
-		Points []struct {
-			ID       uint64         `json:"id"`
-			Metadata map[string]any `json:"metadata"`
-		} `json:"points"`
+	msg := c.callTool("get", map[string]any{"collection": memCollection, "ids": []uint64{r.ID}}, nil, true)
+	if !strings.Contains(msg, "memory") {
+		t.Fatalf("error should mention the memory tools, got %q", msg)
 	}
-	c.callTool("get", map[string]any{"collection": memCollection, "ids": []uint64{r.ID}}, &got, false)
-	if len(got.Points) != 1 {
-		t.Fatalf("get on mcp_memory: %+v", got.Points)
+	if strings.Contains(msg, "hello") || strings.Contains(msg, nsField) {
+		t.Fatalf("rejection must not leak the memory or its namespace field: %q", msg)
 	}
-	if _, ok := got.Points[0].Metadata[nsField]; !ok {
-		t.Fatalf("expected internal __ns field unstripped on generic get: %+v", got.Points[0].Metadata)
+}
+
+func TestSearchRefusesMemoryCollection(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t)})
+	c.initialize()
+	c.callTool("remember", map[string]any{"content": "the deploy password lives in vault", "namespace": "private"}, nil, false)
+
+	msg := c.callTool("search", map[string]any{"collection": memCollection, "query_text": "deploy password"}, nil, true)
+	if !strings.Contains(msg, "memory") {
+		t.Fatalf("error should mention the memory tools, got %q", msg)
+	}
+	if strings.Contains(msg, "vault") {
+		t.Fatalf("rejection must not leak the memory contents: %q", msg)
 	}
 }
 
 // TestDestructiveToolsAbsentByDefault guards the registration gate itself:
 // delete/delete_by_filter must not appear in tools/list at all (not merely
 // refuse when called) unless Config.Destructive is set.
+// TestGenericToolsSurviveMisbehavingEmbedder is the memory-side guard's
+// counterpart: upsert's auto-embed and search's query embedding index the same
+// [0] and take the same session down if the embedder returns nothing.
+func TestGenericToolsSurviveMisbehavingEmbedder(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t), Embedder: shortEmbedder{}})
+	c.initialize()
+	c.callTool("create_collection", map[string]any{"name": "docs", "dim": 4}, nil, false)
+
+	msg := c.callTool("upsert", map[string]any{"collection": "docs", "id": 1, "content": "auto-embed me"}, nil, true)
+	if !strings.Contains(msg, "embed") {
+		t.Fatalf("upsert error should name the embed step, got %q", msg)
+	}
+	msg = c.callTool("search", map[string]any{"collection": "docs", "mode": "dense", "query_text": "anything"}, nil, true)
+	if !strings.Contains(msg, "embed") {
+		t.Fatalf("search error should name the embed step, got %q", msg)
+	}
+	c.rpc("ping", nil, false) // the session is still alive
+}
+
+// TestIDsAcceptStringForm is the round trip a JavaScript client needs for a
+// collection whose ids are above 2^53-1: it cannot put such an id in a JSON
+// number without rounding it, so upsert/get/delete take the decimal string
+// form too. Results still come back as numbers.
+func TestIDsAcceptStringForm(t *testing.T) {
+	const big = uint64(1)<<62 + 7 // not exactly representable as a float64
+	bigStr := strconv.FormatUint(big, 10)
+
+	c := startServer(t, Config{Store: newHeapStore(t), Destructive: true})
+	c.initialize()
+	c.callTool("create_collection", map[string]any{"name": "docs", "dim": 4}, nil, false)
+
+	var up struct {
+		ID uint64 `json:"id"`
+	}
+	c.callTool("upsert", map[string]any{
+		"collection": "docs", "id": bigStr,
+		"vector": []float32{1, 0, 0, 0}, "content": "the exact point",
+	}, &up, false)
+	if up.ID != big {
+		t.Fatalf("upsert echoed id %d, want the exact %d", up.ID, big)
+	}
+
+	// Fetch it back by the string form, and by the number form — the same
+	// point either way, because neither ever went through a float.
+	for _, form := range []any{bigStr, big} {
+		var got struct {
+			Points []struct {
+				ID      uint64 `json:"id"`
+				Content string `json:"content"`
+			} `json:"points"`
+			Missing []uint64 `json:"missing"`
+		}
+		c.callTool("get", map[string]any{"collection": "docs", "ids": []any{form}}, &got, false)
+		if len(got.Points) != 1 || got.Points[0].ID != big {
+			t.Fatalf("get(%v): points = %+v, missing = %v", form, got.Points, got.Missing)
+		}
+		if got.Points[0].Content != "the exact point" {
+			t.Fatalf("get(%v) returned the wrong point: %+v", form, got.Points[0])
+		}
+	}
+
+	var del struct {
+		Deleted []uint64 `json:"deleted"`
+	}
+	c.callTool("delete", map[string]any{"collection": "docs", "ids": []any{bigStr}}, &del, false)
+	if len(del.Deleted) != 1 || del.Deleted[0] != big {
+		t.Fatalf("delete by string id: %+v", del.Deleted)
+	}
+}
+
+// TestBadIDIsAToolError: a malformed id must fail the call with a message that
+// says what a valid id looks like, not decode to some silent zero.
+func TestBadIDIsAToolError(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t)})
+	c.initialize()
+	c.callTool("create_collection", map[string]any{"name": "docs", "dim": 4}, nil, false)
+	msg := c.callTool("get", map[string]any{"collection": "docs", "ids": []any{"not-a-number"}}, nil, true)
+	if !strings.Contains(msg, "point id") {
+		t.Fatalf("error should explain what a point id may be, got %q", msg)
+	}
+}
+
 func TestDestructiveToolsAbsentByDefault(t *testing.T) {
 	c := startServer(t, Config{Store: newHeapStore(t)})
 	c.initialize()

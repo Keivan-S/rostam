@@ -66,7 +66,9 @@ with [`-connect`](#remote-mode).
 An embedded session stores memories in mmap-backed files under `-data` and
 writes the index sidecar that makes them readable again when the process shuts
 down cleanly — which is what happens when an MCP client closes the connection
-or exits. Reopening the same directory then restores everything.
+or exits, and also on `SIGINT`/`SIGTERM`: both are handled, so the server
+finishes the tool call in flight, flushes, releases the data-dir lock, and
+exits 0. Reopening the same directory then restores everything.
 
 The flush point is that clean shutdown, so a session killed outright (`SIGKILL`,
 a machine losing power) loses the memories added since the last one. If that
@@ -182,9 +184,9 @@ than a protocol-level error, so a bad argument never tears down the session.
 |---|---|---|
 | `remember` | `content` (required), `namespace` (default `"default"`), `metadata` (flat JSON object) | Embeds (or stubs) `content` and upserts it into the `mcp_memory` collection. Re-remembering identical content in the same namespace upserts the same point — dedupe by `(namespace, content)` is free. Returns `{id, namespace}`. |
 | `recall` | `query` (required), `namespace` (default `"default"`), `k` (default 5), `filter` (optional, ANDed with the namespace) | BM25-only or hybrid dense+BM25, per the embedder mode. Returns `{hits: [{id, content, score, metadata}]}`. |
-| `forget` | `ids` (required, array of ids) | Deletes memories by id and prunes any namespace left empty; a per-id failure doesn't abort the rest of the batch. Returns `{"deleted":[...],"missing":[...],"errors":[...]}` — `errors` is present only when at least one id failed to delete, so a fully successful call returns just `{deleted, missing}`. Same shape as `delete` below. |
+| `forget` | `ids` (required, array of ids) | Deletes memories by id; a per-id failure doesn't abort the rest of the batch. Returns `{"deleted":[...],"missing":[...],"errors":[...]}` — `errors` is present only when at least one id failed to delete, so a fully successful call returns just `{deleted, missing}`. Same shape as `delete` below. |
 | `list_memories` | `namespace` (default `"default"`), `limit` (default 50, max 500), `cursor` (from a previous call's `next_cursor`) | Pages through a namespace's memories in id order. Returns `{memories: [...], next_cursor}`. |
-| `list_namespaces` | — | Returns `{namespaces: [...]}` from the namespace registry — O(1), not a scan. |
+| `list_namespaces` | — | Returns `{namespaces: [...]}`, sorted. Derived from the memories themselves by scanning the collection, so it always agrees with what `recall`/`list_memories` can find — a namespace exists exactly as long as at least one memory carries it, and forgetting the last one makes it disappear with no separate bookkeeping step. |
 
 Memory hits (`remember`/`recall`/`list_memories`) never carry a `distance`
 field — it has no meaning for BM25-only recall or for a plain listing.
@@ -198,11 +200,33 @@ field — it has no meaning for BM25-only recall or for a plain listing.
 | `search` | `collection` (required), `mode` (`text`\|`dense`\|`hybrid`; default `text` with no embedder, `hybrid` with one), `query_text`, `vector`, `k` (default 10), `filter` | Text search, dense nearest-neighbor, or dense+BM25 hybrid fusion. In `dense`/`hybrid` mode, an omitted `vector` is derived by embedding `query_text` (requires an embedder). Returns `{hits: [{id, content, score, distance, metadata}]}`. |
 | `get` | `collection` (required), `ids` (required), `with_vector` (default `false`) | Fetches points by id. Returns `{points: [{id, content, metadata, vector?}], missing: [...]}`. |
 
-`create_collection`, `upsert`, `delete`, and `delete_by_filter` all refuse the
-`mcp_memory` collection — its schema and reserved metadata fields belong to the
-memory tools above, and a raw write here could corrupt them. Use
-`remember`/`recall`/`forget` instead. Reads (`search`, `get`) are allowed
-through: they have no such hazard.
+!!! warning "Point ids above 2^53 from a JavaScript client"
+
+    Rostam's point ids are full-width `uint64`, but a JSON number in a
+    JavaScript MCP client is an IEEE-754 double — exact only up to
+    2^53−1 (9007199254740991). An id above that is rounded the moment the
+    client parses it, so echoing an id from a `search` result back into
+    `get`, `upsert`, or `delete` would silently name a *different* point.
+
+    For those collections, pass the id as a **decimal string** instead:
+    `{"collection": "docs", "ids": ["18446744073709551000"]}`. Every id
+    argument accepts either form; results always come back as numbers.
+
+    Memory ids (`remember`/`recall`/`list_memories` → `forget`) are generated
+    inside the safe range on purpose, so this never applies to them.
+
+**Every** generic tool — `create_collection`, `upsert`, `search`, `get`,
+`delete`, and `delete_by_filter` — refuses the `mcp_memory` collection. The
+memory tools above are its only interface.
+
+For the writes, the reason is corruption: `mcp_memory`'s schema, reserved
+metadata fields, and embedder-identity bootstrap belong to
+`remember`/`recall`/`forget`. For the reads, the reason is namespace
+isolation: `recall` and `list_memories` always scope their query to one
+namespace and strip the reserved fields out of what they return, while
+`search` and `get` do neither — so allowing them here would let any client
+read every namespace's memories at once, and see the internal field naming
+which namespace each one came from.
 
 ### Destructive tools (only with `-enable-destructive`)
 
