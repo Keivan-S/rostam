@@ -21,6 +21,15 @@ type Scope struct {
 	Temperature float64  // sampling temperature
 	MaxTokens   int      // max output tokens
 	Tenant      string   // caller identity hash (prevents one client's cached answers from being served to another; never a raw credential)
+	// Extra is an opaque discriminator: callers fold in any request surface
+	// that must partition the cache but has no named field here. The fields
+	// above cover what a semantic cache always cares about, and no fixed list
+	// can keep up with a provider's sampling and formatting knobs
+	// (response_format, seed, top_p, stop, frequency_penalty, …) — a request
+	// asking for JSON must not be answered with prose cached from the same
+	// messages. Same contract as Tenant: a hash or short tag, never a raw
+	// credential, since the value rides in cache metadata.
+	Extra string
 }
 
 // key returns a stable hex digest of the scope plus the embedding model. Tool
@@ -46,6 +55,8 @@ func (s Scope) key(embedModel string) string {
 	b.WriteString(strconv.Itoa(s.MaxTokens))
 	b.WriteString("\x00ten=")
 	b.WriteString(s.Tenant)
+	b.WriteString("\x00extra=")
+	b.WriteString(s.Extra)
 
 	return strconv.FormatUint(xxhash.Sum64String(b.String()), 16)
 }

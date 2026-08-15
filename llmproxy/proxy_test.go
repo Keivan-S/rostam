@@ -232,6 +232,106 @@ func TestProxy_TenantIsolation(t *testing.T) {
 	}
 }
 
+// Same messages, different sampling/formatting surface: the proxy used to
+// scope only on temperature and max_tokens, so a response_format:json_object
+// request was answered with prose cached from the identical messages. Each
+// variation must reach upstream on its own.
+func TestProxy_SamplingParamsPartitionTheCache(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	upstream.script(chatPath, scriptedResponse{
+		body: chatCompletionJSON(t, "an answer", "stop", 4),
+	})
+	proxy := newProxy(t, upstream, nil)
+
+	const messages = `"model":"gpt-4","messages":[{"role":"user","content":"list three colors"}]`
+	bodies := []string{
+		`{` + messages + `}`,
+		`{` + messages + `,"response_format":{"type":"json_object"}}`,
+		`{` + messages + `,"seed":7}`,
+		`{` + messages + `,"top_p":0.1}`,
+		`{` + messages + `,"stop":["\n"]}`,
+		`{` + messages + `,"frequency_penalty":1.5}`,
+	}
+
+	for i, body := range bodies {
+		resp, _ := postChat(t, proxy.URL, body, nil)
+		if got := resp.Header.Get("x-rostam-cache"); got != "miss" {
+			t.Fatalf("body %d (%s) x-rostam-cache = %q, want miss (it must not be served another variant's answer)", i, body, got)
+		}
+	}
+	if n := upstream.requestCount(chatPath); n != len(bodies) {
+		t.Fatalf("upstream requests = %d, want %d (every variant must reach upstream)", n, len(bodies))
+	}
+
+	// A repeat of a variant still hits: partitioning must not break caching.
+	resp, _ := postChat(t, proxy.URL, bodies[1], nil)
+	if got := resp.Header.Get("x-rostam-cache"); got != "hit" {
+		t.Fatalf("repeat of the json_object variant x-rostam-cache = %q, want hit", got)
+	}
+
+	// Same request surface, written differently (key order, whitespace) —
+	// still the same cache entry.
+	reordered := `{"response_format":{"type":"json_object"}, "messages":[{"role":"user","content":"list three colors"}] , "model":"gpt-4"}`
+	resp, _ = postChat(t, proxy.URL, reordered, nil)
+	if got := resp.Header.Get("x-rostam-cache"); got != "hit" {
+		t.Fatalf("key-reordered json_object variant x-rostam-cache = %q, want hit (key order is not request surface)", got)
+	}
+	if n := upstream.requestCount(chatPath); n != len(bodies) {
+		t.Fatalf("upstream requests = %d, want still %d", n, len(bodies))
+	}
+}
+
+// stream_options asks for a stream shape a cache replay cannot produce (an
+// extra usage chunk), so such a request is uncacheable passthrough: counted
+// uncacheable, and never stored — a later request without it still misses.
+func TestProxy_StreamOptionsPassesThroughUncacheable(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	upstream.script(chatPath, scriptedResponse{sse: true, lines: basicStreamLines})
+	proxy := newProxy(t, upstream, nil)
+
+	withOptions := `{"model":"gpt-4","stream":true,"stream_options":{"include_usage":true},` +
+		`"messages":[{"role":"user","content":"count my tokens"}]}`
+
+	resp1, body1 := postChat(t, proxy.URL, withOptions, nil)
+	if resp1.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp1.StatusCode)
+	}
+	if got := resp1.Header.Get("x-rostam-cache"); got != "uncacheable" {
+		t.Fatalf("x-rostam-cache = %q, want uncacheable", got)
+	}
+	if got := string(body1); got != strings.Join(basicStreamLines, "") {
+		t.Fatalf("relayed body = %q, want the upstream stream verbatim", got)
+	}
+
+	// Repeat it: still uncacheable, still reaching upstream.
+	postChat(t, proxy.URL, withOptions, nil)
+	if n := upstream.requestCount(chatPath); n != 2 {
+		t.Fatalf("upstream requests = %d, want 2", n)
+	}
+
+	statsResp, statsBody := getStats(t, proxy.URL)
+	if statsResp.StatusCode != http.StatusOK {
+		t.Fatalf("/stats status = %d, want 200", statsResp.StatusCode)
+	}
+	var st struct {
+		Uncacheable float64 `json:"uncacheable"`
+		Stored      float64 `json:"stored"`
+		Misses      float64 `json:"misses"`
+	}
+	if err := json.Unmarshal(statsBody, &st); err != nil {
+		t.Fatalf("unmarshal /stats: %v; body=%s", err, statsBody)
+	}
+	if st.Uncacheable != 2 {
+		t.Fatalf("uncacheable = %v, want 2", st.Uncacheable)
+	}
+	if st.Stored != 0 {
+		t.Fatalf("stored = %v, want 0 (a stream_options request must never be stored)", st.Stored)
+	}
+	if st.Misses != 0 {
+		t.Fatalf("misses = %v, want 0 (an uncacheable request is not a cache miss)", st.Misses)
+	}
+}
+
 // (d) temperature above MaxTemp is uncacheable: the request passes through
 // to upstream and the uncacheable counter grows, but nothing is stored or
 // looked up.
@@ -508,6 +608,78 @@ func TestProxy_StatsAggregatesAcrossRequests(t *testing.T) {
 	}
 	if st.Mode != "exact" {
 		t.Fatalf("mode = %q, want exact", st.Mode)
+	}
+}
+
+// flushCounter is a writer that records how many times it was flushed, so a
+// relay can be checked for incremental delivery without timing anything.
+type flushCounter struct {
+	bytes.Buffer
+	flushes int
+}
+
+func (f *flushCounter) Flush() { f.flushes++ }
+
+// io.Copy hands the destination 32 KiB at a time and never flushes, so a
+// relay built on it alone buffers a "stream" until the copy finishes. The
+// wrapper must flush after every write instead.
+func TestFlushWriter_FlushesAfterEveryWrite(t *testing.T) {
+	fc := &flushCounter{}
+	fw := newFlushWriter(fc)
+
+	chunks := []string{"data: one\n\n", "data: two\n\n", "data: [DONE]\n\n"}
+	for _, c := range chunks {
+		if _, err := io.WriteString(fw, c); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+	}
+
+	if fc.flushes != len(chunks) {
+		t.Fatalf("flushes = %d, want %d (one per write)", fc.flushes, len(chunks))
+	}
+	if got, want := fc.String(), strings.Join(chunks, ""); got != want {
+		t.Fatalf("relayed bytes = %q, want %q", got, want)
+	}
+}
+
+// A destination that can't flush must still be written to, not rejected:
+// these relays have to work on any writer.
+func TestFlushWriter_NonFlusherStillCopies(t *testing.T) {
+	var buf bytes.Buffer
+	if _, err := io.WriteString(newFlushWriter(&buf), "payload"); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if buf.String() != "payload" {
+		t.Fatalf("wrote %q, want %q", buf.String(), "payload")
+	}
+}
+
+// An uncacheable STREAMING request (temperature above the ceiling) takes the
+// passthrough relay, which must still deliver a real SSE stream — flushed
+// chunk by chunk — and label the response uncacheable.
+func TestProxy_UncacheableStreamingRelaysSSE(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	upstream.script(chatPath, scriptedResponse{sse: true, lines: basicStreamLines})
+	proxy := newProxy(t, upstream, nil)
+
+	body := `{"model":"gpt-4","stream":true,"temperature":1.5,` +
+		`"messages":[{"role":"user","content":"be creative"}]}`
+
+	resp, respBody := postChat(t, proxy.URL, body, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if got := resp.Header.Get("x-rostam-cache"); got != "uncacheable" {
+		t.Fatalf("x-rostam-cache = %q, want uncacheable", got)
+	}
+	if got := resp.Header.Get("Content-Type"); got != "text/event-stream" {
+		t.Fatalf("Content-Type = %q, want text/event-stream", got)
+	}
+	if got := string(respBody); got != strings.Join(basicStreamLines, "") {
+		t.Fatalf("relayed body = %q, want the upstream stream verbatim", got)
+	}
+	if got := assembleSSEContent(t, string(respBody)); got != "Hello, world" {
+		t.Fatalf("assembled answer = %q, want %q", got, "Hello, world")
 	}
 }
 

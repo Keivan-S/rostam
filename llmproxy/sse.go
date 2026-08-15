@@ -131,17 +131,24 @@ type sseChunk struct {
 	} `json:"usage"`
 }
 
-// toolCallsPresent reports whether a decoded delta.tool_calls field actually
-// carries tool calls. Several OpenAI-compatible backends (vLLM, Azure) emit
-// "tool_calls": null on ordinary content deltas, and json.RawMessage
-// captures that literal — a bare len(raw) > 0 check would misclassify every
-// such delta as carrying tool calls, wrongly marking plain-text answers
-// uncacheable downstream.
-func toolCallsPresent(raw json.RawMessage) bool {
+// rawFieldPresent reports whether a captured json.RawMessage field carries a
+// value. Absent (len 0) and an explicit null both count as absent: several
+// OpenAI-compatible backends (vLLM, Azure) send "field": null where OpenAI
+// omits the field, and json.RawMessage captures that literal, so a bare
+// len(raw) > 0 check would read every such request or chunk as carrying
+// something it doesn't.
+func rawFieldPresent(raw json.RawMessage) bool {
 	if len(raw) == 0 {
 		return false
 	}
 	return string(bytes.TrimSpace(raw)) != "null"
+}
+
+// toolCallsPresent reports whether a decoded delta.tool_calls field actually
+// carries tool calls — see rawFieldPresent for why an explicit null matters
+// here: misreading it would wrongly mark plain-text answers uncacheable.
+func toolCallsPresent(raw json.RawMessage) bool {
+	return rawFieldPresent(raw)
 }
 
 // scanRawLines is like bufio.ScanLines but keeps each line's terminator

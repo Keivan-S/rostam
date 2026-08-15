@@ -17,14 +17,19 @@ import (
 // original body so it can be forwarded verbatim on a miss or passthrough —
 // the proxy never needs to re-encode a request it didn't answer itself.
 type chatRequest struct {
-	Model       string          `json:"model"`
-	Messages    []chatMessage   `json:"messages"`
-	Temperature *float64        `json:"temperature,omitempty"` // nil => 1.0 (OpenAI default)
-	MaxTokens   int             `json:"max_tokens,omitempty"`
-	N           int             `json:"n,omitempty"`
-	Stream      bool            `json:"stream,omitempty"`
-	Tools       []chatTool      `json:"tools,omitempty"`
-	Raw         json.RawMessage `json:"-"` // original body, forwarded verbatim on miss/passthrough
+	Model       string        `json:"model"`
+	Messages    []chatMessage `json:"messages"`
+	Temperature *float64      `json:"temperature,omitempty"` // nil => 1.0 (OpenAI default)
+	MaxTokens   int           `json:"max_tokens,omitempty"`
+	N           int           `json:"n,omitempty"`
+	Stream      bool          `json:"stream,omitempty"`
+	// StreamOptions (e.g. {"include_usage":true}) changes the SHAPE of the
+	// stream the client expects, which a cache replay cannot reproduce: the
+	// replay emits a fixed three-chunk stream with no usage chunk. Present
+	// (and non-null) => uncacheable passthrough.
+	StreamOptions json.RawMessage `json:"stream_options,omitempty"`
+	Tools         []chatTool      `json:"tools,omitempty"`
+	Raw           json.RawMessage `json:"-"` // original body, forwarded verbatim on miss/passthrough
 }
 
 // chatMessage holds Content undecoded because OpenAI allows either a plain
@@ -94,10 +99,14 @@ func (m chatMessage) contentString() (string, bool) {
 
 // cacheIdentity reduces a request to the prompt text and scope semcache needs
 // to look up or store an answer. It returns ok=false when the request shape
-// isn't safely reducible to text: any message with array-form content, or
-// n > 1 (multiple choices can't be represented by a single cached answer).
+// isn't safely reducible to text: any message with array-form content, n > 1
+// (multiple choices can't be represented by a single cached answer), or
+// stream_options (whose stream shape a replay can't reproduce).
 func (r *chatRequest) cacheIdentity(tenant string) (prompt string, scope semcache.Scope, ok bool) {
 	if r.N > 1 {
+		return "", semcache.Scope{}, false
+	}
+	if rawFieldPresent(r.StreamOptions) {
 		return "", semcache.Scope{}, false
 	}
 
@@ -133,8 +142,46 @@ func (r *chatRequest) cacheIdentity(tenant string) (prompt string, scope semcach
 		Temperature: r.temperature(),
 		MaxTokens:   r.MaxTokens,
 		Tenant:      tenant,
+		Extra:       extraDiscriminator(r.Raw),
 	}
 	return promptBuf.String(), scope, true
+}
+
+// extraDiscriminator hashes everything in the request body that isn't already
+// part of the prompt or the stream decision, so any request knob the proxy
+// doesn't model by name still partitions the cache. Without it, a
+// response_format:json_object request happily received prose cached from the
+// same messages, and seed / top_p / stop / frequency_penalty all silently
+// shared one entry.
+//
+// messages is removed because it IS the prompt; stream and stream_options
+// because a cached answer is deliberately shared between the streaming and
+// non-streaming forms of the same call. Everything else — including fields
+// already in the scope, harmlessly counted twice — is hashed from the
+// unmarshaled map, so two byte-different but semantically equal bodies (key
+// order, whitespace) still agree: Go marshals map keys in sorted order.
+func extraDiscriminator(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		// Unreachable for a body that parsed as a chat request (that needs a
+		// JSON object), but if it ever happens, partition on the raw bytes
+		// rather than let two unrelated requests share a cache entry.
+		return strconv.FormatUint(xxhash.Sum64String(string(raw)), 16)
+	}
+	delete(m, "messages")
+	delete(m, "stream")
+	delete(m, "stream_options")
+	if len(m) == 0 {
+		return ""
+	}
+	canonical, err := json.Marshal(m)
+	if err != nil {
+		return strconv.FormatUint(xxhash.Sum64String(string(raw)), 16)
+	}
+	return strconv.FormatUint(xxhash.Sum64String(string(canonical)), 16)
 }
 
 // synthesizeResponse builds a non-streaming chat-completions response body

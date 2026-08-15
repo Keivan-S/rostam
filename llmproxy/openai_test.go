@@ -197,6 +197,85 @@ func TestCacheIdentity_ScopeFieldsPopulated(t *testing.T) {
 	}
 }
 
+func TestCacheIdentity_StreamOptionsUncacheable(t *testing.T) {
+	for name, body := range map[string]string{
+		"include_usage": `{"model":"gpt-4","messages":[{"role":"user","content":"hi"}],"stream":true,"stream_options":{"include_usage":true}}`,
+		"empty object":  `{"model":"gpt-4","messages":[{"role":"user","content":"hi"}],"stream":true,"stream_options":{}}`,
+	} {
+		req, err := parseChatRequest([]byte(body))
+		if err != nil {
+			t.Fatalf("%s: parseChatRequest: %v", name, err)
+		}
+		if _, _, ok := req.cacheIdentity(""); ok {
+			t.Errorf("%s: cacheIdentity ok = true, want false (a replay can't reproduce the requested stream shape)", name)
+		}
+	}
+
+	// An explicit null is the same as absent — several OpenAI-compatible
+	// backends send it — and must stay cacheable.
+	req, err := parseChatRequest([]byte(`{"model":"gpt-4","messages":[{"role":"user","content":"hi"}],"stream_options":null}`))
+	if err != nil {
+		t.Fatalf("parseChatRequest: %v", err)
+	}
+	if _, _, ok := req.cacheIdentity(""); !ok {
+		t.Fatalf("cacheIdentity ok = false for stream_options:null, want true")
+	}
+}
+
+// extraOf is a test shorthand: parse a body and return the Extra
+// discriminator its scope carries.
+func extraOf(t *testing.T, body string) string {
+	t.Helper()
+	req, err := parseChatRequest([]byte(body))
+	if err != nil {
+		t.Fatalf("parseChatRequest(%s): %v", body, err)
+	}
+	_, scope, ok := req.cacheIdentity("")
+	if !ok {
+		t.Fatalf("cacheIdentity ok = false for %s", body)
+	}
+	return scope.Extra
+}
+
+func TestCacheIdentity_ExtraPartitionsOnSamplingParams(t *testing.T) {
+	const base = `{"model":"gpt-4","messages":[{"role":"user","content":"hi"}]}`
+	baseExtra := extraOf(t, base)
+
+	for name, body := range map[string]string{
+		"response_format":   `{"model":"gpt-4","messages":[{"role":"user","content":"hi"}],"response_format":{"type":"json_object"}}`,
+		"seed":              `{"model":"gpt-4","messages":[{"role":"user","content":"hi"}],"seed":7}`,
+		"top_p":             `{"model":"gpt-4","messages":[{"role":"user","content":"hi"}],"top_p":0.1}`,
+		"stop":              `{"model":"gpt-4","messages":[{"role":"user","content":"hi"}],"stop":["\n"]}`,
+		"frequency_penalty": `{"model":"gpt-4","messages":[{"role":"user","content":"hi"}],"frequency_penalty":1.5}`,
+	} {
+		if got := extraOf(t, body); got == baseExtra {
+			t.Errorf("%s: Extra = %q, same as the base request — the two must not share a cache entry", name, got)
+		}
+	}
+}
+
+func TestCacheIdentity_ExtraIgnoresKeyOrderAndPromptOnlyFields(t *testing.T) {
+	// Byte-different, semantically equal: reordered keys and extra whitespace.
+	a := extraOf(t, `{"model":"gpt-4","seed":7,"messages":[{"role":"user","content":"hi"}],"top_p":0.5}`)
+	b := extraOf(t, `{ "top_p": 0.5, "messages":[{"role":"user","content":"hi"}], "model":"gpt-4",  "seed":7 }`)
+	if a != b {
+		t.Fatalf("Extra = %q vs %q, want equal (key order and whitespace are not request surface)", a, b)
+	}
+
+	// stream and messages are deliberately excluded: the streaming and
+	// non-streaming forms of one call share a cached answer, and the messages
+	// ARE the prompt.
+	plain := extraOf(t, `{"model":"gpt-4","messages":[{"role":"user","content":"hi"}]}`)
+	streamed := extraOf(t, `{"model":"gpt-4","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+	if plain != streamed {
+		t.Fatalf("Extra = %q (plain) vs %q (stream:true), want equal", plain, streamed)
+	}
+	differentPrompt := extraOf(t, `{"model":"gpt-4","messages":[{"role":"user","content":"something else"}]}`)
+	if plain != differentPrompt {
+		t.Fatalf("Extra = %q vs %q, want equal (messages belong to the prompt, not the discriminator)", plain, differentPrompt)
+	}
+}
+
 func TestSynthesizeResponse_RoundTrips(t *testing.T) {
 	body := synthesizeResponse("gpt-4", "the answer", 42)
 

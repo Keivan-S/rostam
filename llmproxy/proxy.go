@@ -175,7 +175,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	prompt, scope, ok := req.cacheIdentity(tenant)
 	if !ok || !s.cache.Cacheable(req.temperature()) {
 		s.stats.uncacheable.Add(1)
-		s.passthroughRequest(w, r, bytes.NewReader(body), int64(len(body)))
+		s.passthroughRequest(w, r, bytes.NewReader(body), int64(len(body)), "uncacheable")
 		return
 	}
 
@@ -358,7 +358,7 @@ func (s *Server) forwardStreamAndMaybeStore(w http.ResponseWriter, r *http.Reque
 
 	isSSE := strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream")
 	if resp.StatusCode != http.StatusOK || !isSSE {
-		if _, err := io.Copy(w, resp.Body); err != nil {
+		if _, err := io.Copy(newFlushWriter(w), resp.Body); err != nil {
 			s.logRelayError("llmproxy: relaying non-SSE stream response", err)
 		}
 		return
@@ -385,8 +385,13 @@ func (s *Server) forwardStreamAndMaybeStore(w http.ResponseWriter, r *http.Reque
 // rather than buffering either — a passthrough route has no chat-completions
 // body cap, so buffering here would let a single client exhaust memory with
 // an arbitrarily large body. contentLength mirrors http.Request.ContentLength
-// (-1 when unknown).
-func (s *Server) passthroughRequest(w http.ResponseWriter, r *http.Request, body io.Reader, contentLength int64) {
+// (-1 when unknown). cacheStatus, when non-empty, is reported to the client as
+// x-rostam-cache; a chat request the cache declined passes "uncacheable" so
+// every chat response carries a cache verdict, while the generic passthrough
+// routes pass "" — they were never cache candidates and claiming a verdict on
+// /v1/models would be noise.
+func (s *Server) passthroughRequest(w http.ResponseWriter, r *http.Request, body io.Reader, contentLength int64,
+	cacheStatus string) {
 	upstreamReq, err := s.newUpstreamRequest(r, body, contentLength)
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadGateway, "building upstream request: "+err.Error(), "upstream_error")
@@ -402,11 +407,14 @@ func (s *Server) passthroughRequest(w http.ResponseWriter, r *http.Request, body
 	defer resp.Body.Close()
 
 	copyHeadersExceptHopByHop(w.Header(), resp.Header)
+	if cacheStatus != "" {
+		w.Header().Set("x-rostam-cache", cacheStatus)
+	}
 	w.WriteHeader(resp.StatusCode)
 	// Stream rather than buffer: passthrough also carries SSE bodies (a
 	// stream:true request that took this branch), and buffering the whole
 	// response would defeat the point of a stream.
-	if _, err := io.Copy(w, resp.Body); err != nil {
+	if _, err := io.Copy(newFlushWriter(w), resp.Body); err != nil {
 		s.logRelayError("llmproxy: relaying passthrough response body", err)
 	}
 }
@@ -418,7 +426,7 @@ func (s *Server) passthroughRequest(w http.ResponseWriter, r *http.Request, body
 // route carries no chat-completions-style size cap, so reading it fully here
 // would be an unbounded allocation driven by whatever the client sends.
 func (s *Server) handlePassthrough(w http.ResponseWriter, r *http.Request) {
-	s.passthroughRequest(w, r, r.Body, r.ContentLength)
+	s.passthroughRequest(w, r, r.Body, r.ContentLength, "")
 }
 
 // newUpstreamRequest builds the request the proxy sends to Upstream for an
@@ -442,6 +450,38 @@ func (s *Server) newUpstreamRequest(r *http.Request, body io.Reader, contentLeng
 	upstreamReq.Host = s.upstream.Host
 	upstreamReq.ContentLength = contentLength
 	return upstreamReq, nil
+}
+
+// flushWriter flushes the destination after every Write. io.Copy on its own
+// hands the http.ResponseWriter 32 KiB at a time and never flushes, so an SSE
+// body relayed through it sits in the response buffer until the copy finishes
+// — the client gets the whole "stream" at the end, which is exactly what a
+// streaming client asked not to happen. Uncacheable and non-SSE relays take
+// that path, so they need the flush too.
+//
+// The flusher is resolved once, at construction, and a writer that cannot
+// flush degrades to a plain copy rather than an error: these relays must keep
+// working on any ResponseWriter.
+type flushWriter struct {
+	w  io.Writer
+	fl http.Flusher
+}
+
+// newFlushWriter wraps w, flushing after each Write when w can flush.
+func newFlushWriter(w io.Writer) *flushWriter {
+	fw := &flushWriter{w: w}
+	if fl, ok := w.(http.Flusher); ok {
+		fw.fl = fl
+	}
+	return fw
+}
+
+func (f *flushWriter) Write(p []byte) (int, error) {
+	n, err := f.w.Write(p)
+	if n > 0 && f.fl != nil {
+		f.fl.Flush()
+	}
+	return n, err
 }
 
 // newChatUpstreamRequest builds the upstream request for a chat-completions
