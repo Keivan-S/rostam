@@ -29,6 +29,35 @@ func newDirStore(t *testing.T, dir string) rostam.Store {
 	return st
 }
 
+// closeOnce returns the explicit close for a session's store plus a guarded
+// t.Cleanup that closes it only if that explicit close never ran.
+//
+// The explicit close is the point of these tests -- they reopen the directory
+// afterwards, so ownership has to be handed over deliberately. But every
+// callTool between here and there can abort with t.Fatalf, and then nothing
+// closes the store: t.TempDir's cleanup deletes the data directory out from
+// under a live one, which is how this repo's nastiest test failures start.
+//
+// The ordering works because the caller takes dir from t.TempDir() BEFORE this
+// runs: cleanups are LIFO, so a cleanup registered later closes the store
+// before the directory is removed.
+func closeOnce(t *testing.T, st rostam.Store) func() {
+	t.Helper()
+	done := false
+	t.Cleanup(func() {
+		if !done {
+			_ = st.Close()
+		}
+	})
+	return func() {
+		t.Helper()
+		if err := st.Close(); err != nil {
+			t.Fatalf("close session one: %v", err)
+		}
+		done = true
+	}
+}
+
 // TestMemorySurvivesReopen is the durability contract the whole memory
 // subsystem exists for: a fact remembered in one process must still be
 // recallable after that process exits and a new one opens the same -data
@@ -40,6 +69,7 @@ func TestMemorySurvivesReopen(t *testing.T) {
 	// Session one: remember two facts in two namespaces, then shut down as a
 	// clean process exit would (Serve returns, then the store closes).
 	st := newDirStore(t, dir)
+	closeSessionOne := closeOnce(t, st)
 	c, stop := startServerStop(t, Config{Store: st})
 	c.initialize()
 	var got struct {
@@ -48,9 +78,7 @@ func TestMemorySurvivesReopen(t *testing.T) {
 	c.callTool("remember", map[string]any{"content": "the deploy key lives in vault under ops/deploy"}, &got, false)
 	c.callTool("remember", map[string]any{"content": "project atlas ships in march", "namespace": "projA"}, nil, false)
 	stop()
-	if err := st.Close(); err != nil {
-		t.Fatalf("close session one: %v", err)
-	}
+	closeSessionOne()
 
 	// Session two: a brand-new store and server over the same directory.
 	st2 := newDirStore(t, dir)
@@ -101,6 +129,7 @@ func TestCreateCollectionPersistsAcrossReopen(t *testing.T) {
 	dir := t.TempDir()
 
 	st := newDirStore(t, dir)
+	closeSessionOne := closeOnce(t, st)
 	c, stop := startServerStop(t, Config{Store: st})
 	c.initialize()
 	c.callTool("create_collection", map[string]any{"name": "docs", "dim": 4}, nil, false)
@@ -111,9 +140,7 @@ func TestCreateCollectionPersistsAcrossReopen(t *testing.T) {
 		"content":    "the runbook for on-call rotations",
 	}, nil, false)
 	stop()
-	if err := st.Close(); err != nil {
-		t.Fatalf("close session one: %v", err)
-	}
+	closeSessionOne()
 
 	st2 := newDirStore(t, dir)
 	defer func() { _ = st2.Close() }()

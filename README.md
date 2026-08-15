@@ -20,7 +20,7 @@ the highest recall measured. → [How it compares](#how-it-compares)
 | **Replicated cluster** | Per-shard Raft, online resharding, backups to S3, RBAC/JWT/mTLS. |
 | **Embedded library** | Import it into a Go binary. No server, no cgo required. |
 
-### Agent memory over MCP
+## Agent memory over MCP
 
 `rostam-server mcp` runs Rostam as an [MCP](https://modelcontextprotocol.io/)
 stdio server, giving Claude Code, Claude Desktop, Cursor, or any MCP client
