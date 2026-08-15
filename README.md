@@ -87,7 +87,7 @@ single-client p99** on the same box and corpus. That is one point on the curve,
 not a uniform uplift — the wire saves a fixed cost per query, so its share
 shrinks as the search itself gets more expensive.
 
-Full per-ef curves, per-engine CPU accounting, the filter case, three paired A/B
+Full per-ef curves, per-engine CPU accounting, the filter case, four paired A/B
 controls and the complete methodology (including where the data cuts *against*
 Rostam) are in
 [**`rostam-bench/vectordbbench`**](https://github.com/rostamlabs/rostam-bench/tree/main/vectordbbench#results).
