@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
@@ -793,6 +794,51 @@ func TestProxy_UncacheableStreamingRelaysSSE(t *testing.T) {
 	}
 	if got := assembleSSEContent(t, string(respBody)); got != "Hello, world" {
 		t.Fatalf("assembled answer = %q, want %q", got, "Hello, world")
+	}
+}
+
+// countingResponseWriter is a real http.ResponseWriter (recorder) that also
+// counts how many times the handler flushed it, so a test can see the relay's
+// delivery behavior from where the client sits.
+type countingResponseWriter struct {
+	*httptest.ResponseRecorder
+	flushes int
+}
+
+func (c *countingResponseWriter) Flush() {
+	c.flushes++
+	c.ResponseRecorder.Flush()
+}
+
+// The flush WIRING, not just the wrapper: drive the uncacheable-streaming
+// path through the real handler and require that the client's writer was
+// flushed. Without newFlushWriter at the relay call sites this counts zero —
+// every chunk would sit in the response buffer until the handler returned,
+// which for a stream:true request is the whole response arriving at once.
+func TestProxy_UncacheableStreamFlushesToTheClient(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	upstream.script(chatPath, scriptedResponse{sse: true, lines: basicStreamLines})
+	srv := newProxyServer(t, upstream, nil)
+
+	body := `{"model":"gpt-4","stream":true,"temperature":1.5,` +
+		`"messages":[{"role":"user","content":"be creative"}]}`
+	req := httptest.NewRequest(http.MethodPost, chatPath, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	w := &countingResponseWriter{ResponseRecorder: httptest.NewRecorder()}
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	if got := w.Header().Get("x-rostam-cache"); got != "uncacheable" {
+		t.Fatalf("x-rostam-cache = %q, want uncacheable", got)
+	}
+	if w.flushes == 0 {
+		t.Fatalf("the relay never flushed: the client would get the whole stream at once, when the handler returns")
+	}
+	if got, want := w.Body.String(), strings.Join(basicStreamLines, ""); got != want {
+		t.Fatalf("relayed body = %q, want %q", got, want)
 	}
 }
 

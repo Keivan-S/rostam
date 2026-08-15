@@ -177,6 +177,16 @@ func (fu *fakeUpstream) handle(w http.ResponseWriter, r *http.Request) {
 // Tasks 5-6's tests.
 func newProxy(t *testing.T, upstream *fakeUpstream, embedder semcache.Embedder) *httptest.Server {
 	t.Helper()
+	proxy := httptest.NewServer(newProxyServer(t, upstream, embedder).Handler())
+	t.Cleanup(proxy.Close)
+	return proxy
+}
+
+// newProxyServer is newProxy without the http listener, for a test that needs
+// to drive Handler() with its own ResponseWriter (to observe flushes, say)
+// rather than talk to it over a real socket.
+func newProxyServer(t *testing.T, upstream *fakeUpstream, embedder semcache.Embedder) *Server {
+	t.Helper()
 
 	if embedder == nil {
 		embedder = semcache.NewStubEmbedder("exact", 64)
@@ -216,10 +226,7 @@ func newProxy(t *testing.T, upstream *fakeUpstream, embedder semcache.Embedder) 
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
-
-	proxy := httptest.NewServer(srv.Handler())
-	t.Cleanup(proxy.Close)
-	return proxy
+	return srv
 }
 
 // postChat POSTs body to proxyURL+"/v1/chat/completions" with headers merged
