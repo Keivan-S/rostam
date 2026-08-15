@@ -39,9 +39,10 @@ reference, client config snippets, and embedder configuration.
 ## LLM response caching
 
 `rostam-server llm-proxy` is an OpenAI-compatible caching reverse proxy:
-change one line (`base_url="http://localhost:8484/v1"`) and every repeated
-chat-completions request is answered from a local semantic cache instead of
-hitting the upstream API. Exact byte-identical matching works out of the
+change one line (`base_url="http://localhost:8484/v1"`) and an eligible
+repeated chat-completions request — cacheable shape, matching scope, and a
+prompt that hits the cache — is answered from a local semantic cache instead
+of hitting the upstream API. Exact byte-identical matching works out of the
 box with no embedding key; pointing it at an OpenAI-compatible embedder
 upgrades it to matching near-duplicate prompts too.
 

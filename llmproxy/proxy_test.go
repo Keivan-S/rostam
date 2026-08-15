@@ -12,9 +12,15 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
+
+	"github.com/rostamlabs/rostam"
+	"github.com/rostamlabs/rostam/ops"
+	"github.com/rostamlabs/rostam/semcache"
 )
 
 const chatPath = "/v1/chat/completions"
@@ -571,6 +577,51 @@ func TestProxy_OversizedChatBodyReturns413(t *testing.T) {
 	}
 }
 
+// An upstream response over the 16 MiB cap is refused with an OpenAI-shaped
+// 502 rather than buffered without bound: the non-streaming cache path reads
+// the whole response to decode and cache it, so nothing bounded the read
+// before this — a misbehaving or compromised upstream could make the proxy
+// allocate arbitrarily. Nothing must reach the client (the response is
+// refused before any header or body is written) and nothing must be cached.
+func TestProxy_OversizedUpstreamResponseReturns502(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	oversized := bytes.Repeat([]byte("x"), maxBodyBytes+1024)
+	upstream.script(chatPath, scriptedResponse{body: oversized})
+	proxy := newProxy(t, upstream, nil)
+
+	body := `{"model":"gpt-4","messages":[{"role":"user","content":"trigger an oversized reply"}]}`
+
+	resp, respBody := postChat(t, proxy.URL, body, nil)
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", resp.StatusCode)
+	}
+
+	var errBody struct {
+		Error struct {
+			Message string `json:"message"`
+			Type    string `json:"type"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(respBody, &errBody); err != nil {
+		t.Fatalf("unmarshal error body: %v; body=%s", err, respBody)
+	}
+	if errBody.Error.Type != "upstream_error" {
+		t.Fatalf("error.type = %q, want upstream_error", errBody.Error.Type)
+	}
+	if errBody.Error.Message == "" {
+		t.Fatalf("error.message is empty")
+	}
+
+	// A repeat must still miss: nothing from the oversized response was cached.
+	resp2, _ := postChat(t, proxy.URL, body, nil)
+	if resp2.StatusCode != http.StatusBadGateway {
+		t.Fatalf("second status = %d, want 502 again (nothing cached)", resp2.StatusCode)
+	}
+	if n := upstream.requestCount(chatPath); n != 2 {
+		t.Fatalf("upstream requests = %d, want 2", n)
+	}
+}
+
 // n > 1 asks for several completions, which one cached answer cannot stand in
 // for: the request passes through uncacheable and nothing is stored.
 func TestProxy_NGreaterThanOnePassesThroughUncacheable(t *testing.T) {
@@ -877,4 +928,162 @@ func getStats(t *testing.T, proxyURL string) (*http.Response, []byte) {
 		t.Fatalf("ReadAll: %v", err)
 	}
 	return resp, body
+}
+
+// ctxCapturingStore wraps a real rostam.Store and, on VectorUpsert, fires
+// triggerCancel (when set) BEFORE inspecting ctx — simulating the client
+// disconnecting at the exact instant the proxy is about to write to the
+// cache, which is the actual race the fix has to survive. Checking
+// cancellation any later than that (e.g. once the whole request has
+// finished) can't tell a real leak apart from a context being canceled
+// afterward simply because it is no longer needed, which the fix does
+// deliberately to release its own timer promptly. Embedding rostam.Store
+// promotes every other method unchanged; only VectorUpsert is intercepted.
+type ctxCapturingStore struct {
+	rostam.Store
+	triggerCancel context.CancelFunc // invoked once, from inside VectorUpsert, before it looks at ctx.Err()
+
+	mu     sync.Mutex
+	called bool
+	ctxErr error // ctx.Err(), observed inside VectorUpsert right after triggerCancel fires
+}
+
+func (s *ctxCapturingStore) VectorUpsert(ctx context.Context, collection string, id uint64, vec []float32, content string, opts rostam.VectorInsertOpts) error {
+	if s.triggerCancel != nil {
+		s.triggerCancel()
+	}
+	s.mu.Lock()
+	s.called = true
+	s.ctxErr = ctx.Err()
+	s.mu.Unlock()
+	return s.Store.VectorUpsert(ctx, collection, id, vec, content, opts)
+}
+
+// wasCalled reports whether VectorUpsert ran, and the ctx.Err() observed at
+// the moment it did (immediately after triggerCancel, if any).
+func (s *ctxCapturingStore) wasCalled() (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.called, s.ctxErr
+}
+
+// newProxyServerCtxCapturing is newProxyServer with the backing store swapped
+// for a ctxCapturingStore, so a test can inspect what context a cache Store
+// call actually received rather than only its success/failure — heap-mode
+// VectorUpsert ignores its ctx argument entirely, so success/failure alone
+// can't distinguish a decoupled context from the request's own.
+func newProxyServerCtxCapturing(t *testing.T, upstream *fakeUpstream) (*Server, *ctxCapturingStore) {
+	t.Helper()
+
+	reg := ops.NewRegistry()
+	if err := ops.RegisterBuiltins(reg); err != nil {
+		t.Fatalf("RegisterBuiltins: %v", err)
+	}
+	backing, err := rostam.NewDirect(rostam.DirectConfig{Ops: reg})
+	if err != nil {
+		t.Fatalf("NewDirect: %v", err)
+	}
+	t.Cleanup(func() { _ = backing.Close() })
+	wrapped := &ctxCapturingStore{Store: backing}
+
+	cache, err := semcache.New(context.Background(), semcache.Config{
+		Store:      wrapped,
+		Embedder:   semcache.NewStubEmbedder("exact", 64),
+		Collection: "llm-cache",
+		Threshold:  0.999,
+		MaxTemp:    1.0,
+	})
+	if err != nil {
+		t.Fatalf("semcache.New: %v", err)
+	}
+
+	upstreamURL, err := url.Parse(upstream.srv.URL)
+	if err != nil {
+		t.Fatalf("parse upstream URL: %v", err)
+	}
+
+	srv, err := NewServer(Config{Cache: cache, Upstream: upstreamURL, Mode: "exact"})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	return srv, wrapped
+}
+
+// A client disconnecting right as the proxy is about to write the cache
+// entry must not silently lose that write. net/http cancels r.Context() when
+// the client goes away, and the store call runs after the response is
+// already written to the client, so a context taken straight from
+// r.Context() would race the client's own cancel — exactly the moment
+// ctxCapturingStore's triggerCancel simulates by canceling the request's
+// context from inside VectorUpsert, immediately before it looks at ctx.Err().
+func TestProxy_StoreContextSurvivesClientCancel(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	upstream.script(chatPath, scriptedResponse{body: chatCompletionJSON(t, "the answer", "stop", 5)})
+	srv, wrapped := newProxyServerCtxCapturing(t, upstream)
+
+	body := `{"model":"gpt-4","messages":[{"role":"user","content":"disconnect right as it stores"}]}`
+	ctx, cancel := context.WithCancel(context.Background())
+	wrapped.triggerCancel = cancel
+	req := httptest.NewRequest(http.MethodPost, chatPath, strings.NewReader(body)).WithContext(ctx)
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	called, ctxErr := wrapped.wasCalled()
+	if !called {
+		t.Fatal("VectorUpsert was never called: a clean miss must be stored")
+	}
+	if ctxErr != nil {
+		t.Fatalf("ctx.Err() inside VectorUpsert = %v, want nil: the request's own context was canceled at the same instant, so a context taken straight from it would report this error", ctxErr)
+	}
+
+	// And the entry is actually there: a follow-up identical request hits.
+	req2 := httptest.NewRequest(http.MethodPost, chatPath, strings.NewReader(body))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w2, req2)
+	if got := w2.Header().Get("x-rostam-cache"); got != "hit" {
+		t.Fatalf("follow-up x-rostam-cache = %q, want hit (the store must have survived the client's cancel)", got)
+	}
+}
+
+// The streaming counterpart: a streaming client routinely closes its
+// connection the instant it reads [DONE], right as forwardStreamAndMaybeStore
+// is about to call Store — the case the fix's rationale calls out as worst.
+func TestProxy_StreamingStoreContextSurvivesClientCancel(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	upstream.script(chatPath, scriptedResponse{sse: true, lines: basicStreamLines})
+	srv, wrapped := newProxyServerCtxCapturing(t, upstream)
+
+	body := `{"model":"gpt-4","stream":true,"messages":[{"role":"user","content":"stream then disconnect at [DONE]"}]}`
+	ctx, cancel := context.WithCancel(context.Background())
+	wrapped.triggerCancel = cancel
+	req := httptest.NewRequest(http.MethodPost, chatPath, strings.NewReader(body)).WithContext(ctx)
+	req.Header.Set("Content-Type", "application/json")
+
+	w := &countingResponseWriter{ResponseRecorder: httptest.NewRecorder()}
+	srv.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	called, ctxErr := wrapped.wasCalled()
+	if !called {
+		t.Fatal("VectorUpsert was never called: a clean stream to [DONE] must be stored")
+	}
+	if ctxErr != nil {
+		t.Fatalf("ctx.Err() inside VectorUpsert = %v, want nil: the request's own context was canceled at the same instant, so a context taken straight from it would report this error", ctxErr)
+	}
+
+	req2 := httptest.NewRequest(http.MethodPost, chatPath, strings.NewReader(body))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w2, req2)
+	if got := w2.Header().Get("x-rostam-cache"); got != "hit" {
+		t.Fatalf("follow-up x-rostam-cache = %q, want hit (the store must have survived the client's cancel)", got)
+	}
 }

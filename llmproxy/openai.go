@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/cespare/xxhash/v2"
 
@@ -187,12 +188,16 @@ func extraDiscriminator(raw json.RawMessage) string {
 // synthesizeResponse builds a non-streaming chat-completions response body
 // for a cache hit, in the exact shape a real OpenAI response would have so
 // clients can't tell the difference. prompt_tokens is always 0 because the
-// prompt was never sent upstream on a hit.
+// prompt was never sent upstream on a hit. created is the synthesis time
+// (Unix seconds), not the original completion's — OpenAI's SDKs treat a
+// missing created as an error-shaped response, so a synthesized reply needs
+// *a* timestamp even though the real one was never recorded.
 func synthesizeResponse(model, answer string, outTokens int) []byte {
 	resp := map[string]any{
-		"id":     "rostam-cache",
-		"object": "chat.completion",
-		"model":  model,
+		"id":      "rostam-cache",
+		"object":  "chat.completion",
+		"created": time.Now().Unix(),
+		"model":   model,
 		"choices": []map[string]any{
 			{
 				"index": 0,

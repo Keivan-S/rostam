@@ -69,6 +69,7 @@ type chunkChoice struct {
 type chunk struct {
 	ID      string        `json:"id"`
 	Object  string        `json:"object"`
+	Created int64         `json:"created"`
 	Model   string        `json:"model"`
 	Choices []chunkChoice `json:"choices"`
 }
@@ -97,6 +98,9 @@ func TestReplayAsSSE_ParsesAsThreeChunksThenDone(t *testing.T) {
 	if roleChunk.Object != "chat.completion.chunk" {
 		t.Fatalf("chunk 0 object = %q, want chat.completion.chunk", roleChunk.Object)
 	}
+	if roleChunk.Created == 0 {
+		t.Fatalf("chunk 0 created = %d, want a non-zero Unix timestamp", roleChunk.Created)
+	}
 	if roleChunk.Model != "gpt-4" {
 		t.Fatalf("chunk 0 model = %q, want gpt-4", roleChunk.Model)
 	}
@@ -111,6 +115,9 @@ func TestReplayAsSSE_ParsesAsThreeChunksThenDone(t *testing.T) {
 	if content, _ := contentChunk.Choices[0].Delta["content"].(string); content != "hello world" {
 		t.Fatalf("chunk 1 delta.content = %q, want hello world", content)
 	}
+	if contentChunk.Created != roleChunk.Created {
+		t.Fatalf("chunk 1 created = %d, want %d (same as chunk 0 — one timestamp for the whole stream)", contentChunk.Created, roleChunk.Created)
+	}
 
 	var finishChunk chunk
 	if err := json.Unmarshal([]byte(events[2]), &finishChunk); err != nil {
@@ -118,6 +125,9 @@ func TestReplayAsSSE_ParsesAsThreeChunksThenDone(t *testing.T) {
 	}
 	if finishChunk.Choices[0].FinishReason != "stop" {
 		t.Fatalf("chunk 2 finish_reason = %q, want stop", finishChunk.Choices[0].FinishReason)
+	}
+	if finishChunk.Created != roleChunk.Created {
+		t.Fatalf("chunk 2 created = %d, want %d (same as chunk 0 — one timestamp for the whole stream)", finishChunk.Created, roleChunk.Created)
 	}
 }
 

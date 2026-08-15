@@ -2,11 +2,14 @@
 
 `rostam-server llm-proxy` runs Rostam as an OpenAI-compatible caching reverse
 proxy: point your existing OpenAI SDK or `curl` calls at it instead of
-`api.openai.com`, and every chat-completions request that repeats a prior
-prompt is answered from a local semantic cache instead of hitting the
-upstream API — zero generation cost, no round trip. Everything else (every
-other `/v1/*` route, and any chat request the cache can't safely answer) is
-forwarded to the real upstream verbatim.
+`api.openai.com`, and an **eligible** chat-completions request — one with a
+cacheable shape, a matching [scope](#what-forms-the-cache-key), and a prompt
+that hits the cache (byte-identical to a prior prompt in exact mode; a
+near-duplicate within the configured threshold in semantic mode) — is
+answered from a local semantic cache instead of hitting the upstream API —
+zero generation cost, no round trip. Everything else (every other `/v1/*`
+route, and any chat request the cache can't safely answer or that doesn't
+match) is forwarded to the real upstream verbatim.
 
 With no embedding endpoint configured it still does useful work out of the
 box: exact byte-identical prompts are cached and served locally, no API key

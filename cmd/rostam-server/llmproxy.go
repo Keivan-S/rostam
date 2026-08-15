@@ -11,7 +11,9 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	rostam "github.com/rostamlabs/rostam"
@@ -142,14 +144,47 @@ func runLlmProxyCmd(args []string) {
 		Addr:    fl.listen,
 		Handler: rt.handler,
 		// ReadHeaderTimeout closes the classic slowloris window (a client that
-		// dribbles request headers). ReadTimeout/WriteTimeout are deliberately
-		// left at 0 (no limit): a streaming chat completion legitimately holds
-		// the connection open for as long as the upstream keeps producing SSE
-		// chunks, which can run well past any fixed request timeout.
+		// dribbles request headers). ReadTimeout bounds the body-read phase so
+		// a slow-body client can't hold a handler goroutine open forever; 5
+		// minutes is generous even on a poor connection for the 16 MiB
+		// chat-completions body cap (llmproxy.maxBodyBytes), and it is the
+		// only bound the uncapped passthrough routes get. IdleTimeout closes a
+		// keep-alive connection that goes quiet between requests. WriteTimeout
+		// is deliberately left at 0 (no limit): a streaming chat completion
+		// legitimately holds the connection open for as long as the upstream
+		// keeps producing SSE chunks, which can run well past any fixed
+		// timeout — bounding writes would cut off a real response, not just a
+		// slow client.
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       5 * time.Minute,
+		IdleTimeout:       2 * time.Minute,
 	}
 	slog.Info("llm-proxy: serving", "addr", fl.listen, "upstream", fl.upstream, "mode", rt.mode, "collection", fl.collection)
-	serveErr := srv.ListenAndServe()
+
+	// Same reasoning as runMcpCmd: SIGINT/SIGTERM default to killing the
+	// process immediately, before the close below flushes engine state. An
+	// in-flight streaming relay deserves the same clean-shutdown treatment as
+	// an in-flight tool call, so Shutdown is given a bounded window to let
+	// active requests finish rather than cutting them off mid-response.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- srv.ListenAndServe() }()
+
+	var serveErr error
+	select {
+	case serveErr = <-serveDone:
+	case <-sigCh:
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			slog.Error("llm-proxy: shutdown", "err", err)
+		}
+		cancel()
+		serveErr = <-serveDone
+	}
+
 	// Close before unlocking, same ordering as runMcpCmd: the store's own
 	// shutdown may still write to the data dir, so releasing the lock first
 	// would let a waiting process in mid-write.

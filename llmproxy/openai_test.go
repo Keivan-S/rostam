@@ -310,6 +310,9 @@ func TestSynthesizeResponse_RoundTrips(t *testing.T) {
 	if raw["model"] != "gpt-4" {
 		t.Fatalf("model = %v, want gpt-4", raw["model"])
 	}
+	if created, ok := raw["created"].(float64); !ok || created == 0 {
+		t.Fatalf("created = %v, want a non-zero Unix timestamp", raw["created"])
+	}
 	usage, _ := raw["usage"].(map[string]any)
 	if usage["prompt_tokens"] != float64(0) {
 		t.Fatalf("prompt_tokens = %v, want 0", usage["prompt_tokens"])

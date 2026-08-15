@@ -274,10 +274,22 @@ func (s *Server) forwardAndMaybeStore(w http.ResponseWriter, r *http.Request, re
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	respBody, err := io.ReadAll(resp.Body)
+	// Bounded the same way the incoming request body is (maxBodyBytes): this
+	// path buffers the whole response to decode and cache it, so an unbounded
+	// ReadAll here would let a misbehaving or compromised upstream make the
+	// proxy allocate without limit. Read one byte past the cap so an
+	// exactly-at-the-limit body isn't mistaken for an oversized one.
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes+1))
 	if err != nil {
 		s.logRelayError("llmproxy: reading upstream response", err)
 		writeOpenAIError(w, http.StatusBadGateway, "reading upstream response: "+err.Error(), "upstream_error")
+		return
+	}
+	if len(respBody) > maxBodyBytes {
+		// Nothing has been written to w yet, so this is still a clean error
+		// response rather than a truncated one.
+		s.log.Error("llmproxy: upstream response exceeds the maximum allowed size", "limit", maxBodyBytes)
+		writeOpenAIError(w, http.StatusBadGateway, "upstream response exceeds the maximum allowed size", "upstream_error")
 		return
 	}
 
@@ -287,7 +299,15 @@ func (s *Server) forwardAndMaybeStore(w http.ResponseWriter, r *http.Request, re
 	_, _ = w.Write(respBody)
 
 	if resp.StatusCode == http.StatusOK {
-		s.maybeStore(r.Context(), prompt, scope, respBody)
+		// Store on a context decoupled from the client's: net/http cancels
+		// r.Context() once the client disconnects, which can race the write
+		// above (a client that hangs up the instant it has its answer), and a
+		// canceled Store call would silently drop an otherwise-good cache
+		// entry. WithoutCancel keeps any request-scoped values while shedding
+		// the cancellation; the 30s timeout is its own independent bound.
+		sctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 30*time.Second)
+		s.maybeStore(sctx, prompt, scope, respBody)
+		cancel()
 	}
 }
 
@@ -370,7 +390,14 @@ func (s *Server) forwardStreamAndMaybeStore(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if err := s.cache.Store(r.Context(), prompt, scope, result.content.String(), result.completionTokens); err != nil {
+	// Same reasoning as forwardAndMaybeStore: decouple Store from the
+	// client's request context, worst here of all — a streaming client
+	// routinely closes its connection the instant it reads [DONE], right as
+	// this call is about to run.
+	sctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 30*time.Second)
+	err = s.cache.Store(sctx, prompt, scope, result.content.String(), result.completionTokens)
+	cancel()
+	if err != nil {
 		s.log.Error("llmproxy: cache store failed", "err", err)
 		return
 	}

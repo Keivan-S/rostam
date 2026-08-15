@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // sseMaxLine bounds a single upstream SSE line, matching mcp/jsonrpc.go's
@@ -74,27 +75,35 @@ func replayAsSSE(w http.ResponseWriter, model, answer string) error {
 		return err
 	}
 
+	// One timestamp shared across every chunk in the stream, the way a real
+	// upstream stream carries the same created value from its first chunk to
+	// its last — one call to time.Now, not one per chunk.
+	created := time.Now().Unix()
+
 	chunks := []map[string]any{
 		{
-			"id":     "rostam-cache",
-			"object": "chat.completion.chunk",
-			"model":  model,
+			"id":      "rostam-cache",
+			"object":  "chat.completion.chunk",
+			"created": created,
+			"model":   model,
 			"choices": []map[string]any{
 				{"index": 0, "delta": map[string]any{"role": "assistant"}},
 			},
 		},
 		{
-			"id":     "rostam-cache",
-			"object": "chat.completion.chunk",
-			"model":  model,
+			"id":      "rostam-cache",
+			"object":  "chat.completion.chunk",
+			"created": created,
+			"model":   model,
 			"choices": []map[string]any{
 				{"index": 0, "delta": map[string]any{"content": answer}},
 			},
 		},
 		{
-			"id":     "rostam-cache",
-			"object": "chat.completion.chunk",
-			"model":  model,
+			"id":      "rostam-cache",
+			"object":  "chat.completion.chunk",
+			"created": created,
+			"model":   model,
 			"choices": []map[string]any{
 				{"index": 0, "delta": map[string]any{}, "finish_reason": "stop"},
 			},
