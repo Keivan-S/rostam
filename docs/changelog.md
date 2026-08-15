@@ -3,7 +3,69 @@
 Notable user-visible changes. Entries that alter existing behaviour are marked
 **Breaking** and say what to do about it.
 
-## Unreleased
+## v0.2.0 — 2026-08-15
+
+### The MCP server: agent memory with nothing to set up
+
+`rostam-server mcp` runs Rostam as a [Model Context
+Protocol](https://modelcontextprotocol.io/) server over stdio, giving Claude
+Code, Claude Desktop, Cursor or any MCP client persistent agent memory and
+generic vector-DB tools:
+
+```sh
+claude mcp add rostam -- rostam-server mcp
+```
+
+There is no daemon and no account. The process embeds the engine directly and
+persists to `~/.rostam/memory`, so the agent has durable memory seconds after
+the command above.
+
+**It works with no embedder at all.** `remember` and `recall` run on the
+built-in BM25 index, so there is no API key and no external service in the
+default path — the usual reason an agent-memory tool cannot be tried in one
+command. Pointing it at any OpenAI-compatible `/embeddings` endpoint (OpenAI,
+Azure, Ollama, LM Studio, TEI, LiteLLM) upgrades recall to hybrid dense+BM25:
+set `ROSTAM_EMBED_ENDPOINT`, `ROSTAM_EMBED_MODEL` and `ROSTAM_EMBED_DIM`
+together — the endpoint alone is a configuration error and refuses to start,
+naming the variable it is missing. The tools and their call shapes do not
+change; only how well results rank.
+
+Five memory tools (`remember`, `recall`, `forget`, `list_memories`,
+`list_namespaces`) and four collection tools (`create_collection`, `upsert`,
+`search`, `get`) are always registered. `delete` and `delete_by_filter` are
+**absent from `tools/list`** unless `-enable-destructive` is passed, rather
+than present and refusing — a model cannot call a tool it cannot see.
+
+`-connect host:port` runs the tools against a remote `rostam-server` over the
+binary TCP protocol instead of embedding the engine, with the usual
+token/mTLS options. Full tool reference and client config: [MCP
+server](server/mcp.md).
+
+### The LLM caching proxy
+
+`rostam-server llm-proxy` is an OpenAI-compatible caching reverse proxy: point
+an existing OpenAI SDK client at it instead of `api.openai.com`, and a chat
+completion that **hits** the cache is answered locally, at no generation cost
+and without the round trip. A cacheable request that misses is still forwarded
+and still costs what it always did — eligibility decides whether the cache is
+consulted, not whether you pay.
+
+Anything the cache cannot answer is forwarded upstream verbatim: every other
+`/v1/*` route, and any chat request whose shape or scope makes it uncacheable.
+The two exceptions are handled locally rather than passed on — a chat body over
+the size limit gets a `413`, and one that will not parse gets a `400`.
+
+Like the MCP server it is useful before you configure anything: with no
+embedder, byte-identical prompts are served from cache. With one, it upgrades
+to semantic matching, so a reworded or differently-whitespaced prompt *may* hit
+as well — subject to the same eligibility and cache-identity rules, and to the
+configured similarity threshold.
+
+Chat responses carry an `x-rostam-cache` header (`hit`, `miss`, `uncacheable`,
+`bypass`) so it is visible which requests are still costing generation tokens.
+Generic passthrough routes such as `/v1/models` deliberately omit it — they
+were never cache candidates, and a verdict there would be noise. See [LLM
+caching proxy](server/llm-proxy.md).
 
 ### Breaking: NaN no longer matches range filters
 
