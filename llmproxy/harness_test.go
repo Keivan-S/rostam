@@ -3,6 +3,7 @@
 package llmproxy
 
 import (
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"io"
@@ -39,6 +40,11 @@ type scriptedResponse struct {
 	sse     bool
 	lines   []string // raw SSE lines (including "\n"), written+flushed one at a time
 	abort   bool     // stop after writing lines without a clean close (Task 6 use)
+	// gzipIfAccepted makes the fake behave like every real OpenAI-compatible
+	// endpoint: compress body whenever the request says it accepts gzip. Only
+	// a fake that does this can catch a proxy that reads a compressed body as
+	// if it were JSON.
+	gzipIfAccepted bool
 }
 
 // fakeUpstream is a scriptable stand-in for the real OpenAI-compatible
@@ -150,6 +156,16 @@ func (fu *fakeUpstream) handle(w http.ResponseWriter, r *http.Request) {
 	if status == 0 {
 		status = http.StatusOK
 	}
+
+	if resp.gzipIfAccepted && strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+		w.Header().Set("Content-Encoding", "gzip")
+		w.WriteHeader(status)
+		zw := gzip.NewWriter(w)
+		_, _ = zw.Write(resp.body)
+		_ = zw.Close()
+		return
+	}
+
 	w.WriteHeader(status)
 	_, _ = w.Write(resp.body)
 }

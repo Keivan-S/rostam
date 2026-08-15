@@ -3,10 +3,16 @@
 package llmproxy
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -143,6 +149,61 @@ func TestProxy_ThirtyTwoBitCollidingPromptsDoNotCrossHit(t *testing.T) {
 	}
 	if n := upstream.requestCount(chatPath); n != 2 {
 		t.Fatalf("upstream requests = %d, want 2 (both prompts must reach upstream)", n)
+	}
+}
+
+// A client that advertises gzip must still get its answers cached. The proxy
+// used to forward the client's Accept-Encoding, which suppressed Go's
+// transparent decompression, so maybeStore was handed raw gzip bytes and the
+// JSON decode failed on every single response — and openai-python sends
+// "Accept-Encoding: gzip, deflate" by default, so that was the common case.
+func TestProxy_GzipAcceptingClientStillGetsCached(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	upstream.script(chatPath, scriptedResponse{
+		body:           chatCompletionJSON(t, "compressed answer", "stop", 6),
+		gzipIfAccepted: true,
+	})
+	proxy := newProxy(t, upstream, nil)
+
+	body := `{"model":"gpt-4","messages":[{"role":"user","content":"compress me"}]}`
+	headers := map[string]string{"Accept-Encoding": "gzip, deflate"}
+
+	resp1, body1 := postChat(t, proxy.URL, body, headers)
+	if resp1.StatusCode != http.StatusOK {
+		t.Fatalf("first request status = %d, want 200", resp1.StatusCode)
+	}
+	if got := resp1.Header.Get("x-rostam-cache"); got != "miss" {
+		t.Fatalf("first request x-rostam-cache = %q, want miss", got)
+	}
+	// The client must receive decodable JSON, not the gzip frame.
+	var decoded1 chatResponse
+	if err := json.Unmarshal(body1, &decoded1); err != nil {
+		t.Fatalf("client could not decode the relayed body: %v; body=%q", err, body1)
+	}
+
+	// The upstream must have been asked with the transport's OWN gzip header,
+	// not the client's — that is what buys transparent decompression.
+	captured := upstream.lastRequest(chatPath)
+	if captured == nil {
+		t.Fatalf("upstream never saw %s", chatPath)
+	}
+	if got := captured.Headers.Get("Accept-Encoding"); got != "gzip" {
+		t.Fatalf("upstream Accept-Encoding = %q, want %q (the client's header must not be forwarded on a cached path)", got, "gzip")
+	}
+
+	resp2, body2 := postChat(t, proxy.URL, body, headers)
+	if got := resp2.Header.Get("x-rostam-cache"); got != "hit" {
+		t.Fatalf("second request x-rostam-cache = %q, want hit (a gzip-accepting client's response must still be stored)", got)
+	}
+	if n := upstream.requestCount(chatPath); n != 1 {
+		t.Fatalf("upstream requests = %d, want 1 (the second request must be served from the cache)", n)
+	}
+	var decoded2 chatResponse
+	if err := json.Unmarshal(body2, &decoded2); err != nil {
+		t.Fatalf("unmarshal cached response: %v", err)
+	}
+	if len(decoded2.Choices) != 1 || decoded2.Choices[0].Message.Content != "compressed answer" {
+		t.Fatalf("cached response content = %+v, want %q", decoded2.Choices, "compressed answer")
 	}
 }
 
@@ -447,6 +508,28 @@ func TestProxy_StatsAggregatesAcrossRequests(t *testing.T) {
 	}
 	if st.Mode != "exact" {
 		t.Fatalf("mode = %q, want exact", st.Mode)
+	}
+}
+
+// A client hanging up mid-response (context.Canceled, however wrapped) is
+// normal traffic on a streaming proxy, so it must not be logged as an ERROR;
+// anything else still is.
+func TestLogRelayError_ClientCancelLogsAtDebug(t *testing.T) {
+	var buf bytes.Buffer
+	s := &Server{log: slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))}
+
+	for _, err := range []error{context.Canceled, fmt.Errorf("llmproxy: relay: %w", context.Canceled)} {
+		buf.Reset()
+		s.logRelayError("llmproxy: relaying", err)
+		if got := buf.String(); !strings.Contains(got, "level=DEBUG") || strings.Contains(got, "level=ERROR") {
+			t.Fatalf("logRelayError(%v) logged %q, want DEBUG", err, got)
+		}
+	}
+
+	buf.Reset()
+	s.logRelayError("llmproxy: relaying", errors.New("connection reset by peer"))
+	if got := buf.String(); !strings.Contains(got, "level=ERROR") {
+		t.Fatalf("logRelayError(real failure) logged %q, want ERROR", got)
 	}
 }
 

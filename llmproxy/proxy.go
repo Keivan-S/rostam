@@ -232,6 +232,19 @@ func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, req
 	}
 }
 
+// logRelayError reports a failure while relaying bytes between upstream and
+// the client. A canceled context means the client hung up mid-response —
+// pressing stop in a chat UI does exactly that, and on a streaming proxy it
+// is routine, not a fault — so it is logged at Debug rather than filling an
+// operator's error stream with normal user behavior.
+func (s *Server) logRelayError(msg string, err error) {
+	if errors.Is(err, context.Canceled) {
+		s.log.Debug(msg, "err", err)
+		return
+	}
+	s.log.Error(msg, "err", err)
+}
+
 // isMaxBytesError reports whether err came from http.MaxBytesReader's limit,
 // across Go versions that either expose *http.MaxBytesError or a plain
 // "http: request body too large" message.
@@ -250,7 +263,7 @@ func (s *Server) forwardAndMaybeStore(w http.ResponseWriter, r *http.Request, re
 	prompt string, scope semcache.Scope, cacheStatus string) {
 	s.stats.misses.Add(1)
 
-	upstreamReq, err := s.newUpstreamRequest(r, bytes.NewReader(req.Raw), int64(len(req.Raw)))
+	upstreamReq, err := s.newChatUpstreamRequest(r, bytes.NewReader(req.Raw), int64(len(req.Raw)))
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadGateway, "building upstream request: "+err.Error(), "upstream_error")
 		return
@@ -266,7 +279,7 @@ func (s *Server) forwardAndMaybeStore(w http.ResponseWriter, r *http.Request, re
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		s.log.Error("llmproxy: reading upstream response", "err", err)
+		s.logRelayError("llmproxy: reading upstream response", err)
 		writeOpenAIError(w, http.StatusBadGateway, "reading upstream response: "+err.Error(), "upstream_error")
 		return
 	}
@@ -325,7 +338,7 @@ func (s *Server) forwardStreamAndMaybeStore(w http.ResponseWriter, r *http.Reque
 	prompt string, scope semcache.Scope, cacheStatus string) {
 	s.stats.misses.Add(1)
 
-	upstreamReq, err := s.newUpstreamRequest(r, bytes.NewReader(req.Raw), int64(len(req.Raw)))
+	upstreamReq, err := s.newChatUpstreamRequest(r, bytes.NewReader(req.Raw), int64(len(req.Raw)))
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadGateway, "building upstream request: "+err.Error(), "upstream_error")
 		return
@@ -346,14 +359,14 @@ func (s *Server) forwardStreamAndMaybeStore(w http.ResponseWriter, r *http.Reque
 	isSSE := strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream")
 	if resp.StatusCode != http.StatusOK || !isSSE {
 		if _, err := io.Copy(w, resp.Body); err != nil {
-			s.log.Error("llmproxy: relaying non-SSE stream response", "err", err)
+			s.logRelayError("llmproxy: relaying non-SSE stream response", err)
 		}
 		return
 	}
 
 	result, err := relayAndCapture(w, resp.Body)
 	if err != nil {
-		s.log.Error("llmproxy: relaying streamed response", "err", err)
+		s.logRelayError("llmproxy: relaying streamed response", err)
 		return
 	}
 	if !result.clean || result.finishReason != "stop" || result.sawToolCalls || result.content.Len() == 0 {
@@ -394,7 +407,7 @@ func (s *Server) passthroughRequest(w http.ResponseWriter, r *http.Request, body
 	// stream:true request that took this branch), and buffering the whole
 	// response would defeat the point of a stream.
 	if _, err := io.Copy(w, resp.Body); err != nil {
-		s.log.Error("llmproxy: relaying passthrough response body", "err", err)
+		s.logRelayError("llmproxy: relaying passthrough response body", err)
 	}
 }
 
@@ -428,6 +441,29 @@ func (s *Server) newUpstreamRequest(r *http.Request, body io.Reader, contentLeng
 	copyHeadersExceptHopByHop(upstreamReq.Header, r.Header)
 	upstreamReq.Host = s.upstream.Host
 	upstreamReq.ContentLength = contentLength
+	return upstreamReq, nil
+}
+
+// newChatUpstreamRequest builds the upstream request for a chat-completions
+// call whose response the proxy has to READ (to cache it), which the client's
+// own Accept-Encoding must not govern.
+//
+// Go's transport adds "Accept-Encoding: gzip" and transparently decompresses
+// the reply ONLY when it set that header itself. Forwarding the client's
+// header suppresses that, so the proxy would be handed raw compressed bytes —
+// and every openai-python call sends "Accept-Encoding: gzip, deflate", making
+// the JSON decode fail and nothing ever get cached for the clients that
+// matter most. Dropping the header lets the transport negotiate and
+// decompress; the response relayed onward is then plain (Go strips
+// Content-Encoding and Content-Length when it decompresses), which any client
+// accepts. The generic passthrough route keeps the header verbatim: nothing
+// there is parsed or cached, so the bytes should stay exactly as negotiated.
+func (s *Server) newChatUpstreamRequest(r *http.Request, body io.Reader, contentLength int64) (*http.Request, error) {
+	upstreamReq, err := s.newUpstreamRequest(r, body, contentLength)
+	if err != nil {
+		return nil, err
+	}
+	upstreamReq.Header.Del("Accept-Encoding")
 	return upstreamReq, nil
 }
 
