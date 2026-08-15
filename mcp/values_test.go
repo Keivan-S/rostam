@@ -88,7 +88,9 @@ func TestMemoryIDIsJSSafe(t *testing.T) {
 // TestMemoryIDStillDedupes: masking must not break the reason the id is
 // derived from the content in the first place.
 func TestMemoryIDStillDedupes(t *testing.T) {
-	if memoryID("ns", "same fact") != memoryID("ns", "same fact") {
+	first := memoryID("ns", "same fact")
+	again := memoryID("ns", "same fact")
+	if first != again {
 		t.Fatal("the same (namespace, content) must give the same id")
 	}
 	if memoryID("a", "fact") == memoryID("b", "fact") {
