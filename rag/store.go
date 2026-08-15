@@ -6,7 +6,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
+	"github.com/rostamlabs/rostam"
 	"github.com/rostamlabs/rostam/vector"
 )
 
@@ -126,6 +128,95 @@ func (e *EmbeddedRetriever) DeleteBySource(_ context.Context, corpus, source str
 }
 
 func (e *EmbeddedRetriever) Close() error { return e.store.Close() }
+
+// HTTPRetriever talks to a running rostam server over the network (the
+// client package's wire protocol — NOT plain HTTP, despite the endpoint
+// flag's name) via the root rostam.Store interface, for the CLI's
+// --endpoint mode.
+type HTTPRetriever struct {
+	store rostam.Store
+	dim   int // 0 => BM25-only; used to size a placeholder vector-less collection
+}
+
+// NewHTTPRetriever constructs a client pointed at endpoint (a "host:port"
+// bootstrap server address; the smart client discovers the rest of the
+// cluster's topology from there).
+func NewHTTPRetriever(endpoint string) (*HTTPRetriever, error) {
+	s, err := rostam.NewClient(rostam.ClientConfig{Servers: []string{endpoint}})
+	if err != nil {
+		return nil, err
+	}
+	return &HTTPRetriever{store: s}, nil
+}
+
+func (h *HTTPRetriever) EnsureCorpus(ctx context.Context, name string, dim int) error {
+	h.dim = dim
+	// Mirrors EmbeddedRetriever.EnsureCorpus: BM25-only corpora still need a
+	// collection; give it dim=1 so no real vectors are ever inserted but the
+	// full-text index is live.
+	d := dim
+	if d <= 0 {
+		d = 1
+	}
+	cfg := rostam.VectorConfig{
+		Dim: d, Metric: vector.Cosine, M: 16, EfConstruction: 200, EfSearch: 64, Seed: 1,
+		FullText: &vector.FullTextConfig{},
+	}
+	if err := h.store.CreateCollection(ctx, name, cfg); err != nil {
+		// Treat "already exists" as success so re-ingest is idempotent. Over the
+		// wire the error is a reconstructed value whose chain does not survive
+		// the RPC round trip, so errors.Is alone won't match a networked
+		// CreateCollection failure — fall back to the message the server sends,
+		// mirroring mcp.isCollectionExists.
+		if errors.Is(err, vector.ErrCollectionExists) || strings.Contains(err.Error(), "collection already exists") {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+func (h *HTTPRetriever) Upsert(ctx context.Context, corpus string, chunks []StoredChunk) error {
+	for _, c := range chunks {
+		meta := rostam.VectorMetadata{
+			"source": vector.NewString(c.Source),
+			"chunk":  vector.NewInt(int64(c.Index)),
+		}
+		vec := c.Vector
+		if vec == nil && h.dim <= 0 {
+			// BM25-only corpora are sized Dim=1; pad with a zero vector so the
+			// engine's length check (len(vec) != Dim) doesn't reject the write.
+			vec = make([]float32, 1)
+		}
+		if err := h.store.VectorUpsert(ctx, corpus, c.ID, vec, c.Content, rostam.VectorInsertOpts{Metadata: meta}); err != nil {
+			return fmt.Errorf("rag: upsert id %d: %w", c.ID, err)
+		}
+	}
+	// Unlike EmbeddedRetriever there is no local Flush: durability of a
+	// networked write is the server's concern (Raft/WAL), not the client's.
+	return nil
+}
+
+func (h *HTTPRetriever) Search(ctx context.Context, corpus, queryText string, queryVec []float32, k int) ([]Hit, error) {
+	var docs []rostam.VectorDocument
+	var err error
+	if len(queryVec) > 0 {
+		docs, _, err = h.store.VectorSearchDocs(ctx, corpus, queryVec, k, rostam.VectorSearchOpts{})
+	} else {
+		docs, _, err = h.store.VectorSearchText(ctx, corpus, queryText, k, rostam.VectorSearchOpts{})
+	}
+	if err != nil {
+		return nil, err
+	}
+	return docsToHits(docs), nil
+}
+
+func (h *HTTPRetriever) DeleteBySource(ctx context.Context, corpus, source string) (int, error) {
+	f := rostam.VectorFilter{Op: vector.FilterEq, Field: "source", Value: vector.NewString(source)}
+	return h.store.VectorDeleteByFilter(ctx, corpus, f)
+}
+
+func (h *HTTPRetriever) Close() error { return h.store.Close() }
 
 // docsToHits maps engine documents to Hits, pulling source/chunk back out of
 // metadata (both were written as tagged values in Upsert).
