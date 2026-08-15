@@ -198,6 +198,21 @@ field — it has no meaning for BM25-only recall or for a plain listing.
 | `search` | `collection` (required), `mode` (`text`\|`dense`\|`hybrid`; default `text` with no embedder, `hybrid` with one), `query_text`, `vector`, `k` (default 10), `filter` | Text search, dense nearest-neighbor, or dense+BM25 hybrid fusion. In `dense`/`hybrid` mode, an omitted `vector` is derived by embedding `query_text` (requires an embedder). Returns `{hits: [{id, content, score, distance, metadata}]}`. |
 | `get` | `collection` (required), `ids` (required), `with_vector` (default `false`) | Fetches points by id. Returns `{points: [{id, content, metadata, vector?}], missing: [...]}`. |
 
+!!! warning "Point ids above 2^53 from a JavaScript client"
+
+    Rostam's point ids are full-width `uint64`, but a JSON number in a
+    JavaScript MCP client is an IEEE-754 double — exact only up to
+    2^53−1 (9007199254740991). An id above that is rounded the moment the
+    client parses it, so echoing an id from a `search` result back into
+    `get`, `upsert`, or `delete` would silently name a *different* point.
+
+    For those collections, pass the id as a **decimal string** instead:
+    `{"collection": "docs", "ids": ["18446744073709551000"]}`. Every id
+    argument accepts either form; results always come back as numbers.
+
+    Memory ids (`remember`/`recall`/`list_memories` → `forget`) are generated
+    inside the safe range on purpose, so this never applies to them.
+
 **Every** generic tool — `create_collection`, `upsert`, `search`, `get`,
 `delete`, and `delete_by_filter` — refuses the `mcp_memory` collection. The
 memory tools above are its only interface.

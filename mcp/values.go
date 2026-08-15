@@ -3,12 +3,73 @@
 package mcp
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/rostamlabs/rostam"
 	"github.com/rostamlabs/rostam/vector"
 )
+
+// jsonID is a point id as it arrives on the tool wire: a JSON number OR a
+// decimal string. It is emitted as a number (its underlying uint64 marshals
+// that way), so existing clients see no change in what comes back.
+//
+// The engine's ids are full-width uint64, but a JSON number in a JavaScript
+// MCP client — which is most of them — is an IEEE-754 double, exact only up to
+// 2^53-1. An id above that is rounded the moment it is parsed, so a client
+// that reads an id out of a search result and hands it to get, upsert, or
+// delete would silently be naming a different point than the one it saw.
+// Accepting the decimal string form gives those clients a way to say the exact
+// id; ids the MCP server generates itself are kept inside the safe range (see
+// memoryID) so the common path never needs it.
+type jsonID uint64
+
+func (id *jsonID) UnmarshalJSON(b []byte) error {
+	s := string(bytes.TrimSpace(b))
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		var str string
+		if err := json.Unmarshal(b, &str); err != nil {
+			return fmt.Errorf("mcp: bad point id %s: %w", b, err)
+		}
+		s = strings.TrimSpace(str)
+	}
+	v, err := strconv.ParseUint(s, 10, 64)
+	if err != nil {
+		return fmt.Errorf("mcp: %s is not a valid point id: want a JSON number or a decimal string, both within uint64", b)
+	}
+	*id = jsonID(v)
+	return nil
+}
+
+// idsToUint64 converts decoded wire ids to the engine's type.
+func idsToUint64(ids []jsonID) []uint64 {
+	out := make([]uint64, len(ids))
+	for i, id := range ids {
+		out[i] = uint64(id)
+	}
+	return out
+}
+
+// idSchema is the JSON Schema fragment for one point id, and idsSchema for an
+// array of them. Both advertise the string alternative so a client knows the
+// escape hatch exists without having to read the docs.
+func idSchema(description string) map[string]any {
+	return map[string]any{
+		"type":        []any{"integer", "string"},
+		"description": description + `; a JSON number, or a decimal string for ids above 2^53-1 (which a JavaScript client cannot represent exactly as a number)`,
+	}
+}
+
+func idsSchema(description string) map[string]any {
+	return map[string]any{
+		"type":        "array",
+		"items":       map[string]any{"type": []any{"integer", "string"}},
+		"description": description + `; each id is a JSON number, or a decimal string for ids above 2^53-1`,
+	}
+}
 
 // jsonToMetadata converts a JSON object (already split into per-key raw
 // messages, as received in tool call params) into engine metadata. Each

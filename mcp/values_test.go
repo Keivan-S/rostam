@@ -4,11 +4,97 @@ package mcp
 
 import (
 	"encoding/json"
+	"math"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/rostamlabs/rostam/vector"
 )
+
+// TestJSONIDAcceptsNumberAndString pins the two input forms. The engine's ids
+// are full-width uint64, but a JavaScript client's JSON number is a double, so
+// anything above 2^53-1 needs the decimal-string form to survive the trip.
+func TestJSONIDAcceptsNumberAndString(t *testing.T) {
+	const big = uint64(1)<<63 + 12345 // far above any double's exact range
+	for _, tc := range []struct {
+		in   string
+		want uint64
+		bad  bool
+	}{
+		{in: `7`, want: 7},
+		{in: `"7"`, want: 7},
+		{in: `0`, want: 0},
+		{in: `"0"`, want: 0},
+		{in: strconv.FormatUint(big, 10), want: big},
+		{in: `"` + strconv.FormatUint(big, 10) + `"`, want: big},
+		{in: `"18446744073709551615"`, want: math.MaxUint64},
+		{in: `-1`, bad: true},
+		{in: `"-1"`, bad: true},
+		{in: `1.5`, bad: true},
+		{in: `"abc"`, bad: true},
+		{in: `""`, bad: true},
+		{in: `"18446744073709551616"`, bad: true}, // one past uint64
+		{in: `null`, bad: true},
+		{in: `[1]`, bad: true},
+	} {
+		var got jsonID
+		err := json.Unmarshal([]byte(tc.in), &got)
+		if tc.bad {
+			if err == nil {
+				t.Fatalf("jsonID(%s) = %d, want an error", tc.in, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("jsonID(%s): %v", tc.in, err)
+		}
+		if uint64(got) != tc.want {
+			t.Fatalf("jsonID(%s) = %d, want %d", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestJSONIDMarshalsAsNumber: accepting the string form on input must not
+// change what goes back out — results keep emitting plain JSON numbers.
+func TestJSONIDMarshalsAsNumber(t *testing.T) {
+	b, err := json.Marshal(map[string]jsonID{"id": 42})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if string(b) != `{"id":42}` {
+		t.Fatalf("got %s, want a plain number", b)
+	}
+}
+
+// TestMemoryIDIsJSSafe: a generated memory id is handed to the client and
+// comes straight back to forget. A JavaScript client parses it as a double, so
+// an id above 2^53-1 would round and forget would report the memory missing.
+func TestMemoryIDIsJSSafe(t *testing.T) {
+	for _, ns := range []string{"default", "projA", "", "a-longer-namespace-name"} {
+		for i := range 2000 {
+			id := memoryID(ns, "fact number "+strconv.Itoa(i))
+			if id > jsSafeIDMask {
+				t.Fatalf("memoryID(%q, %d) = %d exceeds 2^53-1", ns, i, id)
+			}
+			// The real contract: it survives a round trip through a double.
+			if uint64(float64(id)) != id {
+				t.Fatalf("memoryID(%q, %d) = %d does not round-trip through float64", ns, i, id)
+			}
+		}
+	}
+}
+
+// TestMemoryIDStillDedupes: masking must not break the reason the id is
+// derived from the content in the first place.
+func TestMemoryIDStillDedupes(t *testing.T) {
+	if memoryID("ns", "same fact") != memoryID("ns", "same fact") {
+		t.Fatal("the same (namespace, content) must give the same id")
+	}
+	if memoryID("a", "fact") == memoryID("b", "fact") {
+		t.Fatal("the same content in different namespaces should not collide")
+	}
+}
 
 func TestJSONToMetadataScalars(t *testing.T) {
 	raw := map[string]json.RawMessage{

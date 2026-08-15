@@ -3,6 +3,7 @@
 package mcp
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -249,6 +250,69 @@ func TestGenericToolsSurviveMisbehavingEmbedder(t *testing.T) {
 		t.Fatalf("search error should name the embed step, got %q", msg)
 	}
 	c.rpc("ping", nil, false) // the session is still alive
+}
+
+// TestIDsAcceptStringForm is the round trip a JavaScript client needs for a
+// collection whose ids are above 2^53-1: it cannot put such an id in a JSON
+// number without rounding it, so upsert/get/delete take the decimal string
+// form too. Results still come back as numbers.
+func TestIDsAcceptStringForm(t *testing.T) {
+	const big = uint64(1)<<62 + 7 // not exactly representable as a float64
+	bigStr := strconv.FormatUint(big, 10)
+
+	c := startServer(t, Config{Store: newHeapStore(t), Destructive: true})
+	c.initialize()
+	c.callTool("create_collection", map[string]any{"name": "docs", "dim": 4}, nil, false)
+
+	var up struct {
+		ID uint64 `json:"id"`
+	}
+	c.callTool("upsert", map[string]any{
+		"collection": "docs", "id": bigStr,
+		"vector": []float32{1, 0, 0, 0}, "content": "the exact point",
+	}, &up, false)
+	if up.ID != big {
+		t.Fatalf("upsert echoed id %d, want the exact %d", up.ID, big)
+	}
+
+	// Fetch it back by the string form, and by the number form — the same
+	// point either way, because neither ever went through a float.
+	for _, form := range []any{bigStr, big} {
+		var got struct {
+			Points []struct {
+				ID      uint64 `json:"id"`
+				Content string `json:"content"`
+			} `json:"points"`
+			Missing []uint64 `json:"missing"`
+		}
+		c.callTool("get", map[string]any{"collection": "docs", "ids": []any{form}}, &got, false)
+		if len(got.Points) != 1 || got.Points[0].ID != big {
+			t.Fatalf("get(%v): points = %+v, missing = %v", form, got.Points, got.Missing)
+		}
+		if got.Points[0].Content != "the exact point" {
+			t.Fatalf("get(%v) returned the wrong point: %+v", form, got.Points[0])
+		}
+	}
+
+	var del struct {
+		Deleted []uint64 `json:"deleted"`
+	}
+	c.callTool("delete", map[string]any{"collection": "docs", "ids": []any{bigStr}}, &del, false)
+	if len(del.Deleted) != 1 || del.Deleted[0] != big {
+		t.Fatalf("delete by string id: %+v", del.Deleted)
+	}
+}
+
+// TestBadIDIsAToolError: a malformed id must fail the call with a message that
+// says what a valid id looks like, not decode to some silent zero.
+func TestBadIDIsAToolError(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t)})
+	c.initialize()
+	c.callTool("create_collection", map[string]any{"name": "docs", "dim": 4}, nil, false)
+	msg := c.callTool("get", map[string]any{"collection": "docs", "ids": []any{"not-a-number"}}, nil, true)
+	if !strings.Contains(msg, "point id") {
+		t.Fatalf("error should explain what a point id may be, got %q", msg)
+	}
 }
 
 func TestDestructiveToolsAbsentByDefault(t *testing.T) {

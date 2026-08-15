@@ -199,11 +199,27 @@ func firstEmbedding(vecs [][]float32) ([]float32, error) {
 	return vecs[0], nil
 }
 
+// jsSafeIDMask keeps a generated id inside the range JSON numbers represent
+// exactly (2^53-1). See memoryID.
+const jsSafeIDMask = uint64(1)<<53 - 1
+
 // memoryID derives a memory's point id from its namespace and content, so
 // remembering the same fact twice (in the same namespace) upserts the same
 // point instead of accumulating duplicates.
+//
+// The hash is masked down to 53 bits because the id is handed straight back to
+// the client and comes straight back to forget. Most MCP clients are
+// JavaScript, where a JSON number is an IEEE-754 double: a full-width uint64
+// id is rounded on parse, so the id a client echoes into forget would not be
+// the id it was given, and the memory would come back "missing". 53 bits is
+// where that stops being possible.
+//
+// The narrower space costs nothing real here: 2^53 is about 9x10^15 ids, so
+// even a memory store of a hundred million facts sits far below the birthday
+// threshold, and a collision only ever affects a (namespace, content) pair
+// that would have deduped anyway.
 func memoryID(ns, content string) uint64 {
-	return xxhash.Sum64String(ns + "\x00" + content)
+	return xxhash.Sum64String(ns+"\x00"+content) & jsSafeIDMask
 }
 
 // memoryHit is one recalled (or listed, Task 5) memory: its id, content,
