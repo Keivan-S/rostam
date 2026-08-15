@@ -1318,8 +1318,52 @@ func (s *CollectionStore) HybridSearch(name string, dense []float32, sparse Spar
 	return c.HybridSearch(dense, sparse, k, opts)
 }
 
+// FlushPersistent flushes every Persistent collection's instant-restart
+// sidecar, and reports the joined failures rather than the first.
+//
+// A Persistent collection keeps its vectors and level-0 graph in mmap files, so
+// those bytes already survive process exit — but the sidecar that makes them
+// *readable* again (per-slot ids, node levels, edge lengths, entry point) is
+// only ever written by Flush. Without one, reopening the collection yields a
+// fresh empty index, so an embedded caller that never flushes gets the mmap
+// files' cost and none of their benefit. This is the shutdown hook a caller
+// needs to honour the "callers control persistence explicitly via Flush"
+// contract for a whole store at once, without reaching into each collection's
+// config to find out which ones care.
+//
+// Non-persistent collections are deliberately skipped: their Flush writes a full
+// snapshot, which is a caller's explicit choice, not something a shutdown should
+// do behind their back. WAL collections are skipped for the opposite reason —
+// every op is already logged, so replay reconstructs them without a checkpoint.
+func (s *CollectionStore) FlushPersistent() error {
+	// A heap-mode store's scratch dir goes away with it at Close, so every byte
+	// written here would be deleted moments later.
+	if s.ephemeralDir {
+		return nil
+	}
+	// Names are snapshotted under the lock and flushed outside it: Flush itself
+	// takes the store lock via Acquire, and serializing a large index can be slow
+	// enough that holding the write lock across it would stall every reader.
+	s.mu.RLock()
+	names := make([]string, 0, len(s.collections))
+	for name, c := range s.collections {
+		if c.cfg.Persistent && !c.cfg.WAL {
+			names = append(names, name)
+		}
+	}
+	s.mu.RUnlock()
+
+	var errs []error
+	for _, name := range names {
+		if err := s.Flush(name); err != nil {
+			errs = append(errs, fmt.Errorf("vector: flushing persistent collection %q: %w", name, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // Close releases the in-memory collections (callers control persistence
-// explicitly via Flush before Close).
+// explicitly via Flush — or FlushPersistent — before Close).
 func (s *CollectionStore) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
