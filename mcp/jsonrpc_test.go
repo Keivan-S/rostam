@@ -46,6 +46,61 @@ func TestConnMalformedLineIsErrLineNotFatal(t *testing.T) {
 	}
 }
 
+// TestRequestValidateEnvelope pins the envelope rules a successful decode does
+// NOT give you: the version string has to be exactly "2.0", a method has to be
+// present, and the id has to be one of the shapes the spec allows.
+func TestRequestValidateEnvelope(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		line string
+		ok   bool
+	}{
+		{"good", `{"jsonrpc":"2.0","id":1,"method":"ping"}`, true},
+		{"good string id", `{"jsonrpc":"2.0","id":"abc","method":"ping"}`, true},
+		{"good null id", `{"jsonrpc":"2.0","id":null,"method":"ping"}`, true},
+		{"notification", `{"jsonrpc":"2.0","method":"notifications/initialized"}`, true},
+		{"wrong version", `{"jsonrpc":"1.0","id":1,"method":"ping"}`, false},
+		{"missing version", `{"id":1,"method":"ping"}`, false},
+		{"missing method", `{"jsonrpc":"2.0","id":1}`, false},
+		{"empty method", `{"jsonrpc":"2.0","id":1,"method":""}`, false},
+		{"object id", `{"jsonrpc":"2.0","id":{"a":1},"method":"ping"}`, false},
+		{"array id", `{"jsonrpc":"2.0","id":[1],"method":"ping"}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var req request
+			if err := json.Unmarshal([]byte(tc.line), &req); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			err := req.validate()
+			if tc.ok && err != nil {
+				t.Fatalf("validate(%s) = %v, want nil", tc.line, err)
+			}
+			if !tc.ok && err == nil {
+				t.Fatalf("validate(%s) = nil, want an Invalid Request", tc.line)
+			}
+		})
+	}
+}
+
+// TestErrorIDNormalizes covers the id echoed back on an Invalid Request:
+// present and well-formed ids are preserved so a client can match the failure
+// to the request; absent or malformed ones become null.
+func TestErrorIDNormalizes(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{`7`, `7`},
+		{`"abc"`, `"abc"`},
+		{`null`, `null`},
+		{`{"a":1}`, `null`},
+	} {
+		if got := string(errorID(json.RawMessage(tc.in))); got != tc.want {
+			t.Fatalf("errorID(%s) = %s, want %s", tc.in, got, tc.want)
+		}
+	}
+	if got := string(errorID(nil)); got != "null" {
+		t.Fatalf("errorID(absent) = %s, want null", got)
+	}
+}
+
 func TestConnReplyWritesOneLine(t *testing.T) {
 	var out strings.Builder
 	c := newConn(strings.NewReader(""), &out)

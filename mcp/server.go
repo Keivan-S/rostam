@@ -106,6 +106,16 @@ func (s *Server) Serve(r io.Reader, w io.Writer) error {
 		case err != nil:
 			return err
 		}
+		// Envelope validation runs BEFORE the notification check: an object
+		// with a broken envelope cannot be trusted to be a notification just
+		// because its id did not parse, so it is answered (with a null id
+		// where none was usable) rather than silently swallowed.
+		if verr := req.validate(); verr != nil {
+			if werr := c.replyError(errorID(req.ID), codeInvalidRequest, "invalid request: "+verr.Error()); werr != nil {
+				return werr
+			}
+			continue
+		}
 		if req.ID == nil { // notification: never answered
 			continue
 		}
