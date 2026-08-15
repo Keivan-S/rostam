@@ -178,14 +178,16 @@ func (s *Server) handleDelete(ctx context.Context, raw json.RawMessage) (any, er
 			missing = append(missing, id)
 		}
 	}
-	return deleteResult{Deleted: deleted, Missing: missing, Errors: errs}, nil
+	return deleteResult{Deleted: idsOut(deleted), Missing: idsOut(missing), Errors: errs}, nil
 }
 
 // deleteResult is the delete tool's response shape. Errors is omitted on
-// full success; when present, each entry names the id it came from.
+// full success; when present, each entry names the id it came from. Deleted
+// and Missing hold idOut values (see its doc comment): a JSON number for
+// most ids, a decimal string above 2^53-1.
 type deleteResult struct {
-	Deleted []uint64 `json:"deleted"`
-	Missing []uint64 `json:"missing"`
+	Deleted []any    `json:"deleted"`
+	Missing []any    `json:"missing"`
 	Errors  []string `json:"errors,omitempty"`
 }
 
@@ -349,7 +351,7 @@ func (s *Server) handleUpsert(ctx context.Context, raw json.RawMessage) (any, er
 	if err := s.store.VectorUpsert(ctx, args.Collection, id, vec, args.Content, rostam.VectorInsertOpts{Metadata: md}); err != nil {
 		return nil, fmt.Errorf("mcp: upsert: %w", err)
 	}
-	return map[string]any{"id": id}, nil
+	return map[string]any{"id": idOut(id)}, nil
 }
 
 // searchArgs is the search tool's decoded input.
@@ -401,7 +403,7 @@ func (s *Server) handleSearch(ctx context.Context, raw json.RawMessage) (any, er
 		if err != nil {
 			return nil, fmt.Errorf("mcp: search: %w", err)
 		}
-		return map[string]any{"hits": docsToHits(docs)}, nil
+		return map[string]any{"hits": hitsOut(docsToHits(docs))}, nil
 
 	case "dense":
 		vec, err := s.searchVector(ctx, args.Vector, args.QueryText)
@@ -412,7 +414,7 @@ func (s *Server) handleSearch(ctx context.Context, raw json.RawMessage) (any, er
 		if err != nil {
 			return nil, fmt.Errorf("mcp: search: %w", err)
 		}
-		return map[string]any{"hits": docsToHits(docs)}, nil
+		return map[string]any{"hits": hitsOut(docsToHits(docs))}, nil
 
 	case "hybrid":
 		vec, err := s.searchVector(ctx, args.Vector, args.QueryText)
@@ -423,7 +425,7 @@ func (s *Server) handleSearch(ctx context.Context, raw json.RawMessage) (any, er
 		if err != nil {
 			return nil, fmt.Errorf("mcp: search: %w", err)
 		}
-		return map[string]any{"hits": hits}, nil
+		return map[string]any{"hits": hitsOut(hits)}, nil
 
 	default:
 		return nil, fmt.Errorf("mcp: search: unknown mode %q (want text, dense, or hybrid)", mode)
@@ -472,6 +474,28 @@ func docsToHits(docs []rostam.VectorDocument) []searchHit {
 		hits[i] = searchHit{ID: d.ID, Content: d.Content, Score: d.Score, Distance: d.Distance, Metadata: metadataToJSON(d.Metadata)}
 	}
 	return hits
+}
+
+// searchHitOut is a searchHit as it goes on the wire for the *generic*
+// search tool: same shape, but ID has been through idOut so a big id
+// arrives as a decimal string instead of a rounded number. memory.go's
+// recallHybrid shares searchHit/hybridDocs directly and narrows to
+// memoryHit itself (memory ids are always in the safe range, so it never
+// needs this conversion); hitsOut is only for the generic tool's response.
+type searchHitOut struct {
+	ID       any            `json:"id"`
+	Content  string         `json:"content"`
+	Score    float32        `json:"score"`
+	Distance float32        `json:"distance"`
+	Metadata map[string]any `json:"metadata,omitempty"`
+}
+
+func hitsOut(hits []searchHit) []searchHitOut {
+	out := make([]searchHitOut, len(hits))
+	for i, h := range hits {
+		out[i] = searchHitOut{ID: idOut(h.ID), Content: h.Content, Score: h.Score, Distance: h.Distance, Metadata: h.Metadata}
+	}
+	return out
 }
 
 // hybridDocs runs a dense+BM25 fusion search against collection and joins
@@ -527,7 +551,7 @@ type getArgs struct {
 
 // getPoint is one point returned by the get tool.
 type getPoint struct {
-	ID       uint64         `json:"id"`
+	ID       any            `json:"id"`
 	Vector   []float32      `json:"vector,omitempty"`
 	Content  string         `json:"content"`
 	Metadata map[string]any `json:"metadata,omitempty"`
@@ -559,14 +583,11 @@ func (s *Server) handleGet(ctx context.Context, raw json.RawMessage) (any, error
 		if cv, ok := p.Meta["$content"]; ok && cv.Kind == vector.ValueString {
 			content = cv.Str
 		}
-		gp := getPoint{ID: p.ID, Content: content, Metadata: metadataToJSON(p.Meta)}
+		gp := getPoint{ID: idOut(p.ID), Content: content, Metadata: metadataToJSON(p.Meta)}
 		if args.WithVector {
 			gp.Vector = p.Vec
 		}
 		out[i] = gp
 	}
-	if missing == nil {
-		missing = []uint64{}
-	}
-	return map[string]any{"points": out, "missing": missing}, nil
+	return map[string]any{"points": out, "missing": idsOut(missing)}, nil
 }

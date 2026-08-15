@@ -55,8 +55,11 @@ func TestJSONIDAcceptsNumberAndString(t *testing.T) {
 	}
 }
 
-// TestJSONIDMarshalsAsNumber: accepting the string form on input must not
-// change what goes back out — results keep emitting plain JSON numbers.
+// TestJSONIDMarshalsAsNumber pins jsonID's own (incidental) marshal
+// behavior: it has no custom MarshalJSON, so its underlying uint64 always
+// writes as a plain number. That's fine because jsonID is decode-only — no
+// generic tool result marshals one directly; see TestIDOutBoundary for the
+// type that actually decides a result id's wire form.
 func TestJSONIDMarshalsAsNumber(t *testing.T) {
 	b, err := json.Marshal(map[string]jsonID{"id": 42})
 	if err != nil {
@@ -64,6 +67,45 @@ func TestJSONIDMarshalsAsNumber(t *testing.T) {
 	}
 	if string(b) != `{"id":42}` {
 		t.Fatalf("got %s, want a plain number", b)
+	}
+}
+
+// TestIDOutBoundary pins idOut's decision at the jsSafeIDMask boundary: a
+// number at or below it stays a JSON number, one above it becomes a decimal
+// string. This is what keeps a big id round-trip-safe through a JavaScript
+// client (see idOut's doc comment) — get it backwards and either small ids
+// grow needless quotes or big ids silently go back to rounding.
+func TestIDOutBoundary(t *testing.T) {
+	for _, id := range []uint64{0, 1, jsSafeIDMask} {
+		out := idOut(id)
+		n, ok := out.(uint64)
+		if !ok || n != id {
+			t.Fatalf("idOut(%d) = %#v (%T), want the uint64 %d", id, out, out, id)
+		}
+	}
+	for _, id := range []uint64{jsSafeIDMask + 1, math.MaxUint64} {
+		out := idOut(id)
+		s, ok := out.(string)
+		if !ok || s != strconv.FormatUint(id, 10) {
+			t.Fatalf("idOut(%d) = %#v (%T), want the decimal string %q", id, out, out, strconv.FormatUint(id, 10))
+		}
+	}
+
+	// Round-trip through the actual wire encoding: below the boundary must
+	// decode as a JSON number (float64), above it as a string.
+	b, err := json.Marshal(map[string]any{"lo": idOut(jsSafeIDMask), "hi": idOut(jsSafeIDMask + 1)})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if _, ok := m["lo"].(float64); !ok {
+		t.Fatalf("lo = %#v (%T), want a JSON number", m["lo"], m["lo"])
+	}
+	if _, ok := m["hi"].(string); !ok {
+		t.Fatalf("hi = %#v (%T), want a JSON string", m["hi"], m["hi"])
 	}
 }
 
@@ -88,7 +130,9 @@ func TestMemoryIDIsJSSafe(t *testing.T) {
 // TestMemoryIDStillDedupes: masking must not break the reason the id is
 // derived from the content in the first place.
 func TestMemoryIDStillDedupes(t *testing.T) {
-	if memoryID("ns", "same fact") != memoryID("ns", "same fact") {
+	first := memoryID("ns", "same fact")
+	again := memoryID("ns", "same fact")
+	if first != again {
 		t.Fatal("the same (namespace, content) must give the same id")
 	}
 	if memoryID("a", "fact") == memoryID("b", "fact") {

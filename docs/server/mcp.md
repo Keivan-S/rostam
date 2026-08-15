@@ -210,7 +210,12 @@ field — it has no meaning for BM25-only recall or for a plain listing.
 
     For those collections, pass the id as a **decimal string** instead:
     `{"collection": "docs", "ids": ["18446744073709551000"]}`. Every id
-    argument accepts either form; results always come back as numbers.
+    argument accepts either form, and the round trip is safe in both
+    directions: a generic tool's result (`upsert`'s `id`, `get`'s `points`
+    and `missing`, `delete`'s `deleted` and `missing`, `search`'s hit `id`)
+    gives back a plain number for an id within the safe range and a decimal
+    string above it, so an id read out of one response can always be fed
+    back into another call without rounding.
 
     Memory ids (`remember`/`recall`/`list_memories` → `forget`) are generated
     inside the safe range on purpose, so this never applies to them.
