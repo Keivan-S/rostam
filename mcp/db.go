@@ -11,8 +11,9 @@ import (
 	"github.com/rostamlabs/rostam/vector"
 )
 
-// rejectMemoryCollection guards the write tools (create_collection, upsert)
-// against touching mcp_memory directly: that collection's schema, reserved
+// rejectMemoryCollection guards the four mutating tools (create_collection,
+// upsert, delete, delete_by_filter) against touching mcp_memory directly:
+// that collection's schema, reserved
 // metadata fields, and embedder-identity bootstrap are all owned by the
 // remember/recall/forget tools in memory.go, and a raw write here could
 // corrupt them. Reads (search, get) have no such hazard and are allowed

@@ -29,6 +29,15 @@ import (
 // from an operator explicitly asking for heap mode).
 const mcpDataAuto = "auto"
 
+// errDataDirBusy marks the one lockDataDir failure that means what the lock
+// exists to catch: another process already holds the data dir. Every other
+// failure (a path that cannot be created, a read-only filesystem) is ordinary
+// I/O and must not be reported as a conflict — a caller told to go looking for
+// a second rostam-server that does not exist has been sent the wrong way.
+// Declared here rather than in mcplock_unix.go so the platform variants do not
+// each need their own copy.
+var errDataDirBusy = errors.New("data directory is held by another process")
+
 // mcpFlags holds the parsed `mcp` subcommand flags. It is passed to mcpSetup
 // as plain data so setup logic is unit-testable without touching flag.FlagSet
 // or the real environment.
@@ -92,35 +101,38 @@ func runMcpCmd(args []string) {
 	case fl.data == mcpDataAuto:
 		// -data "auto" is resolved to the home directory HERE, not in
 		// mcpSetup: mcpSetup must stay pure (table-driven-testable with no
-		// real filesystem or HOME dependency), so home-dir resolution and the
-		// directory's creation belong in the subcommand entry point. -data ""
-		// (explicit heap mode) and any other explicit value pass through
-		// unchanged. This branch is also reached when -data was explicitly
-		// given as "auto" alongside -connect — the conflict check below then
-		// correctly rejects it, since both are non-empty.
+		// real filesystem or HOME dependency), so home-dir resolution belongs
+		// in the subcommand entry point. -data "" (explicit heap mode) and any
+		// other explicit value pass through unchanged. This branch is also
+		// reached when -data was explicitly given as "auto" alongside -connect —
+		// the conflict check below then correctly rejects it, since both are
+		// non-empty.
 		home, err := os.UserHomeDir()
 		if err != nil {
 			fatal("mcp: resolving home directory for -data", "err", err)
 		}
-		dir := filepath.Join(home, ".rostam", "memory")
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			fatal("mcp: creating -data directory", "dir", dir, "err", err)
-		}
-		fl.data = dir
+		fl.data = filepath.Join(home, ".rostam", "memory")
 	}
 
 	// Claim the data dir before opening it. Only embedded mode with a real
 	// directory needs this: heap mode (-data "") has nothing on disk to share,
 	// and -connect's concurrency is the remote server's problem, not ours.
 	unlock := func() error { return nil }
-	if fl.connect == "" && fl.data != "" {
+	if fl.connect == "" {
 		var lerr error
-		unlock, lerr = lockDataDir(fl.data)
-		if lerr != nil {
+		unlock, lerr = mcpClaimDataDir(fl.data)
+		switch {
+		case errors.Is(lerr, errDataDirBusy):
 			fatal("mcp: another rostam-server mcp process is using this data directory; "+
 				"a data dir has one writer, so concurrent clients must share one server over -connect "+
 				"instead of each embedding their own",
 				"dir", fl.data, "err", lerr)
+		case lerr != nil:
+			// Not a conflict — a path that cannot be created, a read-only
+			// filesystem, a full disk. Reporting it as "another process is
+			// using this" would send the reader hunting for a process that
+			// does not exist.
+			fatal("mcp: claiming -data directory", "dir", fl.data, "err", lerr)
 		}
 	}
 
@@ -157,6 +169,31 @@ func runMcpCmd(args []string) {
 	if closeErr != nil {
 		fatal("mcp: store close failed", "err", closeErr)
 	}
+}
+
+// mcpClaimDataDir creates the embedded data directory and takes the
+// single-writer lock on it, returning the closer that releases it. A "" dir is
+// heap mode: nothing on disk to create or claim, so the closer is a no-op.
+//
+// The directory has to be created here rather than being left to the engine
+// further down, because the lock file lives INSIDE it and is opened first —
+// without this, a -data path that does not exist yet (an ordinary first run)
+// fails on a missing directory. The resolved "auto" default and an explicit
+// path both come through here, so there is one directory-creating step rather
+// than two that can drift apart.
+//
+// It returns its errors instead of calling fatal so both paths are testable
+// without a subprocess, the same reason the tiering validation is a returning
+// function. Only a real lock conflict carries errDataDirBusy.
+func mcpClaimDataDir(dir string) (func() error, error) {
+	noop := func() error { return nil }
+	if dir == "" {
+		return noop, nil
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("creating -data directory %s: %w", dir, err)
+	}
+	return lockDataDir(dir)
 }
 
 // mcpSetup turns parsed flags + an environment lookup into a ready

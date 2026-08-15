@@ -38,7 +38,7 @@ func lockDataDir(dir string) (func() error, error) {
 	}
 	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		_ = f.Close()
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", errDataDirBusy, err)
 	}
 	// Closing the file drops the flock. The lock file itself is left behind on
 	// purpose: unlinking it would let a second process create a fresh one and
