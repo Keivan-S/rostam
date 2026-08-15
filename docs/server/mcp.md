@@ -50,8 +50,29 @@ claude mcp add rostam -- rostam-server mcp
 ```
 
 All three launch the same binary the same way: no flags are required. Memory
-persists to `~/.rostam/memory` by default, so it survives across sessions and
-across every MCP client pointed at the same machine.
+persists to `~/.rostam/memory` by default, so it survives across sessions:
+close the client, reopen it tomorrow, and `recall` still finds what you told
+it. Only `-data ""` opts out, which runs entirely in memory.
+
+A data directory has one writer. Sessions that come and go **sequentially**
+all share `~/.rostam/memory` and see each other's memories, but two clients
+running at the **same time** cannot both embed the engine over it — the second
+one is refused at startup with an error saying so. To give concurrent clients
+one shared memory, run a single `rostam-server` and point each client at it
+with [`-connect`](#remote-mode).
+
+### What "persists" means here
+
+An embedded session stores memories in mmap-backed files under `-data` and
+writes the index sidecar that makes them readable again when the process shuts
+down cleanly — which is what happens when an MCP client closes the connection
+or exits. Reopening the same directory then restores everything.
+
+The flush point is that clean shutdown, so a session killed outright (`SIGKILL`,
+a machine losing power) loses the memories added since the last one. If that
+matters, run a real `rostam-server` and use `-connect`: a server's own
+durability (Raft log and snapshots) does not depend on how the MCP process
+ends.
 
 ## Flags
 
@@ -161,7 +182,7 @@ than a protocol-level error, so a bad argument never tears down the session.
 |---|---|---|
 | `remember` | `content` (required), `namespace` (default `"default"`), `metadata` (flat JSON object) | Embeds (or stubs) `content` and upserts it into the `mcp_memory` collection. Re-remembering identical content in the same namespace upserts the same point — dedupe by `(namespace, content)` is free. Returns `{id, namespace}`. |
 | `recall` | `query` (required), `namespace` (default `"default"`), `k` (default 5), `filter` (optional, ANDed with the namespace) | BM25-only or hybrid dense+BM25, per the embedder mode. Returns `{hits: [{id, content, score, metadata}]}`. |
-| `forget` | `ids` (required, array of ids) | Deletes memories by id and prunes any namespace left empty. Returns `{deleted: [...], missing: [...]}`. |
+| `forget` | `ids` (required, array of ids) | Deletes memories by id and prunes any namespace left empty; a per-id failure doesn't abort the rest of the batch. Returns `{"deleted":[...],"missing":[...],"errors":[...]}` — `errors` is present only when at least one id failed to delete, so a fully successful call returns just `{deleted, missing}`. Same shape as `delete` below. |
 | `list_memories` | `namespace` (default `"default"`), `limit` (default 50, max 500), `cursor` (from a previous call's `next_cursor`) | Pages through a namespace's memories in id order. Returns `{memories: [...], next_cursor}`. |
 | `list_namespaces` | — | Returns `{namespaces: [...]}` from the namespace registry — O(1), not a scan. |
 
@@ -172,14 +193,16 @@ field — it has no meaning for BM25-only recall or for a plain listing.
 
 | Tool | Args | Behavior |
 |---|---|---|
-| `create_collection` | `name` (required), `dim` (required), `metric` (`cosine`\|`l2`\|`dot`, default `cosine`), `full_text` (default `true`) | Creates a vector collection. |
+| `create_collection` | `name` (required), `dim` (required), `metric` (`cosine`\|`l2`\|`dot`, default `cosine`), `full_text` (default `true`), `persistent` (default `true`) | Creates a vector collection. `persistent` collections are stored on disk and survive a restart; `persistent: false` makes an in-memory collection that is gone when the process exits. |
 | `upsert` | `collection` (required), `id` (required), `vector` (optional array), `content` (optional), `metadata` (optional) | Inserts or updates a point. Provide `vector` explicitly, or omit it and provide `content` with an embedder configured to auto-embed. Returns `{id}`. |
 | `search` | `collection` (required), `mode` (`text`\|`dense`\|`hybrid`; default `text` with no embedder, `hybrid` with one), `query_text`, `vector`, `k` (default 10), `filter` | Text search, dense nearest-neighbor, or dense+BM25 hybrid fusion. In `dense`/`hybrid` mode, an omitted `vector` is derived by embedding `query_text` (requires an embedder). Returns `{hits: [{id, content, score, distance, metadata}]}`. |
 | `get` | `collection` (required), `ids` (required), `with_vector` (default `false`) | Fetches points by id. Returns `{points: [{id, content, metadata, vector?}], missing: [...]}`. |
 
-`create_collection` and `upsert` refuse the `mcp_memory` collection — its
-schema and reserved metadata fields belong to the memory tools above, and a
-raw write here could corrupt them. Use `remember`/`recall`/`forget` instead.
+`create_collection`, `upsert`, `delete`, and `delete_by_filter` all refuse the
+`mcp_memory` collection — its schema and reserved metadata fields belong to the
+memory tools above, and a raw write here could corrupt them. Use
+`remember`/`recall`/`forget` instead. Reads (`search`, `get`) are allowed
+through: they have no such hazard.
 
 ### Destructive tools (only with `-enable-destructive`)
 
