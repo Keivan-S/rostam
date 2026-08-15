@@ -115,6 +115,14 @@ func TestMcpSetup_Embedder(t *testing.T) {
 				if oe.Endpoint != tc.wantEndpt {
 					t.Errorf("Endpoint = %q, want %q", oe.Endpoint, tc.wantEndpt)
 				}
+				// A bounded client is the difference between a slow embedding
+				// endpoint and a session that stops answering forever.
+				if oe.HTTPClient == nil {
+					t.Fatal("embedder has no HTTP client: an unresponsive endpoint would hang the tool call forever")
+				}
+				if oe.HTTPClient.Timeout <= 0 {
+					t.Errorf("HTTPClient.Timeout = %v, want a positive bound", oe.HTTPClient.Timeout)
+				}
 			}
 		})
 	}

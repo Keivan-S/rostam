@@ -9,9 +9,11 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
+	"time"
 
 	rostam "github.com/rostamlabs/rostam"
 	"github.com/rostamlabs/rostam/mcp"
@@ -107,8 +109,24 @@ func runMcpCmd(args []string) {
 		fl.data = dir
 	}
 
+	// Claim the data dir before opening it. Only embedded mode with a real
+	// directory needs this: heap mode (-data "") has nothing on disk to share,
+	// and -connect's concurrency is the remote server's problem, not ours.
+	unlock := func() error { return nil }
+	if fl.connect == "" && fl.data != "" {
+		var lerr error
+		unlock, lerr = lockDataDir(fl.data)
+		if lerr != nil {
+			fatal("mcp: another rostam-server mcp process is using this data directory; "+
+				"a data dir has one writer, so concurrent clients must share one server over -connect "+
+				"instead of each embedding their own",
+				"dir", fl.data, "err", lerr)
+		}
+	}
+
 	rt, err := mcpSetup(fl, os.LookupEnv)
 	if err != nil {
+		_ = unlock()
 		fatal("mcp: setup failed", "err", err)
 	}
 
@@ -123,11 +141,16 @@ func runMcpCmd(args []string) {
 	})
 	if err != nil {
 		_ = rt.store.Close()
+		_ = unlock()
 		fatal("mcp: server init failed", "err", err)
 	}
 
 	serveErr := srv.Serve(os.Stdin, os.Stdout)
+	// Close before unlocking: the store's own shutdown writes to the data dir
+	// (persistent collections flush their instant-restart sidecars), so releasing
+	// the lock first would let a waiting process in mid-write.
 	closeErr := rt.store.Close()
+	_ = unlock()
 	if serveErr != nil {
 		fatal("mcp: serve failed", "err", serveErr)
 	}
@@ -161,7 +184,20 @@ func mcpSetup(fl mcpFlags, lookupEnv func(string) (string, bool)) (mcpRuntime, e
 	if fl.connect != "" {
 		store, err = mcpConnectStore(fl, reg, lookupEnv)
 	} else {
-		store, err = rostam.NewDirect(rostam.DirectConfig{DataDir: fl.data, Ops: reg})
+		// Size the cache for what this actually is: one person's memory store,
+		// reached one tool call at a time over a pipe. The defaults are sized for a
+		// server (256 shards, and a budget derived as a fraction of host RAM), which
+		// here means a fresh -data dir lands at hundreds of shard directories and
+		// tens of gigabytes of sparse mmap files before a single fact is stored —
+		// alarming to look at, and a real cost on any filesystem without sparse-file
+		// support. 8 shards still gives the op path room to spread, and 256 MiB is
+		// far more than the handful of small bookkeeping keys the memory tools put
+		// in KV (the memories themselves live in the vector collection).
+		store, err = rostam.NewDirect(rostam.DirectConfig{
+			DataDir: fl.data,
+			Ops:     reg,
+			Cache:   rostam.CacheConfig{NumShardsPerNode: 8, MaxMemoryBytes: 256 << 20},
+		})
 	}
 	if err != nil {
 		return mcpRuntime{}, err
@@ -196,6 +232,11 @@ func mcpEmbedderFromEnv(lookupEnv func(string) (string, bool)) (semcache.Embedde
 	apiKey, _ := lookupEnv("ROSTAM_EMBED_API_KEY")
 	oe := semcache.NewOpenAIEmbedder(apiKey, model, dim)
 	oe.Endpoint = endpoint
+	// Without a timeout an unresponsive embedding endpoint wedges the tool call
+	// forever, and an MCP client has no way to cancel it — the session just stops
+	// answering. Five minutes matches objstore's HTTP client and leaves ample room
+	// for a slow batch; the point is a bound, not a tight one.
+	oe.HTTPClient = &http.Client{Timeout: 5 * time.Minute}
 	return oe, nil
 }
 
