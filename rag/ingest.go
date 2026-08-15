@@ -67,7 +67,7 @@ func Ingest(ctx context.Context, r Retriever, paths []string, opts IngestOptions
 				rep.SkippedPaths = append(rep.SkippedPaths, path)
 				return nil
 			}
-			body, err := os.ReadFile(path)
+			body, err := os.ReadFile(path) //nolint:gosec // G122: ingest paths are user-supplied local files for a CLI reading the user's own tree; symlink TOCTOU is out of scope
 			if err != nil {
 				return err
 			}

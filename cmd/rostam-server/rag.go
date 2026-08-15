@@ -54,7 +54,7 @@ func runRagCmd(args []string) {
 // no single "setup" step to isolate).
 func runRagCmdE(args []string) error {
 	if len(args) < 1 {
-		return errors.New("usage: rostam-server rag <ingest|ask|query> [flags] ...")
+		return errors.New("usage: rostam-server rag <ingest|ask|query> [flags] <args>")
 	}
 	verb, rest := args[0], args[1:]
 
