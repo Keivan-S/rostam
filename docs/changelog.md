@@ -3,7 +3,58 @@
 Notable user-visible changes. Entries that alter existing behaviour are marked
 **Breaking** and say what to do about it.
 
-## Unreleased
+## v0.2.0 — 2026-08-15
+
+### The MCP server: agent memory with nothing to set up
+
+`rostam-server mcp` runs Rostam as a [Model Context
+Protocol](https://modelcontextprotocol.io/) server over stdio, giving Claude
+Code, Claude Desktop, Cursor or any MCP client persistent agent memory and
+generic vector-DB tools:
+
+```sh
+claude mcp add rostam -- rostam-server mcp
+```
+
+There is no daemon and no account. The process embeds the engine directly and
+persists to `~/.rostam/memory`, so the agent has durable memory seconds after
+the command above.
+
+**It works with no embedder at all.** `remember` and `recall` run on the
+built-in BM25 index, so there is no API key and no external service in the
+default path — the usual reason an agent-memory tool cannot be tried in one
+command. Setting `ROSTAM_EMBED_ENDPOINT` to any OpenAI-compatible
+`/embeddings` URL (OpenAI, Azure, Ollama, LM Studio, TEI, LiteLLM) upgrades
+recall to hybrid dense+BM25. The tools and their call shapes do not change —
+only how well results rank.
+
+Five memory tools (`remember`, `recall`, `forget`, `list_memories`,
+`list_namespaces`) and four collection tools (`create_collection`, `upsert`,
+`search`, `get`) are always registered. `delete` and `delete_by_filter` are
+**absent from `tools/list`** unless `-enable-destructive` is passed, rather
+than present and refusing — a model cannot call a tool it cannot see.
+
+`-connect host:port` runs the tools against a remote `rostam-server` over the
+binary TCP protocol instead of embedding the engine, with the usual
+token/mTLS options. Full tool reference and client config: [MCP
+server](server/mcp.md).
+
+### The LLM caching proxy
+
+`rostam-server llm-proxy` is an OpenAI-compatible caching reverse proxy: point
+an existing OpenAI SDK client at it instead of `api.openai.com` and a
+cache-eligible chat completion is answered locally, at no generation cost and
+without the round trip. Everything it cannot safely answer — every other
+`/v1/*` route, and any request whose shape or scope makes it uncacheable — is
+forwarded upstream verbatim.
+
+Like the MCP server it is useful before you configure anything: with no
+embedder, byte-identical prompts are served from cache. With one, it upgrades
+to semantic matching, so a reworded or differently-whitespaced prompt hits too.
+
+Every response carries an `x-rostam-cache` header (`hit`, `miss`,
+`uncacheable`, `bypass`) so it is visible which requests are still costing
+generation tokens. See [LLM caching proxy](server/llm-proxy.md).
 
 ### Breaking: NaN no longer matches range filters
 
