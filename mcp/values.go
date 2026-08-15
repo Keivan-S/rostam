@@ -14,8 +14,9 @@ import (
 )
 
 // jsonID is a point id as it arrives on the tool wire: a JSON number OR a
-// decimal string. It is emitted as a number (its underlying uint64 marshals
-// that way), so existing clients see no change in what comes back.
+// decimal string. It is a decode-only type — a generic tool's response
+// never marshals a jsonID, it emits ids through idOut instead, since the
+// safe wire form differs by direction (see idOut).
 //
 // The engine's ids are full-width uint64, but a JSON number in a JavaScript
 // MCP client — which is most of them — is an IEEE-754 double, exact only up to
@@ -49,6 +50,33 @@ func idsToUint64(ids []jsonID) []uint64 {
 	out := make([]uint64, len(ids))
 	for i, id := range ids {
 		out[i] = uint64(id)
+	}
+	return out
+}
+
+// idOut converts an engine id to the form a generic tool result puts on the
+// wire: a plain JSON number when it round-trips exactly through a float64
+// (id <= 2^53-1, jsSafeIDMask — see its doc comment), and a decimal string
+// above that boundary. Without this, a big id comes back from a generic tool
+// (upsert/get/delete/search) as a JSON number, a JavaScript client rounds it
+// parsing the response, and every later call naming that id addresses the
+// wrong point.
+//
+// Memory-tool ids never need this: memoryID masks every generated id into
+// the safe range itself, so they are always plain numbers.
+func idOut(id uint64) any {
+	if id > jsSafeIDMask {
+		return strconv.FormatUint(id, 10)
+	}
+	return id
+}
+
+// idsOut is idOut applied to a slice, for tool results that return several
+// ids (delete's deleted/missing, get's missing).
+func idsOut(ids []uint64) []any {
+	out := make([]any, len(ids))
+	for i, id := range ids {
+		out[i] = idOut(id)
 	}
 	return out
 }

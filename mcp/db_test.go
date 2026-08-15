@@ -3,6 +3,7 @@
 package mcp
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 	"testing"
@@ -255,51 +256,85 @@ func TestGenericToolsSurviveMisbehavingEmbedder(t *testing.T) {
 // TestIDsAcceptStringForm is the round trip a JavaScript client needs for a
 // collection whose ids are above 2^53-1: it cannot put such an id in a JSON
 // number without rounding it, so upsert/get/delete take the decimal string
-// form too. Results still come back as numbers.
+// form too. And the trip back has the same problem in reverse: a result
+// naming a big id must arrive as a decimal *string*, not a JSON number, or a
+// JS client rounds it the moment it parses the response and can no longer
+// reuse it. The assertions below decode into map[string]any/[]any and check
+// the raw JSON type (string vs float64) rather than a Go uint64 field, since
+// unmarshaling straight into uint64 would hide exactly this bug — Go's
+// decoder accepts a JSON string into neither a uint64 field nor (silently)
+// a float64 one, so a wrong type at either end would be a decode error, not
+// a mis-set assertion.
 func TestIDsAcceptStringForm(t *testing.T) {
 	const big = uint64(1)<<62 + 7 // not exactly representable as a float64
 	bigStr := strconv.FormatUint(big, 10)
+	const small = uint64(1)
 
 	c := startServer(t, Config{Store: newHeapStore(t), Destructive: true})
 	c.initialize()
 	c.callTool("create_collection", map[string]any{"name": "docs", "dim": 4}, nil, false)
 
-	var up struct {
-		ID uint64 `json:"id"`
+	// A small id still comes back as a plain JSON number.
+	smallText := c.callTool("upsert", map[string]any{
+		"collection": "docs", "id": small,
+		"vector": []float32{0, 1, 0, 0}, "content": "the small point",
+	}, nil, false)
+	var smallUp map[string]any
+	if err := json.Unmarshal([]byte(smallText), &smallUp); err != nil {
+		t.Fatalf("decode upsert result: %v", err)
 	}
-	c.callTool("upsert", map[string]any{
+	if f, ok := smallUp["id"].(float64); !ok || f != float64(small) {
+		t.Fatalf("upsert(%d): id = %#v (%T), want a JSON number", small, smallUp["id"], smallUp["id"])
+	}
+
+	// A big id comes back as a decimal string, not a rounded number.
+	bigText := c.callTool("upsert", map[string]any{
 		"collection": "docs", "id": bigStr,
 		"vector": []float32{1, 0, 0, 0}, "content": "the exact point",
-	}, &up, false)
-	if up.ID != big {
-		t.Fatalf("upsert echoed id %d, want the exact %d", up.ID, big)
+	}, nil, false)
+	var bigUp map[string]any
+	if err := json.Unmarshal([]byte(bigText), &bigUp); err != nil {
+		t.Fatalf("decode upsert result: %v", err)
+	}
+	if s, ok := bigUp["id"].(string); !ok || s != bigStr {
+		t.Fatalf("upsert(%s): id = %#v (%T), want the decimal string %q", bigStr, bigUp["id"], bigUp["id"], bigStr)
 	}
 
 	// Fetch it back by the string form, and by the number form — the same
-	// point either way, because neither ever went through a float.
+	// point either way, because neither ever went through a float — and the
+	// id in the response is still the exact decimal string.
 	for _, form := range []any{bigStr, big} {
+		getText := c.callTool("get", map[string]any{"collection": "docs", "ids": []any{form}}, nil, false)
 		var got struct {
-			Points []struct {
-				ID      uint64 `json:"id"`
-				Content string `json:"content"`
-			} `json:"points"`
-			Missing []uint64 `json:"missing"`
+			Points  []map[string]any `json:"points"`
+			Missing []any            `json:"missing"`
 		}
-		c.callTool("get", map[string]any{"collection": "docs", "ids": []any{form}}, &got, false)
-		if len(got.Points) != 1 || got.Points[0].ID != big {
+		if err := json.Unmarshal([]byte(getText), &got); err != nil {
+			t.Fatalf("decode get result: %v", err)
+		}
+		if len(got.Points) != 1 {
 			t.Fatalf("get(%v): points = %+v, missing = %v", form, got.Points, got.Missing)
 		}
-		if got.Points[0].Content != "the exact point" {
+		if s, ok := got.Points[0]["id"].(string); !ok || s != bigStr {
+			t.Fatalf("get(%v): id = %#v (%T), want the decimal string %q", form, got.Points[0]["id"], got.Points[0]["id"], bigStr)
+		}
+		if got.Points[0]["content"] != "the exact point" {
 			t.Fatalf("get(%v) returned the wrong point: %+v", form, got.Points[0])
 		}
 	}
 
+	delText := c.callTool("delete", map[string]any{"collection": "docs", "ids": []any{bigStr}}, nil, false)
 	var del struct {
-		Deleted []uint64 `json:"deleted"`
+		Deleted []any `json:"deleted"`
 	}
-	c.callTool("delete", map[string]any{"collection": "docs", "ids": []any{bigStr}}, &del, false)
-	if len(del.Deleted) != 1 || del.Deleted[0] != big {
+	if err := json.Unmarshal([]byte(delText), &del); err != nil {
+		t.Fatalf("decode delete result: %v", err)
+	}
+	if len(del.Deleted) != 1 {
 		t.Fatalf("delete by string id: %+v", del.Deleted)
+	}
+	if s, ok := del.Deleted[0].(string); !ok || s != bigStr {
+		t.Fatalf("delete by string id: deleted[0] = %#v (%T), want the decimal string %q", del.Deleted[0], del.Deleted[0], bigStr)
 	}
 }
 
