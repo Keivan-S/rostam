@@ -24,7 +24,7 @@ func envMap(m map[string]string) func(string) (string, bool) {
 }
 
 func TestMcpSetup_DataAndConnectConflict(t *testing.T) {
-	fl := mcpFlags{data: "/some/dir", connect: "127.0.0.1:7000"}
+	fl := mcpFlags{storeFlags: storeFlags{data: "/some/dir", connect: "127.0.0.1:7000"}}
 	_, err := mcpSetup(fl, noEnv)
 	if err == nil {
 		t.Fatal("expected an error when both -data and -connect are set")
@@ -86,7 +86,7 @@ func TestMcpSetup_Embedder(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			fl := mcpFlags{data: ""} // heap mode so the store side never fails
+			fl := mcpFlags{storeFlags: storeFlags{data: ""}} // heap mode so the store side never fails
 			rt, err := mcpSetup(fl, envMap(tc.env))
 			if tc.wantErr != "" {
 				if err == nil {
@@ -132,7 +132,7 @@ func TestMcpSetup_Embedder(t *testing.T) {
 // working store: a Put/Get round trip is the only reliable signal the store
 // is actually usable, not just a non-nil interface value.
 func TestMcpSetup_HeapMode(t *testing.T) {
-	rt, err := mcpSetup(mcpFlags{data: ""}, noEnv)
+	rt, err := mcpSetup(mcpFlags{storeFlags: storeFlags{data: ""}}, noEnv)
 	if err != nil {
 		t.Fatalf("mcpSetup: %v", err)
 	}

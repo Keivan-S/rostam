@@ -99,7 +99,7 @@ func TestLockDataDirConflictIsBusy(t *testing.T) {
 func TestClaimDataDirCreatesMissingPath(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "nested", "does-not-exist-yet")
 
-	unlock, err := mcpClaimDataDir(dir)
+	unlock, err := claimDataDir(dir)
 	if err != nil {
 		t.Fatalf("claiming a not-yet-existing -data path: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestClaimDataDirCreatesMissingPath(t *testing.T) {
 // lock file anywhere and still returns a usable closer -- heap mode has no
 // directory to be a second writer to.
 func TestClaimDataDirHeapModeClaimsNothing(t *testing.T) {
-	unlock, err := mcpClaimDataDir("")
+	unlock, err := claimDataDir("")
 	if err != nil {
 		t.Fatalf("heap mode should claim nothing and succeed: %v", err)
 	}
@@ -127,18 +127,18 @@ func TestClaimDataDirHeapModeClaimsNothing(t *testing.T) {
 }
 
 // TestClaimDataDirConflictSurvivesTheHelper makes sure the sentinel is not lost
-// on the way through mcpClaimDataDir: runMcpCmd switches on it, so a wrapper
+// on the way through claimDataDir: runMcpCmd switches on it, so a wrapper
 // that flattened it would silently downgrade the actionable message.
 func TestClaimDataDirConflictSurvivesTheHelper(t *testing.T) {
 	dir := t.TempDir()
-	unlock, err := mcpClaimDataDir(dir)
+	unlock, err := claimDataDir(dir)
 	if err != nil {
 		t.Fatalf("first claim: %v", err)
 	}
 	defer func() { _ = unlock() }()
 
-	if _, err := mcpClaimDataDir(dir); !errors.Is(err, errDataDirBusy) {
-		t.Fatalf("conflict through mcpClaimDataDir must stay errDataDirBusy, got %v", err)
+	if _, err := claimDataDir(dir); !errors.Is(err, errDataDirBusy) {
+		t.Fatalf("conflict through claimDataDir must stay errDataDirBusy, got %v", err)
 	}
 }
 
@@ -152,7 +152,7 @@ func TestClaimDataDirUncreatablePathIsNotBusy(t *testing.T) {
 		t.Fatalf("write blocker: %v", err)
 	}
 
-	_, err := mcpClaimDataDir(filepath.Join(blocker, "under-a-file"))
+	_, err := claimDataDir(filepath.Join(blocker, "under-a-file"))
 	if err == nil {
 		t.Fatal("creating a directory under a regular file should fail")
 	}

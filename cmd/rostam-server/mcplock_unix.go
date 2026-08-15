@@ -11,9 +11,11 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// mcpLockName is the lock file an embedded `mcp` session holds inside its data
-// directory for the lifetime of the process.
-const mcpLockName = ".mcp.lock"
+// dataDirLockName is the lock file an embedded session (mcp today; llm-proxy
+// will too) holds inside its data directory for the lifetime of the process.
+// The name is kept as ".mcp.lock" for compatibility: existing user data dirs
+// already contain a lock file with this name.
+const dataDirLockName = ".mcp.lock"
 
 // lockDataDir takes an exclusive advisory lock on dir, and returns the closer
 // that releases it.
@@ -31,7 +33,7 @@ const mcpLockName = ".mcp.lock"
 // protect against the same process opening the dir twice; that isn't a case
 // runMcpCmd can produce.
 func lockDataDir(dir string) (func() error, error) {
-	path := filepath.Join(dir, mcpLockName)
+	path := filepath.Join(dir, dataDirLockName)
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("opening lock file %s: %w", path, err)
