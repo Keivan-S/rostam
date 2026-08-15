@@ -101,6 +101,7 @@ nav:
       - Backups & cold tier: server/backups.md
       - Monitoring: server/monitoring.md
       - MCP server: server/mcp.md
+      - LLM caching proxy: server/llm-proxy.md
   - API reference:
       - HTTP: api/http.md
       - gRPC: api/grpc.md
