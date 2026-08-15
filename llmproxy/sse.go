@@ -4,6 +4,7 @@ package llmproxy
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -130,6 +131,38 @@ type sseChunk struct {
 	} `json:"usage"`
 }
 
+// toolCallsPresent reports whether a decoded delta.tool_calls field actually
+// carries tool calls. Several OpenAI-compatible backends (vLLM, Azure) emit
+// "tool_calls": null on ordinary content deltas, and json.RawMessage
+// captures that literal — a bare len(raw) > 0 check would misclassify every
+// such delta as carrying tool calls, wrongly marking plain-text answers
+// uncacheable downstream.
+func toolCallsPresent(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	return string(bytes.TrimSpace(raw)) != "null"
+}
+
+// scanRawLines is like bufio.ScanLines but keeps each line's terminator
+// (LF or CRLF) attached to the returned token instead of stripping it. A
+// relay that re-appends its own "\n" after ScanLines strips \r silently
+// turns CRLF upstream input into LF-only output; returning the terminator
+// verbatim lets the caller forward exactly the bytes it read.
+func scanRawLines(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	if atEOF && len(data) == 0 {
+		return 0, nil, nil
+	}
+	if i := bytes.IndexByte(data, '\n'); i >= 0 {
+		return i + 1, data[0 : i+1], nil
+	}
+	if atEOF {
+		return len(data), data, nil
+	}
+	// Request more data.
+	return 0, nil, nil
+}
+
 // streamResult accumulates what the cache needs from an upstream SSE stream
 // as it's relayed to the client.
 type streamResult struct {
@@ -157,17 +190,16 @@ func relayAndCapture(dst http.ResponseWriter, src io.Reader) (streamResult, erro
 
 	sc := bufio.NewScanner(src)
 	sc.Buffer(make([]byte, 64<<10), sseMaxLine)
+	sc.Split(scanRawLines)
 
 	for sc.Scan() {
-		line := sc.Bytes()
-		if _, err := dst.Write(line); err != nil {
-			return result, err
-		}
-		if _, err := dst.Write([]byte("\n")); err != nil {
+		raw := sc.Bytes() // includes its original terminator (LF or CRLF), or none at EOF
+		if _, err := dst.Write(raw); err != nil {
 			return result, err
 		}
 		fl.Flush()
 
+		line := bytes.TrimRight(raw, "\r\n")
 		data, isData := strings.CutPrefix(string(line), "data: ")
 		if !isData {
 			continue
@@ -186,7 +218,7 @@ func relayAndCapture(dst http.ResponseWriter, src io.Reader) (streamResult, erro
 		}
 		for _, ch := range chunk.Choices {
 			result.content.WriteString(ch.Delta.Content)
-			if len(ch.Delta.ToolCalls) > 0 {
+			if toolCallsPresent(ch.Delta.ToolCalls) {
 				result.sawToolCalls = true
 			}
 			if ch.FinishReason != "" {

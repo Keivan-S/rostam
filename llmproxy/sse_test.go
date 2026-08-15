@@ -183,6 +183,26 @@ func TestRelayAndCapture_ToolCallsSetsFlag(t *testing.T) {
 	}
 }
 
+func TestRelayAndCapture_NullToolCallsNotFlagged(t *testing.T) {
+	// vLLM/Azure and other OpenAI-compatible backends emit "tool_calls":
+	// null on ordinary content deltas; that must not be misread as tool
+	// calls present.
+	stream := "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\",\"tool_calls\":null},\"finish_reason\":null}]}\n\n" +
+		"data: [DONE]\n\n"
+
+	rec := httptest.NewRecorder()
+	result, err := relayAndCapture(rec, strings.NewReader(stream))
+	if err != nil {
+		t.Fatalf("relayAndCapture: %v", err)
+	}
+	if result.sawToolCalls {
+		t.Fatalf("sawToolCalls = true, want false (tool_calls: null is not tool calls)")
+	}
+	if result.content.String() != "hi" {
+		t.Fatalf("content = %q, want hi", result.content.String())
+	}
+}
+
 func TestRelayAndCapture_TruncatedStreamNotClean(t *testing.T) {
 	stream := "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"},\"finish_reason\":null}]}\n\n"
 
@@ -212,5 +232,35 @@ func TestRelayAndCapture_NonDataLinesForwardedUntouched(t *testing.T) {
 	}
 	if got := rec.Body.String(); got != stream {
 		t.Fatalf("relayed body = %q, want %q", got, stream)
+	}
+}
+
+func TestRelayAndCapture_CRLFForwardedByteIdentical(t *testing.T) {
+	stream := "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\r\n\r\n" +
+		"data: [DONE]\r\n\r\n"
+
+	rec := httptest.NewRecorder()
+	result, err := relayAndCapture(rec, strings.NewReader(stream))
+	if err != nil {
+		t.Fatalf("relayAndCapture: %v", err)
+	}
+	if got := rec.Body.String(); got != stream {
+		t.Fatalf("relayed body = %q, want %q (CRLF terminators must be preserved)", got, stream)
+	}
+	if result.content.String() != "hi" {
+		t.Fatalf("content = %q, want hi", result.content.String())
+	}
+	if !result.clean {
+		t.Fatalf("clean = false, want true")
+	}
+}
+
+func TestRelayAndCapture_OversizedLineErrors(t *testing.T) {
+	huge := strings.Repeat("a", sseMaxLine+1) // one line, no newline, past the scanner bound
+
+	rec := httptest.NewRecorder()
+	_, err := relayAndCapture(rec, strings.NewReader(huge))
+	if err == nil {
+		t.Fatalf("relayAndCapture err = nil, want error for an oversized line")
 	}
 }
