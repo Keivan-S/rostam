@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
-//go:build unix
+//go:build unix || windows
 
+// Every test in this file drives lockDataDir/mcpClaimDataDir through their
+// exported behavior only, so the unix (flock) and Windows (LockFileEx)
+// implementations are held to exactly the same contract rather than each
+// getting its own weaker set. The build tag names the platforms that HAVE a
+// lock; on the others lockDataDir refuses outright (mcplock_other.go) and
+// there is nothing here to assert.
 package main
 
 import (
