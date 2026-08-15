@@ -232,6 +232,25 @@ func TestSearchRefusesMemoryCollection(t *testing.T) {
 // TestDestructiveToolsAbsentByDefault guards the registration gate itself:
 // delete/delete_by_filter must not appear in tools/list at all (not merely
 // refuse when called) unless Config.Destructive is set.
+// TestGenericToolsSurviveMisbehavingEmbedder is the memory-side guard's
+// counterpart: upsert's auto-embed and search's query embedding index the same
+// [0] and take the same session down if the embedder returns nothing.
+func TestGenericToolsSurviveMisbehavingEmbedder(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t), Embedder: shortEmbedder{}})
+	c.initialize()
+	c.callTool("create_collection", map[string]any{"name": "docs", "dim": 4}, nil, false)
+
+	msg := c.callTool("upsert", map[string]any{"collection": "docs", "id": 1, "content": "auto-embed me"}, nil, true)
+	if !strings.Contains(msg, "embed") {
+		t.Fatalf("upsert error should name the embed step, got %q", msg)
+	}
+	msg = c.callTool("search", map[string]any{"collection": "docs", "mode": "dense", "query_text": "anything"}, nil, true)
+	if !strings.Contains(msg, "embed") {
+		t.Fatalf("search error should name the embed step, got %q", msg)
+	}
+	c.rpc("ping", nil, false) // the session is still alive
+}
+
 func TestDestructiveToolsAbsentByDefault(t *testing.T) {
 	c := startServer(t, Config{Store: newHeapStore(t)})
 	c.initialize()

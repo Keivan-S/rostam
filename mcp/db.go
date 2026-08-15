@@ -335,7 +335,9 @@ func (s *Server) handleUpsert(ctx context.Context, raw json.RawMessage) (any, er
 		if err != nil {
 			return nil, fmt.Errorf("mcp: upsert: embed content: %w", err)
 		}
-		vec = vecs[0]
+		if vec, err = firstEmbedding(vecs); err != nil {
+			return nil, fmt.Errorf("mcp: upsert: embed content: %w", err)
+		}
 	}
 
 	md, err := jsonToMetadata(args.Metadata)
@@ -370,8 +372,9 @@ func (s *Server) handleSearch(ctx context.Context, raw json.RawMessage) (any, er
 	if err := rejectMemoryCollection(args.Collection); err != nil {
 		return nil, err
 	}
+	// <= 0, not == 0: a negative k is as unusable as a zero one.
 	k := args.K
-	if k == 0 {
+	if k <= 0 {
 		k = 10
 	}
 	f, err := parseFilter(args.Filter)
@@ -440,7 +443,11 @@ func (s *Server) searchVector(ctx context.Context, explicit []float32, queryText
 	if err != nil {
 		return nil, fmt.Errorf("mcp: search: embed query_text: %w", err)
 	}
-	return vecs[0], nil
+	vec, err := firstEmbedding(vecs)
+	if err != nil {
+		return nil, fmt.Errorf("mcp: search: embed query_text: %w", err)
+	}
+	return vec, nil
 }
 
 // searchHit is one hit from the generic search tool: id, content, relevance

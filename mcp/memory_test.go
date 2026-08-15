@@ -456,6 +456,70 @@ func TestListMemoriesPaginates(t *testing.T) {
 	}
 }
 
+// shortEmbedder returns fewer vectors than it was asked for, with a nil error
+// — what an OpenAI-compatible endpoint answering with a short or empty `data`
+// array decodes to. Nothing about the Embedder interface forbids it, and the
+// call sites here all pass exactly one string, so this is the shape that used
+// to panic the dispatch goroutine on vecs[0].
+type shortEmbedder struct{ empty bool } // empty: one vector, but zero-length
+
+func (shortEmbedder) Model() string { return "short" }
+func (shortEmbedder) Dim() int      { return 4 }
+func (s shortEmbedder) Embed(_ context.Context, _ []string) ([][]float32, error) {
+	if s.empty {
+		return [][]float32{{}}, nil
+	}
+	return [][]float32{}, nil
+}
+
+// TestMisbehavingEmbedderIsAnErrorNotAPanic covers both memory paths (remember
+// embeds content, recall embeds the query) against both bad shapes. A panic
+// here would take the whole session down, so each has to come back as an
+// ordinary tool error with the session still answering afterwards.
+func TestMisbehavingEmbedderIsAnErrorNotAPanic(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		empty bool
+	}{
+		{"no vectors", false},
+		{"empty vector", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := startServer(t, Config{Store: newHeapStore(t), Embedder: shortEmbedder{empty: tc.empty}})
+			c.initialize()
+
+			msg := c.callTool("remember", map[string]any{"content": "anything"}, nil, true)
+			if !strings.Contains(msg, "embed") {
+				t.Fatalf("remember error should name the embed step, got %q", msg)
+			}
+			msg = c.callTool("recall", map[string]any{"query": "anything"}, nil, true)
+			if !strings.Contains(msg, "embed") {
+				t.Fatalf("recall error should name the embed step, got %q", msg)
+			}
+			// Still alive: the failure was a tool error, not a dead session.
+			c.rpc("ping", nil, false)
+		})
+	}
+}
+
+// TestRecallClampsNonPositiveK: "k": -1 must not reach the search call. The
+// old check only replaced an exact 0.
+func TestRecallClampsNonPositiveK(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t)})
+	c.initialize()
+	c.callTool("remember", map[string]any{"content": "the deploy password is in vault"}, nil, false)
+
+	for _, k := range []int{-1, 0} {
+		var rec struct {
+			Hits []struct{ Content string } `json:"hits"`
+		}
+		c.callTool("recall", map[string]any{"query": "deploy password vault", "k": k}, &rec, false)
+		if len(rec.Hits) != 1 {
+			t.Fatalf("k=%d should fall back to the default, got %+v", k, rec.Hits)
+		}
+	}
+}
+
 // flakyCreateStore fails CreateCollection while fail is set. It stands in for
 // the transient failures a real bootstrap hits — a canceled context, a
 // not-leader reply from a remote store, a transport blip — none of which the

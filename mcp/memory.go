@@ -179,6 +179,26 @@ func (s *Server) awaitStoredIdentity(ctx context.Context) error {
 		memCollection, identityReadAttempts)
 }
 
+// firstEmbedding pulls the single vector an Embed of one text should have
+// produced.
+//
+// Every embed call in this package passes exactly one string, so it is
+// tempting to index [0] straight away — but the embedder is not necessarily
+// ours. semcache's OpenAI-compatible embedder is an HTTP client pointed at
+// whatever ROSTAM_EMBED_ENDPOINT names, and a response with a short or empty
+// data array decodes into a short slice with a nil error. Indexing that panics
+// the dispatch goroutine and takes the session down, so a result that is not
+// exactly one usable vector is reported as the bad response it is.
+func firstEmbedding(vecs [][]float32) ([]float32, error) {
+	if len(vecs) == 0 {
+		return nil, errors.New("mcp: the embedder returned no vectors for one input")
+	}
+	if len(vecs[0]) == 0 {
+		return nil, errors.New("mcp: the embedder returned an empty vector")
+	}
+	return vecs[0], nil
+}
+
 // memoryID derives a memory's point id from its namespace and content, so
 // remembering the same fact twice (in the same namespace) upserts the same
 // point instead of accumulating duplicates.
@@ -314,9 +334,13 @@ func (s *Server) handleRemember(ctx context.Context, raw json.RawMessage) (any, 
 	if err != nil {
 		return nil, fmt.Errorf("mcp: embed content: %w", err)
 	}
+	vec, err := firstEmbedding(vecs)
+	if err != nil {
+		return nil, fmt.Errorf("mcp: embed content: %w", err)
+	}
 
 	id := memoryID(ns, args.Content)
-	if err := s.store.VectorUpsert(ctx, memCollection, id, vecs[0], args.Content, rostam.VectorInsertOpts{Metadata: md}); err != nil {
+	if err := s.store.VectorUpsert(ctx, memCollection, id, vec, args.Content, rostam.VectorInsertOpts{Metadata: md}); err != nil {
 		return nil, fmt.Errorf("mcp: remember: %w", err)
 	}
 	return map[string]any{"id": id, "namespace": ns}, nil
@@ -342,8 +366,10 @@ func (s *Server) handleRecall(ctx context.Context, raw json.RawMessage) (any, er
 	if ns == "" {
 		ns = defaultNS
 	}
+	// <= 0, not == 0: a client can send "k": -1, and a negative k reaching the
+	// search call is the same nonsense as a zero one. Matches list_memories.
 	k := args.K
-	if k == 0 {
+	if k <= 0 {
 		k = 5
 	}
 
@@ -393,7 +419,11 @@ func (s *Server) recallHybrid(ctx context.Context, query string, k int, f rostam
 	if err != nil {
 		return nil, fmt.Errorf("mcp: embed query: %w", err)
 	}
-	docs, err := s.hybridDocs(ctx, memCollection, dense[0], query, k, f)
+	vec, err := firstEmbedding(dense)
+	if err != nil {
+		return nil, fmt.Errorf("mcp: embed query: %w", err)
+	}
+	docs, err := s.hybridDocs(ctx, memCollection, vec, query, k, f)
 	if err != nil {
 		return nil, fmt.Errorf("mcp: recall: %w", err)
 	}
