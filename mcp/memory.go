@@ -39,6 +39,16 @@ type embedIdentity struct {
 	Hybrid bool   `json:"hybrid"`
 }
 
+// identityReadAttempts / identityReadBackoff bound the wait for a concurrent
+// bootstrapper to finish writing the embedder identity key. The gap between
+// its CreateCollection and its Put is one round trip, so a couple of retries
+// is generous; the point of the bound is that a creator which died in that gap
+// must surface as an error rather than an indefinite hang.
+const (
+	identityReadAttempts = 3
+	identityReadBackoff  = 50 * time.Millisecond
+)
+
 // checkEmbedderIdentity compares the configured embedder against the one
 // recorded in KV, if any. No record yet means the memory collection has
 // never been bootstrapped, so there is nothing to conflict with.
@@ -50,6 +60,13 @@ func (s *Server) checkEmbedderIdentity(ctx context.Context) error {
 		}
 		return fmt.Errorf("mcp: reading stored embedder identity: %w", err)
 	}
+	return s.matchStoredIdentity(raw)
+}
+
+// matchStoredIdentity decodes a recorded identity and checks it against this
+// run's embedder. Shared by the startup check and the concurrent-bootstrap
+// path, which must apply exactly the same rule to the identity it reads back.
+func (s *Server) matchStoredIdentity(raw []byte) error {
 	var stored embedIdentity
 	if err := json.Unmarshal(raw, &stored); err != nil {
 		return fmt.Errorf("mcp: decoding stored embedder identity: %w", err)
@@ -63,48 +80,104 @@ func (s *Server) checkEmbedderIdentity(ctx context.Context) error {
 }
 
 // ensureMemory lazily bootstraps the mcp_memory collection on first use:
-// creates it, records the embedder identity that owns it, and seeds an empty
-// namespace list. Guarded by s.memOnce so concurrent tool calls only
-// bootstrap once; the result (including any error) is cached in s.memErr for
-// every caller.
+// creates it and records the embedder identity that owns it.
+//
+// Only SUCCESS is latched. sync.Once used to guard this and cached whatever
+// the first attempt produced, error included — so one canceled context, one
+// not-leader reply, or one transport blip on the very first memory tool call
+// left every later remember/recall/forget in the process failing with that
+// stale error forever, long after the store recovered. A failed attempt now
+// leaves the latch closed and the next caller tries again.
 func (s *Server) ensureMemory(ctx context.Context) error {
-	s.memOnce.Do(func() {
-		_, err := s.store.Get(ctx, []byte(kvEmbedder))
-		if err == nil {
-			// Already bootstrapped; checkEmbedderIdentity already verified this
-			// run's embedder matches, so there is nothing left to do.
-			return
+	s.memMu.Lock()
+	defer s.memMu.Unlock()
+	if s.memReady {
+		return nil
+	}
+	if err := s.bootstrapMemory(ctx); err != nil {
+		return err
+	}
+	s.memReady = true
+	return nil
+}
+
+// bootstrapMemory is one bootstrap attempt. The caller holds s.memMu.
+func (s *Server) bootstrapMemory(ctx context.Context) error {
+	_, err := s.store.Get(ctx, []byte(kvEmbedder))
+	if err == nil {
+		// Already bootstrapped; checkEmbedderIdentity already verified this
+		// run's embedder matches, so there is nothing left to do.
+		return nil
+	}
+	if !errors.Is(err, rostam.ErrNotFound) {
+		return fmt.Errorf("mcp: reading stored embedder identity: %w", err)
+	}
+	// vector.DefaultConfig fills in the HNSW build knobs (M/EfConstruction/
+	// EfSearch) that Config.Validate requires but the memory collection has
+	// no opinion on; only Dim/Metric/FullText are memory-specific.
+	cfg := vector.DefaultConfig()
+	cfg.Dim, cfg.Metric, cfg.FullText = s.emb.Dim(), vector.Cosine, &vector.FullTextConfig{}
+	applyPersistence(&cfg)
+	switch err := s.store.CreateCollection(ctx, memCollection, cfg); {
+	case err == nil:
+	case isCollectionExists(err):
+		// A second session bootstrapped between our existence check and this
+		// call — routine in remote mode, where several `mcp -connect` processes
+		// share one store. The collection this server needs now exists, so the
+		// race is won by joining it, not by failing.
+		return s.awaitStoredIdentity(ctx)
+	default:
+		return fmt.Errorf("mcp: creating memory collection: %w", err)
+	}
+	id := embedIdentity{Model: s.emb.Model(), Dim: s.emb.Dim(), Hybrid: s.hybrid}
+	b, err := json.Marshal(id)
+	if err != nil {
+		return fmt.Errorf("mcp: encoding embedder identity: %w", err)
+	}
+	if err := s.store.Put(ctx, []byte(kvEmbedder), b, 0); err != nil {
+		return fmt.Errorf("mcp: storing embedder identity: %w", err)
+	}
+	return nil
+}
+
+// isCollectionExists reports whether err is "that collection is already
+// there". Embedded mode returns vector.ErrCollectionExists directly; over
+// -connect the same failure arrives as a reconstructed error whose chain does
+// not survive the wire, so the message is matched as well.
+func isCollectionExists(err error) bool {
+	return errors.Is(err, vector.ErrCollectionExists) ||
+		strings.Contains(err.Error(), "collection already exists")
+}
+
+// awaitStoredIdentity reads back the embedder identity a concurrent creator
+// recorded and verifies it matches this run's configuration.
+//
+// The other session writes the identity key one round trip AFTER creating the
+// collection, so reading it immediately can legitimately miss it; a few
+// bounded retries cover that window. Exhausting them means the other creator
+// died mid-bootstrap, which this run reports rather than proceeding against a
+// collection whose embedder it was never able to check.
+func (s *Server) awaitStoredIdentity(ctx context.Context) error {
+	for attempt := range identityReadAttempts {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(identityReadBackoff):
+			}
 		}
-		if !errors.Is(err, rostam.ErrNotFound) {
-			s.memErr = fmt.Errorf("mcp: reading stored embedder identity: %w", err)
-			return
+		raw, err := s.store.Get(ctx, []byte(kvEmbedder))
+		switch {
+		case err == nil:
+			return s.matchStoredIdentity(raw)
+		case errors.Is(err, rostam.ErrNotFound):
+			continue
+		default:
+			return fmt.Errorf("mcp: reading stored embedder identity: %w", err)
 		}
-		// vector.DefaultConfig fills in the HNSW build knobs (M/EfConstruction/
-		// EfSearch) that Config.Validate requires but the memory collection has
-		// no opinion on; only Dim/Metric/FullText are memory-specific.
-		cfg := vector.DefaultConfig()
-		cfg.Dim, cfg.Metric, cfg.FullText = s.emb.Dim(), vector.Cosine, &vector.FullTextConfig{}
-		applyPersistence(&cfg)
-		if err := s.store.CreateCollection(ctx, memCollection, cfg); err != nil {
-			s.memErr = fmt.Errorf("mcp: creating memory collection: %w", err)
-			return
-		}
-		id := embedIdentity{Model: s.emb.Model(), Dim: s.emb.Dim(), Hybrid: s.hybrid}
-		b, err := json.Marshal(id)
-		if err != nil {
-			s.memErr = fmt.Errorf("mcp: encoding embedder identity: %w", err)
-			return
-		}
-		if err := s.store.Put(ctx, []byte(kvEmbedder), b, 0); err != nil {
-			s.memErr = fmt.Errorf("mcp: storing embedder identity: %w", err)
-			return
-		}
-		if err := s.store.Put(ctx, []byte(kvNamespaces), []byte("[]"), 0); err != nil {
-			s.memErr = fmt.Errorf("mcp: storing namespace list: %w", err)
-			return
-		}
-	})
-	return s.memErr
+	}
+	return fmt.Errorf("mcp: the %q collection already exists but carries no embedder identity after %d reads; a concurrent bootstrap looks to have failed part-way, leaving a collection whose embedder cannot be verified",
+		memCollection, identityReadAttempts)
 }
 
 // memoryID derives a memory's point id from its namespace and content, so

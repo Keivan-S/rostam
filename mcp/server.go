@@ -42,8 +42,11 @@ type Server struct {
 	tools       []toolDef
 	initialized bool
 
-	memOnce sync.Once // lazy mcp_memory bootstrap
-	memErr  error
+	// Lazy mcp_memory bootstrap. A mutex plus a succeeded-flag rather than a
+	// sync.Once: Once would latch a transient first failure for the lifetime
+	// of the process, and only success may be latched here. See ensureMemory.
+	memMu    sync.Mutex
+	memReady bool
 }
 
 func NewServer(ctx context.Context, cfg Config) (*Server, error) {

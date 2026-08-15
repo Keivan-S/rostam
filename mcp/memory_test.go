@@ -4,8 +4,10 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/rostamlabs/rostam"
@@ -418,6 +420,153 @@ func TestListMemoriesPaginates(t *testing.T) {
 		if !seen[f.ID] {
 			t.Fatalf("id %d missing from paginated results", f.ID)
 		}
+	}
+}
+
+// flakyCreateStore fails CreateCollection while fail is set. It stands in for
+// the transient failures a real bootstrap hits — a canceled context, a
+// not-leader reply from a remote store, a transport blip — none of which the
+// public Store interface offers a way to inject.
+type flakyCreateStore struct {
+	rostam.Store
+	fail atomic.Bool
+}
+
+func (f *flakyCreateStore) CreateCollection(ctx context.Context, name string, cfg rostam.VectorConfig) error {
+	if f.fail.Load() {
+		return errors.New("injected transient bootstrap failure")
+	}
+	return f.Store.CreateCollection(ctx, name, cfg)
+}
+
+// TestEnsureMemoryRetriesAfterTransientFailure is the whole point of dropping
+// sync.Once: a bootstrap that failed once must not poison every later memory
+// tool call in the process. Under Once, the second ensureMemory below returned
+// the cached first error and the server never recovered.
+func TestEnsureMemoryRetriesAfterTransientFailure(t *testing.T) {
+	flaky := &flakyCreateStore{Store: newHeapStore(t)}
+	flaky.fail.Store(true)
+
+	s, err := NewServer(context.Background(), Config{Store: flaky})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	ctx := context.Background()
+	if err := s.ensureMemory(ctx); err == nil {
+		t.Fatal("first ensureMemory should have failed: CreateCollection is faulted")
+	}
+
+	flaky.fail.Store(false)
+	if err := s.ensureMemory(ctx); err != nil {
+		t.Fatalf("ensureMemory after the fault cleared: %v", err)
+	}
+	// And the latch closes on success: a subsequent failure injection must not
+	// matter, because the collection is already there.
+	flaky.fail.Store(true)
+	if err := s.ensureMemory(ctx); err != nil {
+		t.Fatalf("ensureMemory after a success should be a no-op: %v", err)
+	}
+}
+
+// TestEnsureMemoryRetriesEndToEnd is the same contract through the tool
+// surface: a remember that failed on a faulted bootstrap must succeed once the
+// fault clears, in the same session.
+func TestEnsureMemoryRetriesEndToEnd(t *testing.T) {
+	flaky := &flakyCreateStore{Store: newHeapStore(t)}
+	flaky.fail.Store(true)
+	c := startServer(t, Config{Store: flaky})
+	c.initialize()
+
+	c.callTool("remember", map[string]any{"content": "first try fails"}, nil, true)
+
+	flaky.fail.Store(false)
+	c.callTool("remember", map[string]any{"content": "the deploy key lives in vault"}, nil, false)
+	var rec struct {
+		Hits []struct {
+			Content string `json:"content"`
+		} `json:"hits"`
+	}
+	c.callTool("recall", map[string]any{"query": "deploy key vault"}, &rec, false)
+	if len(rec.Hits) != 1 {
+		t.Fatalf("the session should have recovered after the transient failure: %+v", rec.Hits)
+	}
+}
+
+// hiddenIdentityStore answers the first hideFirst reads of the embedder
+// identity key as "not found" while the underlying store already holds it.
+// That is exactly the window two concurrent bootstrappers race in: both see no
+// identity, both decide to create, and the loser's CreateCollection comes back
+// "already exists".
+type hiddenIdentityStore struct {
+	rostam.Store
+	remaining atomic.Int64
+	forever   bool
+}
+
+func (h *hiddenIdentityStore) Get(ctx context.Context, key []byte) ([]byte, error) {
+	if string(key) == kvEmbedder && (h.forever || h.remaining.Add(-1) >= 0) {
+		return nil, rostam.ErrNotFound
+	}
+	return h.Store.Get(ctx, key)
+}
+
+// TestBootstrapToleratesConcurrentCreator: a session that loses the create
+// race joins the winner instead of failing. Under the old code the
+// ErrCollectionExists was cached in memOnce and every memory tool in that
+// session failed permanently.
+func TestBootstrapToleratesConcurrentCreator(t *testing.T) {
+	st := newHeapStore(t)
+	// The "other session": bootstrap the collection and its identity for real.
+	first, err := NewServer(context.Background(), Config{Store: st})
+	if err != nil {
+		t.Fatalf("NewServer (first): %v", err)
+	}
+	if err := first.ensureMemory(context.Background()); err != nil {
+		t.Fatalf("first ensureMemory: %v", err)
+	}
+
+	// This session is blind to the identity key for its startup check and its
+	// bootstrap existence check, so it tries to create and loses.
+	hidden := &hiddenIdentityStore{Store: st}
+	hidden.remaining.Store(2)
+	second, err := NewServer(context.Background(), Config{Store: hidden})
+	if err != nil {
+		t.Fatalf("NewServer (second) should not see a conflict it cannot know about: %v", err)
+	}
+	if err := second.ensureMemory(context.Background()); err != nil {
+		t.Fatalf("losing the create race must not fail the session: %v", err)
+	}
+	// And the joined session is fully usable.
+	if err := second.ensureMemory(context.Background()); err != nil {
+		t.Fatalf("second ensureMemory: %v", err)
+	}
+}
+
+// TestBootstrapReportsAbandonedCreator is the other side of that tolerance: a
+// collection that exists with no identity recorded means some other creator
+// died mid-bootstrap. Proceeding would run against a collection whose embedder
+// was never verified, so it must error instead of hanging or pretending.
+func TestBootstrapReportsAbandonedCreator(t *testing.T) {
+	st := newHeapStore(t)
+	first, err := NewServer(context.Background(), Config{Store: st})
+	if err != nil {
+		t.Fatalf("NewServer (first): %v", err)
+	}
+	if err := first.ensureMemory(context.Background()); err != nil {
+		t.Fatalf("first ensureMemory: %v", err)
+	}
+
+	hidden := &hiddenIdentityStore{Store: st, forever: true}
+	second, err := NewServer(context.Background(), Config{Store: hidden})
+	if err != nil {
+		t.Fatalf("NewServer (second): %v", err)
+	}
+	err = second.ensureMemory(context.Background())
+	if err == nil {
+		t.Fatal("a collection with no recorded identity must not be accepted silently")
+	}
+	if !strings.Contains(err.Error(), "embedder identity") {
+		t.Fatalf("error should name the missing identity, got %v", err)
 	}
 }
 
