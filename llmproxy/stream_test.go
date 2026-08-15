@@ -244,6 +244,87 @@ func TestProxy_StreamingToolCallsNotStored(t *testing.T) {
 	}
 }
 
+// (f) a Stream:true request whose upstream response is 200 but not SSE (an
+// upstream that doesn't honor stream:true) is relayed to the client as-is and
+// never cached: a repeat of the same request misses again, and each request
+// is counted as exactly one miss.
+func TestProxy_StreamingRequestNonSSEUpstreamResponseRelayedNotCached(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	upstream.script(chatPath, scriptedResponse{
+		body: chatCompletionJSON(t, "plain json despite stream:true", "stop", 4),
+	})
+	proxy := newProxy(t, upstream, nil)
+
+	body := `{"model":"gpt-4","stream":true,"messages":[{"role":"user","content":"upstream ignores stream"}]}`
+
+	resp1, body1 := postChat(t, proxy.URL, body, nil)
+	if resp1.StatusCode != http.StatusOK {
+		t.Fatalf("first request status = %d, want 200", resp1.StatusCode)
+	}
+	if got := resp1.Header.Get("x-rostam-cache"); got != "miss" {
+		t.Fatalf("first request x-rostam-cache = %q, want miss", got)
+	}
+	wantBody := chatCompletionJSON(t, "plain json despite stream:true", "stop", 4)
+	if string(body1) != string(wantBody) {
+		t.Fatalf("relayed body = %s, want %s (upstream JSON relayed verbatim)", body1, wantBody)
+	}
+
+	resp2, _ := postChat(t, proxy.URL, body, nil)
+	if got := resp2.Header.Get("x-rostam-cache"); got != "miss" {
+		t.Fatalf("repeat request x-rostam-cache = %q, want miss (non-SSE upstream response must not be cached)", got)
+	}
+	if n := upstream.requestCount(chatPath); n != 2 {
+		t.Fatalf("upstream requests = %d, want 2 (both should reach upstream)", n)
+	}
+
+	statsResp, statsBody := getStats(t, proxy.URL)
+	if statsResp.StatusCode != http.StatusOK {
+		t.Fatalf("/stats status = %d, want 200", statsResp.StatusCode)
+	}
+	var st struct {
+		Misses float64 `json:"misses"`
+		Stored float64 `json:"stored"`
+	}
+	if err := json.Unmarshal(statsBody, &st); err != nil {
+		t.Fatalf("unmarshal /stats: %v; body=%s", err, statsBody)
+	}
+	if st.Misses != 2 {
+		t.Fatalf("misses = %v, want 2 (each request counted exactly once)", st.Misses)
+	}
+	if st.Stored != 0 {
+		t.Fatalf("stored = %v, want 0 (non-SSE response must never be stored)", st.Stored)
+	}
+}
+
+// (g) a Stream:true request whose upstream response is a non-200 error is
+// relayed untouched and never cached.
+func TestProxy_StreamingRequestUpstream500RelayedNotCached(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	upstream.script(chatPath, scriptedResponse{
+		status: http.StatusInternalServerError,
+		body:   []byte(`{"error":{"message":"boom","type":"server_error"}}`),
+	})
+	proxy := newProxy(t, upstream, nil)
+
+	body := `{"model":"gpt-4","stream":true,"messages":[{"role":"user","content":"trigger a 500"}]}`
+
+	resp1, body1 := postChat(t, proxy.URL, body, nil)
+	if resp1.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", resp1.StatusCode)
+	}
+	if got := string(body1); got != `{"error":{"message":"boom","type":"server_error"}}` {
+		t.Fatalf("relayed body = %q, want upstream body verbatim", got)
+	}
+
+	resp2, _ := postChat(t, proxy.URL, body, nil)
+	if resp2.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("second status = %d, want 500 again (nothing cached)", resp2.StatusCode)
+	}
+	if n := upstream.requestCount(chatPath); n != 2 {
+		t.Fatalf("upstream requests = %d, want 2", n)
+	}
+}
+
 // (e) usage-chunk completion_tokens land in tokens_saved once the answer is
 // served from a subsequent cache hit, and /stats counts streaming hits and
 // misses exactly like non-streaming ones (a gap Task 5 left open).

@@ -149,9 +149,9 @@ func writeOpenAIError(w http.ResponseWriter, status int, message, errType string
 
 // handleChatCompletions implements the cache path for POST
 // /v1/chat/completions: parse, check cacheability, look up, answer from
-// cache or forward and store. Stream:true requests take the passthrough
-// (uncached) branch in this task — a later task replaces that branch with
-// real streaming-cache support; see the SEAM comment below.
+// cache or forward and store. Stream:true requests are cacheable exactly like
+// non-streaming ones but take a separate path (handleStreamingChat) because
+// their hit and miss responses are SSE rather than a single JSON body.
 func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	body, err := io.ReadAll(r.Body)
