@@ -73,8 +73,16 @@ func (e *EmbeddedRetriever) EnsureCorpus(_ context.Context, name string, dim int
 		FullText: &vector.FullTextConfig{},
 	}
 	if err := e.store.CreateCollection(name, cfg); err != nil {
-		// Treat "already exists" as success so re-ingest is idempotent.
+		// Treat "already exists" as success so re-ingest is idempotent — but
+		// only when the dimension matches. A corpus's Dim is fixed at
+		// creation, so a stale corpus (e.g. one created BM25-only at the
+		// dim=1 placeholder, now being re-ingested with a real embedder)
+		// would otherwise slip through here and fail later, deep inside
+		// Upsert, as an unhelpful raw vector.ErrDimMismatch.
 		if errors.Is(err, vector.ErrCollectionExists) {
+			if existing, ok := e.store.Get(name); ok && existing.Config().Dim != d {
+				return fmt.Errorf("rag: corpus %q already exists with dimension %d, but this run needs %d; use a different --corpus or wipe the --data dir to recreate it", name, existing.Config().Dim, d)
+			}
 			return nil
 		}
 		return err
@@ -154,6 +162,14 @@ func (h *HTTPRetriever) EnsureCorpus(ctx context.Context, name string, dim int) 
 	// Mirrors EmbeddedRetriever.EnsureCorpus: BM25-only corpora still need a
 	// collection; give it dim=1 so no real vectors are ever inserted but the
 	// full-text index is live.
+	//
+	// Unlike EmbeddedRetriever, this does NOT guard against a dim mismatch on
+	// an already-existing corpus: the rostam.Store client interface exposes
+	// CreateCollection (write) but no read RPC to fetch an existing
+	// collection's configured Dim, so there is nothing here to compare
+	// against without a fragile ad hoc fetch. A dim mismatch over -endpoint
+	// still surfaces later as a raw error out of Upsert, same as before this
+	// fix; closing that gap is a fast-follow.
 	d := dim
 	if d <= 0 {
 		d = 1

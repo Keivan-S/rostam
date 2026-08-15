@@ -6,11 +6,13 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strings"
 	"syscall"
 	"testing"
 
 	"github.com/rostamlabs/rostam"
 	"github.com/rostamlabs/rostam/ops"
+	"github.com/rostamlabs/rostam/vector"
 )
 
 func TestEmbeddedRetrieverRoundtripBM25(t *testing.T) {
@@ -69,6 +71,37 @@ func TestEmbeddedRetrieverDeleteBySource(t *testing.T) {
 		if h.Source == "a.md" {
 			t.Fatalf("a.md should be gone: %+v", hits)
 		}
+	}
+}
+
+// TestEmbeddedRetrieverEnsureCorpusDimMismatch covers Finding 1 from the
+// whole-branch review: a corpus's Dim is fixed at creation, so re-ingesting
+// the same --corpus with a different dimension (e.g. BM25's dim=1
+// placeholder, then a dense embedder) must refuse cleanly instead of
+// silently succeeding and failing later, deep inside Upsert, as a raw
+// vector.ErrDimMismatch.
+func TestEmbeddedRetrieverEnsureCorpusDimMismatch(t *testing.T) {
+	dir := t.TempDir()
+	r, err := NewEmbeddedRetriever(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = r.Close() }()
+	ctx := context.Background()
+
+	if err := r.EnsureCorpus(ctx, "docs", 0); err != nil { // BM25-only: dim=1 placeholder
+		t.Fatal(err)
+	}
+
+	err = r.EnsureCorpus(ctx, "docs", 8) // now ask for a dense embedder's real dim
+	if err == nil {
+		t.Fatal("expected a dimension-mismatch error, got nil (silent success)")
+	}
+	if !strings.Contains(err.Error(), "dimension") {
+		t.Fatalf("expected an error mentioning the dimension mismatch, got: %v", err)
+	}
+	if errors.Is(err, vector.ErrDimMismatch) {
+		t.Fatalf("expected EnsureCorpus's own actionable error, not a raw vector.ErrDimMismatch: %v", err)
 	}
 }
 

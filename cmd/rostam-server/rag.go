@@ -60,8 +60,8 @@ func runRagCmdE(args []string) error {
 
 	fs := flag.NewFlagSet("rag "+verb, flag.ContinueOnError)
 	var fl ragFlags
-	fs.StringVar(&fl.data, "data", ragDataDefault, "embedded data directory (mutually exclusive with -endpoint)")
-	fs.StringVar(&fl.endpoint, "endpoint", "", "connect to a remote rostam-server instead of embedding a store (host:port); mutually exclusive with -data")
+	fs.StringVar(&fl.data, "data", ragDataDefault, "embedded data directory (ignored when -endpoint is set)")
+	fs.StringVar(&fl.endpoint, "endpoint", "", "talk to a running rostam server instead of the local --data dir (host:port); -endpoint takes precedence over -data")
 	fs.StringVar(&fl.corpus, "corpus", "default", "corpus (collection) name")
 	fs.IntVar(&fl.k, "k", 5, "number of hits to retrieve")
 	fs.IntVar(&fl.chunkSize, "chunk-size", 0, "chunk size in words (0 = rag package default, 512)")

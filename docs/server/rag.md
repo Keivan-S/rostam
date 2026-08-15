@@ -37,8 +37,8 @@ spend a generation call on it.
 
 | Flag | Env | Default | Purpose |
 |---|---|---|---|
-| `-data` | — | `./.rostam-rag` | Embedded data directory. Mutually exclusive with `-endpoint`. |
-| `-endpoint` | — | (unset) | Connect to a remote `rostam-server` (`host:port`) instead of embedding a store. Mutually exclusive with `-data`. |
+| `-data` | — | `./.rostam-rag` | Embedded data directory. Ignored when `-endpoint` is set. |
+| `-endpoint` | — | (unset) | Talk to a running `rostam-server` (`host:port`) instead of the local `-data` dir. `-endpoint` takes precedence over `-data`. |
 | `-corpus` | — | `default` | Corpus (collection) name — lets you keep multiple document sets side by side in one data directory. |
 | `-k` | — | `5` | Number of chunks to retrieve. |
 | `-chunk-size` | — | `512` | Chunk size in words (`0` uses the `rag` package default of 512). |
@@ -79,9 +79,17 @@ switches to dense kNN search over the embedded vectors instead.
 
 Note that ingestion and retrieval must agree: chunks embedded at ingest
 time are only useful for dense search if the same embedder configuration
-is present at query/ask time too. Re-run `rag ingest` after changing
-embedder settings so existing chunks get fresh vectors — it's idempotent,
-so re-ingesting the same paths is safe.
+is present at query/ask time too.
+
+A corpus's vector dimensionality is fixed the moment it's first created.
+Re-ingesting the same paths with the *same* embedder configuration (or no
+embedder at all) is idempotent and safe — see
+[Re-ingesting](#re-ingesting). But switching a corpus between BM25 and a
+dense embedder, or changing `-embed-dim`, changes the dimension a fresh
+ingest would need, and an existing corpus can't be resized in place:
+`rag ingest` refuses with an error telling you to pick a new `-corpus` (or
+wipe the `-data` dir) rather than silently leaving stale or mismatched
+vectors behind.
 
 Combined dense+BM25 fusion (hybrid search) is a planned upgrade, not yet
 wired into the CLI — today it's one or the other, decided entirely by
