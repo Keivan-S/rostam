@@ -179,11 +179,8 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// SEAM: Stream:true requests are uncached passthrough here; a later task
-	// replaces this branch with a caching-aware SSE relay (cache hit -> replay
-	// as SSE, miss -> relay + capture via relayAndCapture).
 	if req.Stream {
-		s.passthroughRequest(w, r, bytes.NewReader(body), int64(len(body)))
+		s.handleStreamingChat(w, r, req, prompt, scope)
 		return
 	}
 
@@ -203,6 +200,35 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(synthesizeResponse(req.Model, hit.Answer, hit.OutTokens))
 	default:
 		s.forwardAndMaybeStore(w, r, req, prompt, scope, "miss")
+	}
+}
+
+// handleStreamingChat implements the cache path for a Stream:true request
+// already judged cacheable: a hit replays the cached answer as a synthetic
+// SSE stream without touching upstream; a miss (or a lookup error, treated as
+// a bypass) forwards the request and relays upstream's stream live via
+// forwardStreamAndMaybeStore.
+func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, req *chatRequest,
+	prompt string, scope semcache.Scope) {
+	hit, found, err := s.cache.Lookup(r.Context(), prompt, scope)
+	switch {
+	case err != nil:
+		// Lookup errored: treat as a miss but tell the client the cache was
+		// bypassed rather than claiming a clean miss it didn't get.
+		s.log.Error("llmproxy: cache lookup failed", "err", err)
+		s.forwardStreamAndMaybeStore(w, r, req, prompt, scope, "bypass")
+	case found:
+		s.stats.hits.Add(1)
+		s.stats.tokensSaved.Add(int64(hit.OutTokens))
+		// The header must land before replayAsSSE's first write, which
+		// implicitly sends the response headers (no explicit WriteHeader for
+		// an SSE stream — replayAsSSE never calls it).
+		w.Header().Set("x-rostam-cache", "hit")
+		if err := replayAsSSE(w, req.Model, hit.Answer); err != nil {
+			s.log.Error("llmproxy: replaying cached stream", "err", err)
+		}
+	default:
+		s.forwardStreamAndMaybeStore(w, r, req, prompt, scope, "miss")
 	}
 }
 
@@ -283,6 +309,58 @@ func (s *Server) maybeStore(ctx context.Context, prompt string, scope semcache.S
 	}
 
 	if err := s.cache.Store(ctx, prompt, scope, choice.Message.Content, resp.Usage.CompletionTokens); err != nil {
+		s.log.Error("llmproxy: cache store failed", "err", err)
+		return
+	}
+	s.stats.stored.Add(1)
+}
+
+// forwardStreamAndMaybeStore forwards req.Raw upstream for a Stream:true
+// request. A 200 response with an SSE content type is relayed live via
+// relayAndCapture, and the assembled answer is stored on a clean single-choice
+// completion; anything else (non-200, or a 200 that isn't SSE — e.g. an
+// upstream that doesn't honor stream:true) is relayed as-is and never cached,
+// since relayAndCapture's accumulation logic assumes an SSE body.
+func (s *Server) forwardStreamAndMaybeStore(w http.ResponseWriter, r *http.Request, req *chatRequest,
+	prompt string, scope semcache.Scope, cacheStatus string) {
+	s.stats.misses.Add(1)
+
+	upstreamReq, err := s.newUpstreamRequest(r, bytes.NewReader(req.Raw), int64(len(req.Raw)))
+	if err != nil {
+		writeOpenAIError(w, http.StatusBadGateway, "building upstream request: "+err.Error(), "upstream_error")
+		return
+	}
+
+	resp, err := s.client.Do(upstreamReq)
+	if err != nil {
+		s.log.Error("llmproxy: upstream request failed", "err", err)
+		writeOpenAIError(w, http.StatusBadGateway, "upstream request failed: "+err.Error(), "upstream_error")
+		return
+	}
+	defer resp.Body.Close()
+
+	copyHeadersExceptHopByHop(w.Header(), resp.Header)
+	w.Header().Set("x-rostam-cache", cacheStatus)
+	w.WriteHeader(resp.StatusCode)
+
+	isSSE := strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream")
+	if resp.StatusCode != http.StatusOK || !isSSE {
+		if _, err := io.Copy(w, resp.Body); err != nil {
+			s.log.Error("llmproxy: relaying non-SSE stream response", "err", err)
+		}
+		return
+	}
+
+	result, err := relayAndCapture(w, resp.Body)
+	if err != nil {
+		s.log.Error("llmproxy: relaying streamed response", "err", err)
+		return
+	}
+	if !result.clean || result.finishReason != "stop" || result.sawToolCalls || result.content.Len() == 0 {
+		return
+	}
+
+	if err := s.cache.Store(r.Context(), prompt, scope, result.content.String(), result.completionTokens); err != nil {
 		s.log.Error("llmproxy: cache store failed", "err", err)
 		return
 	}
