@@ -49,6 +49,48 @@ func TestIngestBM25AndReIngest(t *testing.T) {
 	}
 }
 
+func TestIngestReIngestEmptiedFilePurges(t *testing.T) {
+	src := t.TempDir()
+	corpusDir := t.TempDir()
+	path := filepath.Join(src, "a.md")
+	writeFile(t, path, "epoll transport loop count comes from gomaxprocs and raft shards")
+
+	r, err := NewEmbeddedRetriever(corpusDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = r.Close() }()
+	ctx := context.Background()
+	if err := r.EnsureCorpus(ctx, "docs", 0); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Ingest(ctx, r, []string{src}, IngestOptions{Corpus: "docs", ChunkSize: 8, ChunkOverlap: 2}); err != nil {
+		t.Fatal(err)
+	}
+	hits, err := r.Search(ctx, "docs", "epoll", nil, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) == 0 {
+		t.Fatalf("expected hits for initial content, got none")
+	}
+
+	// Overwrite with whitespace-only content: SplitText will yield zero
+	// chunks, but the file's prior chunks must still be purged.
+	writeFile(t, path, "   \n\t ")
+	if _, err := Ingest(ctx, r, []string{src}, IngestOptions{Corpus: "docs", ChunkSize: 8, ChunkOverlap: 2}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := r.Search(ctx, "docs", "epoll", nil, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != 0 {
+		t.Fatalf("expected stale chunks purged after re-ingesting emptied file, got %d hits", len(after))
+	}
+}
+
 func TestIngestWithStubEmbedder(t *testing.T) {
 	src := t.TempDir()
 	corpusDir := t.TempDir()

@@ -93,12 +93,14 @@ func Ingest(ctx context.Context, r Retriever, paths []string, opts IngestOptions
 
 func ingestFile(ctx context.Context, r Retriever, opts IngestOptions, source, body string) (int, error) {
 	chunks := SplitText(body, opts.ChunkSize, opts.ChunkOverlap)
-	if len(chunks) == 0 {
-		return 0, nil
-	}
-	// Idempotent re-ingest: purge this file's previous chunks first.
+	// Idempotent re-ingest: purge this file's previous chunks first, even if
+	// the file now yields zero chunks (e.g. it was edited down to empty) —
+	// otherwise stale chunks from an earlier ingest orphan in the corpus.
 	if _, err := r.DeleteBySource(ctx, opts.Corpus, source); err != nil {
 		return 0, err
+	}
+	if len(chunks) == 0 {
+		return 0, nil
 	}
 	var vecs [][]float32
 	if opts.Embedder != nil {
