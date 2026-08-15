@@ -66,7 +66,9 @@ with [`-connect`](#remote-mode).
 An embedded session stores memories in mmap-backed files under `-data` and
 writes the index sidecar that makes them readable again when the process shuts
 down cleanly — which is what happens when an MCP client closes the connection
-or exits. Reopening the same directory then restores everything.
+or exits, and also on `SIGINT`/`SIGTERM`: both are handled, so the server
+finishes the tool call in flight, flushes, releases the data-dir lock, and
+exits 0. Reopening the same directory then restores everything.
 
 The flush point is that clean shutdown, so a session killed outright (`SIGKILL`,
 a machine losing power) loses the memories added since the last one. If that

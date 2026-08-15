@@ -3,8 +3,11 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
+	"io"
 	"testing"
+	"time"
 )
 
 func TestInitializeHandshake(t *testing.T) {
@@ -84,6 +87,77 @@ func TestInvalidEnvelopeIsInvalidRequest(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestShutdownWaitsForTheCallInFlight is the property runMcpCmd relies on to
+// close the Store on a signal: after Shutdown returns, no handler is running.
+// A slow tool call is held open here so Shutdown has something to wait for; if
+// it returned early, the store close that follows it in the real caller would
+// land under a live handler.
+func TestShutdownWaitsForTheCallInFlight(t *testing.T) {
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	finished := make(chan struct{})
+
+	s, err := NewServer(context.Background(), Config{Store: newHeapStore(t)})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	s.register(toolDef{
+		Name:        "slow",
+		Description: "blocks until the test lets it go",
+		InputSchema: map[string]any{"type": "object"},
+		Handler: func(context.Context, json.RawMessage) (any, error) {
+			close(entered)
+			<-release
+			close(finished)
+			return map[string]any{"ok": true}, nil
+		},
+	})
+
+	cr, cw := io.Pipe()
+	sr, sw := io.Pipe()
+	served := make(chan struct{})
+	go func() { defer close(served); _ = s.Serve(cr, sw); _ = sw.Close() }()
+	drained := make(chan struct{})
+	go func() { defer close(drained); _, _ = io.Copy(io.Discard, sr) }()
+
+	write := func(v any) {
+		b, _ := json.Marshal(v)
+		if _, err := cw.Write(append(b, '\n')); err != nil {
+			t.Errorf("write: %v", err)
+		}
+	}
+	write(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize"})
+	write(map[string]any{"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+		"params": map[string]any{"name": "slow", "arguments": map[string]any{}}})
+	<-entered
+
+	shutdownReturned := make(chan struct{})
+	go func() { defer close(shutdownReturned); s.Shutdown() }()
+	select {
+	case <-shutdownReturned:
+		t.Fatal("Shutdown returned while a tool call was still running")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(release)
+	<-finished
+	select {
+	case <-shutdownReturned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Shutdown did not return after the tool call finished")
+	}
+
+	// And nothing new is dispatched: the next request ends Serve instead.
+	write(map[string]any{"jsonrpc": "2.0", "id": 3, "method": "ping"})
+	select {
+	case <-served:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Serve kept running after Shutdown")
+	}
+	_ = cw.Close()
+	<-drained
 }
 
 func TestUnknownToolIsInvalidParams(t *testing.T) {
