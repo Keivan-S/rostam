@@ -228,6 +228,17 @@ func (d *directStore) Close() error {
 		}
 	}
 	if d.vectors != nil {
+		// A Direct store has no Raft log to replay from, so a Persistent
+		// collection's mmap sidecar is the ONLY thing that carries its contents
+		// across a restart — and nothing writes that sidecar except a Flush. Doing
+		// it here makes a clean shutdown the flush point, which is what makes
+		// Persistent mean anything at all for an embedded caller (before this, a
+		// Persistent collection reopened empty). Non-persistent collections are
+		// untouched: FlushPersistent skips them, so this costs a map scan for
+		// stores that never asked for persistence.
+		if err := d.vectors.FlushPersistent(); err != nil {
+			errs = append(errs, err)
+		}
 		if err := d.vectors.Close(); err != nil {
 			errs = append(errs, err)
 		}

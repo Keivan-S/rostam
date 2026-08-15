@@ -163,7 +163,7 @@ func printGroupedUsage(w io.Writer, fs *flag.FlagSet, helpAll bool) {
 	p := func(format string, a ...any) { _, _ = fmt.Fprintf(w, format, a...) }
 
 	p("rostam-server — a vector database and key-value store over REST, gRPC and TCP.\n\n")
-	p("Usage:\n  rostam-server [flags]\n  rostam-server keys <add|revoke|list> [flags]\n\n")
+	p("Usage:\n  rostam-server [flags]\n  rostam-server keys <add|revoke|list> [flags]\n  rostam-server mcp [flags]\n\n")
 
 	if helpAll {
 		fs.SetOutput(w)

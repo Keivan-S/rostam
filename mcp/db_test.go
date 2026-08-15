@@ -1,0 +1,507 @@
+// SPDX-License-Identifier: Apache-2.0
+
+package mcp
+
+import (
+	"encoding/json"
+	"strconv"
+	"strings"
+	"testing"
+)
+
+func TestCreateCollectionUpsertSearchGet(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t)})
+	c.initialize()
+
+	var created struct {
+		Created string `json:"created"`
+	}
+	c.callTool("create_collection", map[string]any{"name": "docs", "dim": 4}, &created, false)
+	if created.Created != "docs" {
+		t.Fatalf("create_collection: got %+v", created)
+	}
+
+	c.callTool("upsert", map[string]any{
+		"collection": "docs",
+		"id":         uint64(1),
+		"vector":     []float32{1, 0, 0, 0},
+		"content":    "red fox jumps",
+		"metadata":   map[string]any{"lang": "en"},
+	}, nil, false)
+	c.callTool("upsert", map[string]any{
+		"collection": "docs",
+		"id":         uint64(2),
+		"vector":     []float32{0, 1, 0, 0},
+		"content":    "blue whale swims",
+		"metadata":   map[string]any{"lang": "fr"},
+	}, nil, false)
+
+	var textRes struct {
+		Hits []struct {
+			ID       uint64         `json:"id"`
+			Content  string         `json:"content"`
+			Metadata map[string]any `json:"metadata"`
+		} `json:"hits"`
+	}
+	c.callTool("search", map[string]any{"collection": "docs", "mode": "text", "query_text": "fox"}, &textRes, false)
+	if len(textRes.Hits) != 1 || textRes.Hits[0].ID != 1 {
+		t.Fatalf("text search: %+v", textRes.Hits)
+	}
+	if textRes.Hits[0].Metadata["lang"] != "en" {
+		t.Fatalf("text search metadata: %+v", textRes.Hits[0].Metadata)
+	}
+
+	var denseRes struct {
+		Hits []struct {
+			ID uint64 `json:"id"`
+		} `json:"hits"`
+	}
+	c.callTool("search", map[string]any{"collection": "docs", "mode": "dense", "vector": []float32{1, 0, 0, 0}, "k": 1}, &denseRes, false)
+	if len(denseRes.Hits) != 1 || denseRes.Hits[0].ID != 1 {
+		t.Fatalf("dense search: %+v", denseRes.Hits)
+	}
+
+	var got struct {
+		Points []struct {
+			ID      uint64    `json:"id"`
+			Vector  []float32 `json:"vector"`
+			Content string    `json:"content"`
+		} `json:"points"`
+		Missing []uint64 `json:"missing"`
+	}
+	c.callTool("get", map[string]any{"collection": "docs", "ids": []uint64{1, 999}, "with_vector": true}, &got, false)
+	if len(got.Points) != 1 || got.Points[0].ID != 1 || got.Points[0].Content != "red fox jumps" {
+		t.Fatalf("get: %+v", got.Points)
+	}
+	if len(got.Points[0].Vector) != 4 || got.Points[0].Vector[0] != 1 {
+		t.Fatalf("get vector: %+v", got.Points[0].Vector)
+	}
+	if len(got.Missing) != 1 || got.Missing[0] != 999 {
+		t.Fatalf("get missing: %+v", got.Missing)
+	}
+}
+
+// TestSearchResponseHasDistanceKey guards the generic search tool's hit
+// shape {id, content, score, distance, metadata}: unlike the memory tools'
+// memoryHit, search's searchHit type always carries a distance field, across
+// all three modes since they share docsToHits/hybridDocs.
+func TestSearchResponseHasDistanceKey(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t), Embedder: fakeEmbedder{}})
+	c.initialize()
+	c.callTool("create_collection", map[string]any{"name": "docs", "dim": 4}, nil, false)
+	c.callTool("upsert", map[string]any{"collection": "docs", "id": uint64(1), "vector": []float32{1, 0, 0, 0}, "content": "a: fox jumps"}, nil, false)
+
+	for _, mode := range []string{"text", "dense", "hybrid"} {
+		var res struct {
+			Hits []map[string]any `json:"hits"`
+		}
+		c.callTool("search", map[string]any{"collection": "docs", "mode": mode, "query_text": "fox", "vector": []float32{1, 0, 0, 0}}, &res, false)
+		if len(res.Hits) != 1 {
+			t.Fatalf("mode %s: expected 1 hit, got %+v", mode, res.Hits)
+		}
+		if _, ok := res.Hits[0]["distance"]; !ok {
+			t.Fatalf("mode %s: search hit should carry a distance key: %+v", mode, res.Hits[0])
+		}
+	}
+}
+
+func TestUpsertRefusesMemoryCollection(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t)})
+	c.initialize()
+	msg := c.callTool("upsert", map[string]any{"collection": memCollection, "id": uint64(1), "vector": []float32{1, 0, 0, 0}}, nil, true)
+	if !strings.Contains(msg, "memory") {
+		t.Fatalf("error should mention the memory tools, got %q", msg)
+	}
+}
+
+func TestCreateCollectionRefusesMemoryName(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t)})
+	c.initialize()
+	msg := c.callTool("create_collection", map[string]any{"name": memCollection, "dim": 4}, nil, true)
+	if !strings.Contains(msg, "memory") {
+		t.Fatalf("error should mention the memory tools, got %q", msg)
+	}
+}
+
+func TestUpsertRequiresVectorOrEmbedder(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t)})
+	c.initialize()
+	c.callTool("create_collection", map[string]any{"name": "docs", "dim": 4}, nil, false)
+	msg := c.callTool("upsert", map[string]any{"collection": "docs", "id": uint64(1), "content": "no vector, no embedder"}, nil, true)
+	if !strings.Contains(msg, "embedder") {
+		t.Fatalf("error should mention embedder, got %q", msg)
+	}
+}
+
+func TestSearchFilterTaggedForm(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t)})
+	c.initialize()
+	c.callTool("create_collection", map[string]any{"name": "docs", "dim": 4}, nil, false)
+	c.callTool("upsert", map[string]any{"collection": "docs", "id": uint64(1), "vector": []float32{1, 0, 0, 0}, "content": "english doc", "metadata": map[string]any{"lang": "en"}}, nil, false)
+	c.callTool("upsert", map[string]any{"collection": "docs", "id": uint64(2), "vector": []float32{1, 0, 0, 0}, "content": "french doc", "metadata": map[string]any{"lang": "fr"}}, nil, false)
+
+	filter := map[string]any{
+		"op":    "eq",
+		"field": "lang",
+		"value": map[string]any{"kind": "string", "str": "en"},
+	}
+	var res struct {
+		Hits []struct {
+			ID uint64 `json:"id"`
+		} `json:"hits"`
+	}
+	c.callTool("search", map[string]any{"collection": "docs", "mode": "dense", "vector": []float32{1, 0, 0, 0}, "k": 10, "filter": filter}, &res, false)
+	if len(res.Hits) != 1 || res.Hits[0].ID != 1 {
+		t.Fatalf("filtered search: %+v", res.Hits)
+	}
+}
+
+func TestSearchHybridUsesEmbedder(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t), Embedder: fakeEmbedder{}})
+	c.initialize()
+	c.callTool("create_collection", map[string]any{"name": "docs", "dim": 4}, nil, false)
+	c.callTool("upsert", map[string]any{"collection": "docs", "id": uint64(1), "content": "a: dense-close fact"}, nil, false)
+	c.callTool("upsert", map[string]any{"collection": "docs", "id": uint64(2), "content": "b: dense-far fact"}, nil, false)
+
+	var res struct {
+		Hits []struct {
+			Content string `json:"content"`
+		} `json:"hits"`
+	}
+	// query "a..." shares NO BM25 tokens with either doc; only the dense side ranks it.
+	c.callTool("search", map[string]any{"collection": "docs", "mode": "hybrid", "query_text": "a unrelated words", "k": 1}, &res, false)
+	if len(res.Hits) != 1 || !strings.HasPrefix(res.Hits[0].Content, "a:") {
+		t.Fatalf("hybrid search did not use dense side: %+v", res.Hits)
+	}
+}
+
+func TestSearchDefaultModeNoEmbedder(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t)})
+	c.initialize()
+	c.callTool("create_collection", map[string]any{"name": "docs", "dim": 4}, nil, false)
+	c.callTool("upsert", map[string]any{"collection": "docs", "id": uint64(1), "vector": []float32{1, 0, 0, 0}, "content": "fox jumps"}, nil, false)
+
+	var res struct {
+		Hits []struct {
+			ID uint64 `json:"id"`
+		} `json:"hits"`
+	}
+	// no mode specified: no embedder configured, so default mode is "text".
+	c.callTool("search", map[string]any{"collection": "docs", "query_text": "fox"}, &res, false)
+	if len(res.Hits) != 1 {
+		t.Fatalf("default text-mode search: %+v", res.Hits)
+	}
+}
+
+// TestGetRefusesMemoryCollection and TestSearchRefusesMemoryCollection cover
+// the reads that used to be allowed through. Neither generic reader applies
+// the __ns filter that recall/list_memories do, so both were a way to read
+// every namespace's memories at once — get additionally handed back the
+// internal __ns metadata naming the namespace each one belongs to. Namespaces
+// are the memory subsystem's only isolation boundary; the generic readers must
+// not be a hole in it.
+func TestGetRefusesMemoryCollection(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t)})
+	c.initialize()
+	var r struct {
+		ID uint64 `json:"id"`
+	}
+	c.callTool("remember", map[string]any{"content": "hello", "namespace": "private"}, &r, false)
+
+	msg := c.callTool("get", map[string]any{"collection": memCollection, "ids": []uint64{r.ID}}, nil, true)
+	if !strings.Contains(msg, "memory") {
+		t.Fatalf("error should mention the memory tools, got %q", msg)
+	}
+	if strings.Contains(msg, "hello") || strings.Contains(msg, nsField) {
+		t.Fatalf("rejection must not leak the memory or its namespace field: %q", msg)
+	}
+}
+
+func TestSearchRefusesMemoryCollection(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t)})
+	c.initialize()
+	c.callTool("remember", map[string]any{"content": "the deploy password lives in vault", "namespace": "private"}, nil, false)
+
+	msg := c.callTool("search", map[string]any{"collection": memCollection, "query_text": "deploy password"}, nil, true)
+	if !strings.Contains(msg, "memory") {
+		t.Fatalf("error should mention the memory tools, got %q", msg)
+	}
+	if strings.Contains(msg, "vault") {
+		t.Fatalf("rejection must not leak the memory contents: %q", msg)
+	}
+}
+
+// TestDestructiveToolsAbsentByDefault guards the registration gate itself:
+// delete/delete_by_filter must not appear in tools/list at all (not merely
+// refuse when called) unless Config.Destructive is set.
+// TestGenericToolsSurviveMisbehavingEmbedder is the memory-side guard's
+// counterpart: upsert's auto-embed and search's query embedding index the same
+// [0] and take the same session down if the embedder returns nothing.
+func TestGenericToolsSurviveMisbehavingEmbedder(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t), Embedder: shortEmbedder{}})
+	c.initialize()
+	c.callTool("create_collection", map[string]any{"name": "docs", "dim": 4}, nil, false)
+
+	msg := c.callTool("upsert", map[string]any{"collection": "docs", "id": 1, "content": "auto-embed me"}, nil, true)
+	if !strings.Contains(msg, "embed") {
+		t.Fatalf("upsert error should name the embed step, got %q", msg)
+	}
+	msg = c.callTool("search", map[string]any{"collection": "docs", "mode": "dense", "query_text": "anything"}, nil, true)
+	if !strings.Contains(msg, "embed") {
+		t.Fatalf("search error should name the embed step, got %q", msg)
+	}
+	c.rpc("ping", nil, false) // the session is still alive
+}
+
+// TestIDsAcceptStringForm is the round trip a JavaScript client needs for a
+// collection whose ids are above 2^53-1: it cannot put such an id in a JSON
+// number without rounding it, so upsert/get/delete take the decimal string
+// form too. And the trip back has the same problem in reverse: a result
+// naming a big id must arrive as a decimal *string*, not a JSON number, or a
+// JS client rounds it the moment it parses the response and can no longer
+// reuse it. The assertions below decode into map[string]any/[]any and check
+// the raw JSON type (string vs float64) rather than a Go uint64 field, since
+// unmarshaling straight into uint64 would hide exactly this bug — Go's
+// decoder accepts a JSON string into neither a uint64 field nor (silently)
+// a float64 one, so a wrong type at either end would be a decode error, not
+// a mis-set assertion.
+func TestIDsAcceptStringForm(t *testing.T) {
+	const big = uint64(1)<<62 + 7 // not exactly representable as a float64
+	bigStr := strconv.FormatUint(big, 10)
+	const small = uint64(1)
+
+	c := startServer(t, Config{Store: newHeapStore(t), Destructive: true})
+	c.initialize()
+	c.callTool("create_collection", map[string]any{"name": "docs", "dim": 4}, nil, false)
+
+	// A small id still comes back as a plain JSON number.
+	smallText := c.callTool("upsert", map[string]any{
+		"collection": "docs", "id": small,
+		"vector": []float32{0, 1, 0, 0}, "content": "the small point",
+	}, nil, false)
+	var smallUp map[string]any
+	if err := json.Unmarshal([]byte(smallText), &smallUp); err != nil {
+		t.Fatalf("decode upsert result: %v", err)
+	}
+	if f, ok := smallUp["id"].(float64); !ok || f != float64(small) {
+		t.Fatalf("upsert(%d): id = %#v (%T), want a JSON number", small, smallUp["id"], smallUp["id"])
+	}
+
+	// A big id comes back as a decimal string, not a rounded number.
+	bigText := c.callTool("upsert", map[string]any{
+		"collection": "docs", "id": bigStr,
+		"vector": []float32{1, 0, 0, 0}, "content": "the exact point",
+	}, nil, false)
+	var bigUp map[string]any
+	if err := json.Unmarshal([]byte(bigText), &bigUp); err != nil {
+		t.Fatalf("decode upsert result: %v", err)
+	}
+	if s, ok := bigUp["id"].(string); !ok || s != bigStr {
+		t.Fatalf("upsert(%s): id = %#v (%T), want the decimal string %q", bigStr, bigUp["id"], bigUp["id"], bigStr)
+	}
+
+	// Fetch it back by the string form, and by the number form — the same
+	// point either way, because neither ever went through a float — and the
+	// id in the response is still the exact decimal string.
+	for _, form := range []any{bigStr, big} {
+		getText := c.callTool("get", map[string]any{"collection": "docs", "ids": []any{form}}, nil, false)
+		var got struct {
+			Points  []map[string]any `json:"points"`
+			Missing []any            `json:"missing"`
+		}
+		if err := json.Unmarshal([]byte(getText), &got); err != nil {
+			t.Fatalf("decode get result: %v", err)
+		}
+		if len(got.Points) != 1 {
+			t.Fatalf("get(%v): points = %+v, missing = %v", form, got.Points, got.Missing)
+		}
+		if s, ok := got.Points[0]["id"].(string); !ok || s != bigStr {
+			t.Fatalf("get(%v): id = %#v (%T), want the decimal string %q", form, got.Points[0]["id"], got.Points[0]["id"], bigStr)
+		}
+		if got.Points[0]["content"] != "the exact point" {
+			t.Fatalf("get(%v) returned the wrong point: %+v", form, got.Points[0])
+		}
+	}
+
+	delText := c.callTool("delete", map[string]any{"collection": "docs", "ids": []any{bigStr}}, nil, false)
+	var del struct {
+		Deleted []any `json:"deleted"`
+	}
+	if err := json.Unmarshal([]byte(delText), &del); err != nil {
+		t.Fatalf("decode delete result: %v", err)
+	}
+	if len(del.Deleted) != 1 {
+		t.Fatalf("delete by string id: %+v", del.Deleted)
+	}
+	if s, ok := del.Deleted[0].(string); !ok || s != bigStr {
+		t.Fatalf("delete by string id: deleted[0] = %#v (%T), want the decimal string %q", del.Deleted[0], del.Deleted[0], bigStr)
+	}
+}
+
+// TestBadIDIsAToolError: a malformed id must fail the call with a message that
+// says what a valid id looks like, not decode to some silent zero.
+func TestBadIDIsAToolError(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t)})
+	c.initialize()
+	c.callTool("create_collection", map[string]any{"name": "docs", "dim": 4}, nil, false)
+	msg := c.callTool("get", map[string]any{"collection": "docs", "ids": []any{"not-a-number"}}, nil, true)
+	if !strings.Contains(msg, "point id") {
+		t.Fatalf("error should explain what a point id may be, got %q", msg)
+	}
+}
+
+func TestDestructiveToolsAbsentByDefault(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t)})
+	c.initialize()
+	names := c.toolNames()
+	for _, want := range []string{"delete", "delete_by_filter"} {
+		for _, n := range names {
+			if n == want {
+				t.Fatalf("tool %q should be absent when Destructive is false; got %v", want, names)
+			}
+		}
+	}
+}
+
+func TestDestructiveToolsPresentWhenEnabled(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t), Destructive: true})
+	c.initialize()
+	names := c.toolNames()
+	for _, want := range []string{"delete", "delete_by_filter"} {
+		found := false
+		for _, n := range names {
+			if n == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("tool %q should be present when Destructive is true; got %v", want, names)
+		}
+	}
+}
+
+func TestDeleteRemovesPoint(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t), Destructive: true})
+	c.initialize()
+	c.callTool("create_collection", map[string]any{"name": "docs", "dim": 4}, nil, false)
+	c.callTool("upsert", map[string]any{"collection": "docs", "id": uint64(1), "vector": []float32{1, 0, 0, 0}, "content": "fox"}, nil, false)
+	c.callTool("upsert", map[string]any{"collection": "docs", "id": uint64(2), "vector": []float32{0, 1, 0, 0}, "content": "whale"}, nil, false)
+
+	var res struct {
+		Deleted []uint64 `json:"deleted"`
+		Missing []uint64 `json:"missing"`
+	}
+	c.callTool("delete", map[string]any{"collection": "docs", "ids": []uint64{1, 999}}, &res, false)
+	if len(res.Deleted) != 1 || res.Deleted[0] != 1 {
+		t.Fatalf("delete deleted: %+v", res.Deleted)
+	}
+	if len(res.Missing) != 1 || res.Missing[0] != 999 {
+		t.Fatalf("delete missing: %+v", res.Missing)
+	}
+
+	var got struct {
+		Points  []struct{ ID uint64 } `json:"points"`
+		Missing []uint64              `json:"missing"`
+	}
+	c.callTool("get", map[string]any{"collection": "docs", "ids": []uint64{1, 2}}, &got, false)
+	if len(got.Points) != 1 || got.Points[0].ID != 2 {
+		t.Fatalf("expected only id 2 to remain: %+v", got.Points)
+	}
+	if len(got.Missing) != 1 || got.Missing[0] != 1 {
+		t.Fatalf("expected id 1 reported missing after delete: %+v", got.Missing)
+	}
+}
+
+// TestDeleteReportsPartialFailure guards handleDelete's continue-past-errors
+// behavior (mirroring forget's approach in memory.go): a mid-batch
+// VectorDelete failure must not discard the outcome of ids processed before
+// or after it. Uses the same failDeleteStore wrapper as forget's partial-
+// failure test (memory_test.go) to inject a deterministic failure.
+func TestDeleteReportsPartialFailure(t *testing.T) {
+	failing := &failDeleteStore{Store: newHeapStore(t)}
+	c := startServer(t, Config{Store: failing, Destructive: true})
+	c.initialize()
+	c.callTool("create_collection", map[string]any{"name": "docs", "dim": 4}, nil, false)
+	c.callTool("upsert", map[string]any{"collection": "docs", "id": uint64(1), "vector": []float32{1, 0, 0, 0}, "content": "fox"}, nil, false)
+	c.callTool("upsert", map[string]any{"collection": "docs", "id": uint64(2), "vector": []float32{0, 1, 0, 0}, "content": "whale"}, nil, false)
+
+	failing.failID = 2
+
+	var res struct {
+		Deleted []uint64 `json:"deleted"`
+		Missing []uint64 `json:"missing"`
+		Errors  []string `json:"errors"`
+	}
+	c.callTool("delete", map[string]any{"collection": "docs", "ids": []uint64{1, 2}}, &res, false)
+	if len(res.Deleted) != 1 || res.Deleted[0] != 1 {
+		t.Fatalf("expected id 1 to have deleted despite id 2 failing: %+v", res)
+	}
+	if len(res.Errors) != 1 || !strings.Contains(res.Errors[0], "2") {
+		t.Fatalf("expected an error naming id 2: %+v", res)
+	}
+}
+
+func TestDeleteByFilterDeletesOnlyMatches(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t), Destructive: true})
+	c.initialize()
+	c.callTool("create_collection", map[string]any{"name": "docs", "dim": 4}, nil, false)
+	c.callTool("upsert", map[string]any{"collection": "docs", "id": uint64(1), "vector": []float32{1, 0, 0, 0}, "content": "english doc", "metadata": map[string]any{"lang": "en"}}, nil, false)
+	c.callTool("upsert", map[string]any{"collection": "docs", "id": uint64(2), "vector": []float32{0, 1, 0, 0}, "content": "french doc", "metadata": map[string]any{"lang": "fr"}}, nil, false)
+
+	filter := map[string]any{
+		"op":    "eq",
+		"field": "lang",
+		"value": map[string]any{"kind": "string", "str": "en"},
+	}
+	var res struct {
+		DeletedCount int `json:"deleted_count"`
+	}
+	c.callTool("delete_by_filter", map[string]any{"collection": "docs", "filter": filter}, &res, false)
+	if res.DeletedCount != 1 {
+		t.Fatalf("delete_by_filter deleted_count: %+v", res)
+	}
+
+	var got struct {
+		Points  []struct{ ID uint64 } `json:"points"`
+		Missing []uint64              `json:"missing"`
+	}
+	c.callTool("get", map[string]any{"collection": "docs", "ids": []uint64{1, 2}}, &got, false)
+	if len(got.Points) != 1 || got.Points[0].ID != 2 {
+		t.Fatalf("expected only id 2 (fr) to remain: %+v", got.Points)
+	}
+}
+
+func TestDeleteByFilterRefusesMatchAll(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t), Destructive: true})
+	c.initialize()
+	c.callTool("create_collection", map[string]any{"name": "docs", "dim": 4}, nil, false)
+	c.callTool("upsert", map[string]any{"collection": "docs", "id": uint64(1), "vector": []float32{1, 0, 0, 0}, "content": "fox"}, nil, false)
+
+	msg := c.callTool("delete_by_filter", map[string]any{"collection": "docs", "filter": map[string]any{}}, nil, true)
+	if !strings.Contains(msg, "match-all") {
+		t.Fatalf("error should mention match-all, got %q", msg)
+	}
+}
+
+func TestDeleteRefusesMemoryCollection(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t), Destructive: true})
+	c.initialize()
+	msg := c.callTool("delete", map[string]any{"collection": memCollection, "ids": []uint64{1}}, nil, true)
+	if !strings.Contains(msg, "memory") {
+		t.Fatalf("error should mention the memory tools, got %q", msg)
+	}
+}
+
+func TestDeleteByFilterRefusesMemoryCollection(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t), Destructive: true})
+	c.initialize()
+	filter := map[string]any{
+		"op":    "eq",
+		"field": "lang",
+		"value": map[string]any{"kind": "string", "str": "en"},
+	}
+	msg := c.callTool("delete_by_filter", map[string]any{"collection": memCollection, "filter": filter}, nil, true)
+	if !strings.Contains(msg, "memory") {
+		t.Fatalf("error should mention the memory tools, got %q", msg)
+	}
+}
