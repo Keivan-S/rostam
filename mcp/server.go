@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/rostamlabs/rostam"
+	"github.com/rostamlabs/rostam/internal/buildinfo"
 	"github.com/rostamlabs/rostam/semcache"
 )
 
@@ -167,7 +168,9 @@ func (s *Server) dispatch(ctx context.Context, c *conn, req *request) error {
 		return c.reply(req.ID, map[string]any{
 			"protocolVersion": protocolVersion,
 			"capabilities":    map[string]any{"tools": map[string]any{}},
-			"serverInfo":      map[string]any{"name": "rostam", "version": "0.1.0"},
+			// Derived, not written down: a literal here goes stale at the
+			// next release and the client shows a version that never existed.
+			"serverInfo": map[string]any{"name": "rostam", "version": buildinfo.Version()},
 		})
 	case "ping":
 		return c.reply(req.ID, map[string]any{})

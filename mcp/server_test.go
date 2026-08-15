@@ -8,6 +8,8 @@ import (
 	"io"
 	"testing"
 	"time"
+
+	"github.com/rostamlabs/rostam/internal/buildinfo"
 )
 
 func TestInitializeHandshake(t *testing.T) {
@@ -19,7 +21,8 @@ func TestInitializeHandshake(t *testing.T) {
 			Tools *struct{} `json:"tools"`
 		} `json:"capabilities"`
 		ServerInfo struct {
-			Name string `json:"name"`
+			Name    string `json:"name"`
+			Version string `json:"version"`
 		} `json:"serverInfo"`
 	}
 	if err := json.Unmarshal(res, &init); err != nil {
@@ -27,6 +30,19 @@ func TestInitializeHandshake(t *testing.T) {
 	}
 	if init.ProtocolVersion != "2025-06-18" || init.Capabilities.Tools == nil || init.ServerInfo.Name != "rostam" {
 		t.Fatalf("bad initialize result: %s", res)
+	}
+	// The version used to be a literal "0.1.0" written once and never touched,
+	// so a v0.2.0 binary introduced itself to its client as 0.1.0 and every bug
+	// report filed through an MCP client named the wrong release. This assertion
+	// existed in spirit -- the test checked Name and stopped -- which is why the
+	// stale value survived. Comparing against buildinfo rather than a literal is
+	// the point: a hardcoded expectation here would rot the same way.
+	if init.ServerInfo.Version != buildinfo.Version() {
+		t.Errorf("serverInfo.version = %q, want the binary's own version %q",
+			init.ServerInfo.Version, buildinfo.Version())
+	}
+	if init.ServerInfo.Version == "" {
+		t.Error("serverInfo.version is empty; clients display this")
 	}
 }
 
