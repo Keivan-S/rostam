@@ -57,8 +57,8 @@ func TestConnReplyWritesOneLine(t *testing.T) {
 		t.Fatalf("want exactly one newline-terminated line, got %q", line)
 	}
 	var resp struct {
-		JSONRPC string          `json:"jsonrpc"`
-		ID      json.RawMessage `json:"id"`
+		JSONRPC string            `json:"jsonrpc"`
+		ID      json.RawMessage   `json:"id"`
 		Result  map[string]string `json:"result"`
 	}
 	if err := json.Unmarshal([]byte(line), &resp); err != nil {

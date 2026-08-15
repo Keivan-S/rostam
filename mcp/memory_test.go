@@ -190,7 +190,12 @@ func TestForgetDeletesAndPrunesEmptyNamespace(t *testing.T) {
 		Deleted []uint64 `json:"deleted"`
 		Missing []uint64 `json:"missing"`
 	}
-	c.callTool("forget", map[string]any{"ids": []uint64{b1.ID, unknownID}}, &fg, false)
+	payload := c.callTool("forget", map[string]any{"ids": []uint64{b1.ID, unknownID}}, &fg, false)
+	// A fully successful forget keeps the pre-errors-field shape exactly: an
+	// always-present "errors":[] would break every caller reading it as a signal.
+	if strings.Contains(payload, "errors") {
+		t.Fatalf("full-success forget must omit the errors field: %s", payload)
+	}
 	if len(fg.Deleted) != 1 || fg.Deleted[0] != b1.ID {
 		t.Fatalf("expected deleted=[%d], got %+v", b1.ID, fg.Deleted)
 	}
@@ -260,9 +265,20 @@ func TestForgetPrunesEmptiedNamespaceDespitePartialFailure(t *testing.T) {
 	// reports an error for a2.
 	failing.failID = a2.ID
 
-	msg := c.callTool("forget", map[string]any{"ids": []uint64{a2.ID, b1.ID}}, nil, true)
-	if !strings.Contains(msg, fmt.Sprint(a2.ID)) {
-		t.Fatalf("error should name the failing id %d: %q", a2.ID, msg)
+	// The call succeeds and reports the partial outcome (matching delete's
+	// contract): b1 in deleted, a2's failure named in errors. Surfacing this as a
+	// tool-level error instead would throw away the fact that b1 did delete.
+	var fr struct {
+		Deleted []uint64 `json:"deleted"`
+		Missing []uint64 `json:"missing"`
+		Errors  []string `json:"errors"`
+	}
+	c.callTool("forget", map[string]any{"ids": []uint64{a2.ID, b1.ID}}, &fr, false)
+	if len(fr.Deleted) != 1 || fr.Deleted[0] != b1.ID {
+		t.Fatalf("deleted = %v, want just b1 (%d)", fr.Deleted, b1.ID)
+	}
+	if len(fr.Errors) != 1 || !strings.Contains(fr.Errors[0], fmt.Sprint(a2.ID)) {
+		t.Fatalf("errors should name the failing id %d: %+v", a2.ID, fr.Errors)
 	}
 
 	var ns struct {

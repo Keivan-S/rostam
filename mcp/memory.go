@@ -133,6 +133,13 @@ func (s *Server) namespaces(ctx context.Context) ([]string, error) {
 
 // addNamespace records ns in the namespace list if it is not already there,
 // keeping the list sorted.
+//
+// This is a read-modify-write on a single KV key with no CAS or lock, which is
+// safe only because Serve dispatches one request at a time over the stdio wire:
+// no two tool calls are ever in flight together in a session. Nothing else in
+// this package is concurrency-safe either (removeNamespace has the same shape),
+// so if dispatch ever goes concurrent, the registry needs a compare-and-swap
+// loop before anything else here is looked at.
 func (s *Server) addNamespace(ctx context.Context, ns string) error {
 	cur, err := s.namespaces(ctx)
 	if err != nil {
@@ -222,7 +229,7 @@ func (s *Server) registerMemoryTools() {
 	})
 	s.register(toolDef{
 		Name:        "forget",
-		Description: "Delete stored memories by id.",
+		Description: `Delete stored memories by id. Returns {"deleted":[...],"missing":[...],"errors":[...]}; a per-id delete failure does not abort the rest of the batch.`,
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -423,7 +430,8 @@ type forgetArgs struct {
 // handleForget deletes memories by id and prunes any namespace left empty by
 // the deletion. Ids not found in the collection are reported back as
 // "missing" rather than erroring, so a caller can forget a batch without
-// first checking which ids still exist.
+// first checking which ids still exist; per-id failures land in "errors" for
+// the same reason (see forgetResult).
 func (s *Server) handleForget(ctx context.Context, raw json.RawMessage) (any, error) {
 	var args forgetArgs
 	if err := json.Unmarshal(raw, &args); err != nil {
@@ -448,13 +456,13 @@ func (s *Server) handleForget(ctx context.Context, raw json.RawMessage) (any, er
 	// whole call and leaving an emptied namespace stuck in the registry.
 	affectedNS := make(map[string]bool, len(points))
 	deleted := make([]uint64, 0, len(points))
-	var delErrs []error
+	var delErrs []string
 	for _, p := range points {
 		if nsv, ok := p.Meta[nsField]; ok && nsv.Kind == vector.ValueString {
 			affectedNS[nsv.Str] = true
 		}
 		if _, err := s.store.VectorDelete(ctx, memCollection, p.ID); err != nil {
-			delErrs = append(delErrs, fmt.Errorf("deleting id %d: %w", p.ID, err))
+			delErrs = append(delErrs, fmt.Sprintf("id %d: %s", p.ID, err))
 			continue
 		}
 		deleted = append(deleted, p.ID)
@@ -465,17 +473,25 @@ func (s *Server) handleForget(ctx context.Context, raw json.RawMessage) (any, er
 	// the same batch emptied must not be left stale in the registry just
 	// because a sibling id failed to delete.
 	if err := s.pruneEmptyNamespaces(ctx, affectedNS); err != nil {
-		delErrs = append(delErrs, err)
-	}
-
-	if len(delErrs) > 0 {
-		return nil, fmt.Errorf("mcp: forget: %w", errors.Join(delErrs...))
+		delErrs = append(delErrs, err.Error())
 	}
 
 	if missing == nil {
 		missing = []uint64{}
 	}
-	return map[string]any{"deleted": deleted, "missing": missing}, nil
+	return forgetResult{Deleted: deleted, Missing: missing, Errors: delErrs}, nil
+}
+
+// forgetResult is the forget tool's response shape, deliberately identical to
+// delete's (db.go): the two tools do the same thing to different collections,
+// so a caller should not have to learn two contracts. Errors is omitted on full
+// success, which keeps the {deleted, missing} shape callers already depend on;
+// when present, a partial batch still reports what it managed to delete rather
+// than discarding that outcome behind a tool-level error.
+type forgetResult struct {
+	Deleted []uint64 `json:"deleted"`
+	Missing []uint64 `json:"missing"`
+	Errors  []string `json:"errors,omitempty"`
 }
 
 // pruneEmptyNamespaces checks each namespace in ns with a 1-doc scroll probe
