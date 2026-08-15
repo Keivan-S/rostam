@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
 	"testing"
 )
 
@@ -78,6 +79,70 @@ func TestProxy_OneCharDifferentBodyMisses(t *testing.T) {
 	}
 	if n := upstream.requestCount(chatPath); n != 2 {
 		t.Fatalf("upstream requests = %d, want 2 (both should miss)", n)
+	}
+}
+
+// fnv32a is the 32-bit hash the stub embedder used to seed itself with,
+// reproduced here to manufacture the prompt pair that used to cross-hit.
+func fnv32a(s string) uint32 {
+	h := uint32(2166136261)
+	for _, b := range []byte(s) {
+		h = (h ^ uint32(b)) * 16777619
+	}
+	return h
+}
+
+// colliding32BitPair finds two distinct user-message contents whose SERIALIZED
+// prompts (what cacheIdentity actually hands the embedder, role and separators
+// included) share a 32-bit FNV-1a hash, by birthday search over a 2^32 space.
+// Colliding the bare content instead would prove nothing: the embedder never
+// sees it.
+func colliding32BitPair(t *testing.T) (string, string) {
+	t.Helper()
+	const maxCandidates = 500_000 // P(no collision) < 1e-6
+
+	seen := make(map[uint32]string, maxCandidates)
+	for i := 0; i < maxCandidates; i++ {
+		s := "collide-" + strconv.Itoa(i)
+		h := fnv32a("user\x00" + s + "\x1e")
+		if prev, ok := seen[h]; ok {
+			return prev, s
+		}
+		seen[h] = s
+	}
+	t.Skip("no 32-bit FNV-1a collision found in the candidate budget")
+	return "", ""
+}
+
+// (b2) two prompts that collide in 32-bit FNV-1a must still miss each other
+// end to end. The stub embedder used to derive every dimension from that
+// 32-bit hash, so this pair embedded identically and the second prompt was
+// answered with the first prompt's completion — a wrong answer, served with
+// x-rostam-cache: hit.
+func TestProxy_ThirtyTwoBitCollidingPromptsDoNotCrossHit(t *testing.T) {
+	promptA, promptB := colliding32BitPair(t)
+
+	upstream := newFakeUpstream(t)
+	upstream.script(chatPath, scriptedResponse{
+		body: chatCompletionJSON(t, "answer for A", "stop", 5),
+	})
+	proxy := newProxy(t, upstream, nil)
+
+	bodyA := `{"model":"gpt-4","messages":[{"role":"user","content":"` + promptA + `"}]}`
+	bodyB := `{"model":"gpt-4","messages":[{"role":"user","content":"` + promptB + `"}]}`
+
+	resp1, _ := postChat(t, proxy.URL, bodyA, nil)
+	if got := resp1.Header.Get("x-rostam-cache"); got != "miss" {
+		t.Fatalf("first request x-rostam-cache = %q, want miss", got)
+	}
+
+	resp2, _ := postChat(t, proxy.URL, bodyB, nil)
+	if got := resp2.Header.Get("x-rostam-cache"); got != "miss" {
+		t.Fatalf("32-bit-colliding prompt %q x-rostam-cache = %q, want miss (it must not be answered with %q's cached completion)",
+			promptB, got, promptA)
+	}
+	if n := upstream.requestCount(chatPath); n != 2 {
+		t.Fatalf("upstream requests = %d, want 2 (both prompts must reach upstream)", n)
 	}
 }
 
