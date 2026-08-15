@@ -14,14 +14,23 @@ it at an embedding endpoint.
 
 ```sh
 rostam-server rag ingest ./docs
-rostam-server rag ask "How does the LLM proxy decide what's cacheable?"
+rostam-server rag query "How does the LLM proxy decide what's cacheable?"
 ```
 
 The first command chunks and indexes every recognized file under `./docs`
 into a local corpus (default directory: `./.rostam-rag`). The second
-retrieves the most relevant chunks and asks an LLM to answer, citing the
-chunks it relied on as `[1]`, `[2]`, etc., followed by a `Sources:` list of
-`source#chunk-index` for each.
+retrieves the most relevant chunks and prints them with a
+`source#chunk-index` and score — no LLM or configuration required.
+
+Once you've configured an LLM endpoint (see [Flags and environment](#flags-and-environment)),
+`rag ask` synthesizes a cited answer from those chunks instead:
+
+```sh
+rostam-server rag ask "How does the LLM proxy decide what's cacheable?"
+```
+
+It cites the chunks it relied on as `[1]`, `[2]`, etc., followed by a
+`Sources:` list of `source#chunk-index` for each.
 
 To inspect retrieval without invoking an LLM at all:
 
@@ -120,7 +129,7 @@ embedding model, keeping ingestion and retrieval offline too.
 indexes files with these extensions, skipping everything else (and any
 file that isn't valid UTF-8):
 
-```
+```text
 .txt .md .markdown
 .go .py .js .ts .rs .java .c .h .cpp
 .json .yaml .yml .toml

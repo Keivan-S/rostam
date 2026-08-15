@@ -72,6 +72,12 @@ func Ingest(ctx context.Context, r Retriever, paths []string, opts IngestOptions
 				return err
 			}
 			if !utf8.Valid(body) {
+				// A previously-indexed source that has become invalid UTF-8
+				// must still have its stale chunks purged, or search would keep
+				// returning content no longer backed by the file.
+				if _, err := r.DeleteBySource(ctx, opts.Corpus, path); err != nil {
+					return err
+				}
 				rep.Skipped++
 				rep.SkippedPaths = append(rep.SkippedPaths, path)
 				return nil

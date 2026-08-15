@@ -124,6 +124,53 @@ func TestIngestWithStubEmbedder(t *testing.T) {
 	}
 }
 
+// TestIngestReIngestInvalidUTF8Purges: a previously-indexed source that later
+// becomes invalid UTF-8 is skipped, but its stale chunks must still be purged
+// so search never returns content no longer backed by the file.
+func TestIngestReIngestInvalidUTF8Purges(t *testing.T) {
+	src := t.TempDir()
+	corpusDir := t.TempDir()
+	path := filepath.Join(src, "a.md")
+	writeFile(t, path, "epoll transport loop count comes from gomaxprocs and raft shards")
+
+	r, err := NewEmbeddedRetriever(corpusDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = r.Close() }()
+	ctx := context.Background()
+	if err := r.EnsureCorpus(ctx, "docs", 0); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Ingest(ctx, r, []string{src}, IngestOptions{Corpus: "docs", ChunkSize: 8, ChunkOverlap: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if hits, err := r.Search(ctx, "docs", "epoll", nil, 10); err != nil {
+		t.Fatal(err)
+	} else if len(hits) == 0 {
+		t.Fatalf("expected hits for initial content, got none")
+	}
+
+	// Overwrite a.md with invalid UTF-8 bytes: the ingester skips it, but the
+	// prior chunks for this path must be purged.
+	writeFile(t, path, "valid prefix \xff\xfe\xfa invalid tail")
+	rep, err := Ingest(ctx, r, []string{src}, IngestOptions{Corpus: "docs", ChunkSize: 8, ChunkOverlap: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Skipped != 1 {
+		t.Fatalf("expected the invalid-UTF-8 file to be skipped, got report %+v", rep)
+	}
+	after, err := r.Search(ctx, "docs", "epoll", nil, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != 0 {
+		t.Fatalf("expected stale chunks purged after source became invalid UTF-8, got %d hits", len(after))
+	}
+}
+
 func writeFile(t *testing.T, path, body string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
