@@ -175,7 +175,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	prompt, scope, ok := req.cacheIdentity(tenant)
 	if !ok || !s.cache.Cacheable(req.temperature()) {
 		s.stats.uncacheable.Add(1)
-		s.passthroughRequest(w, r, body)
+		s.passthroughRequest(w, r, bytes.NewReader(body), int64(len(body)))
 		return
 	}
 
@@ -183,7 +183,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// replaces this branch with a caching-aware SSE relay (cache hit -> replay
 	// as SSE, miss -> relay + capture via relayAndCapture).
 	if req.Stream {
-		s.passthroughRequest(w, r, body)
+		s.passthroughRequest(w, r, bytes.NewReader(body), int64(len(body)))
 		return
 	}
 
@@ -224,7 +224,7 @@ func (s *Server) forwardAndMaybeStore(w http.ResponseWriter, r *http.Request, re
 	prompt string, scope semcache.Scope, cacheStatus string) {
 	s.stats.misses.Add(1)
 
-	upstreamReq, err := s.newUpstreamRequest(r, req.Raw)
+	upstreamReq, err := s.newUpstreamRequest(r, bytes.NewReader(req.Raw), int64(len(req.Raw)))
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadGateway, "building upstream request: "+err.Error(), "upstream_error")
 		return
@@ -251,7 +251,7 @@ func (s *Server) forwardAndMaybeStore(w http.ResponseWriter, r *http.Request, re
 	_, _ = w.Write(respBody)
 
 	if resp.StatusCode == http.StatusOK {
-		s.maybeStore(r.Context(), req.Model, prompt, scope, respBody)
+		s.maybeStore(r.Context(), prompt, scope, respBody)
 	}
 }
 
@@ -262,7 +262,7 @@ func (s *Server) forwardAndMaybeStore(w http.ResponseWriter, r *http.Request, re
 // cacheIdentity's n>1 check, but a defensively-checked finish reason or a
 // tool call) means the response isn't a plain completion a synthesized reply
 // could faithfully replay.
-func (s *Server) maybeStore(ctx context.Context, model, prompt string, scope semcache.Scope, respBody []byte) {
+func (s *Server) maybeStore(ctx context.Context, prompt string, scope semcache.Scope, respBody []byte) {
 	var resp chatResponse
 	if err := json.Unmarshal(respBody, &resp); err != nil {
 		s.log.Error("llmproxy: decode upstream response for cache store", "err", err)
@@ -289,12 +289,14 @@ func (s *Server) maybeStore(ctx context.Context, model, prompt string, scope sem
 	s.stats.stored.Add(1)
 }
 
-// passthroughRequest relays r to Upstream verbatim, streaming the response
-// body back to the client. body is the already-read request body (the
-// caller has consumed r.Body via io.ReadAll for size-capping/parsing, so it
-// can't be read from r again).
-func (s *Server) passthroughRequest(w http.ResponseWriter, r *http.Request, body []byte) {
-	upstreamReq, err := s.newUpstreamRequest(r, body)
+// passthroughRequest relays r to Upstream verbatim, streaming both the
+// request body (to upstream) and the response body (back to the client)
+// rather than buffering either — a passthrough route has no chat-completions
+// body cap, so buffering here would let a single client exhaust memory with
+// an arbitrarily large body. contentLength mirrors http.Request.ContentLength
+// (-1 when unknown).
+func (s *Server) passthroughRequest(w http.ResponseWriter, r *http.Request, body io.Reader, contentLength int64) {
+	upstreamReq, err := s.newUpstreamRequest(r, body, contentLength)
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadGateway, "building upstream request: "+err.Error(), "upstream_error")
 		return
@@ -320,32 +322,34 @@ func (s *Server) passthroughRequest(w http.ResponseWriter, r *http.Request, body
 
 // handlePassthrough relays any request not matched by a more specific route
 // to Upstream verbatim: method, path, query, headers (minus hop-by-hop) and
-// body all preserved, response streamed back unmodified.
+// body all preserved, response streamed back unmodified. r.Body is handed
+// straight to the upstream request rather than read into memory first — this
+// route carries no chat-completions-style size cap, so reading it fully here
+// would be an unbounded allocation driven by whatever the client sends.
 func (s *Server) handlePassthrough(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		writeOpenAIError(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
-		return
-	}
-	s.passthroughRequest(w, r, body)
+	s.passthroughRequest(w, r, r.Body, r.ContentLength)
 }
 
 // newUpstreamRequest builds the request the proxy sends to Upstream for an
 // incoming client request r, rebuilding the URL on Upstream's scheme/host
 // while keeping r's path and query, and copying method/headers (minus
-// hop-by-hop) with the given body.
-func (s *Server) newUpstreamRequest(r *http.Request, body []byte) (*http.Request, error) {
+// hop-by-hop). body is streamed through as given — contentLength mirrors
+// http.Request.ContentLength semantics (-1 when unknown, e.g. a chunked
+// passthrough body), so a caller with a small already-read []byte can pass
+// bytes.NewReader plus its exact length, and a caller streaming r.Body
+// straight through can pass r.ContentLength unchanged.
+func (s *Server) newUpstreamRequest(r *http.Request, body io.Reader, contentLength int64) (*http.Request, error) {
 	u := *s.upstream
 	u.Path = singleJoiningSlash(s.upstream.Path, r.URL.Path)
 	u.RawQuery = r.URL.RawQuery
 
-	upstreamReq, err := http.NewRequestWithContext(r.Context(), r.Method, u.String(), bytes.NewReader(body))
+	upstreamReq, err := http.NewRequestWithContext(r.Context(), r.Method, u.String(), body)
 	if err != nil {
 		return nil, fmt.Errorf("llmproxy: new upstream request: %w", err)
 	}
 	copyHeadersExceptHopByHop(upstreamReq.Header, r.Header)
 	upstreamReq.Host = s.upstream.Host
-	upstreamReq.ContentLength = int64(len(body))
+	upstreamReq.ContentLength = contentLength
 	return upstreamReq, nil
 }
 

@@ -224,6 +224,55 @@ func TestProxy_PassthroughPreservesPathAndAuth(t *testing.T) {
 	}
 }
 
+// A passthrough body must be streamed through to upstream rather than
+// buffered in the proxy: a 20 MiB body (well over the 16 MiB chat-completions
+// cap, which does not apply to passthrough routes) must reach upstream
+// intact and get a normal 200, never a 413. The request body is sourced from
+// an io.Reader rather than a pre-built []byte so the test itself can't
+// accidentally hide a proxy-side buffering bug behind its own buffering.
+func TestProxy_PassthroughStreamsLargeBody(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	upstream.script("/v1/embeddings", scriptedResponse{body: []byte(`{"ok":true}`)})
+	proxy := newProxy(t, upstream, nil)
+
+	const size = 20 << 20 // 20 MiB
+
+	req, err := http.NewRequest(http.MethodPost, proxy.URL+"/v1/embeddings", io.LimitReader(zeroReader{}, size))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.ContentLength = size
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (not 413 — passthrough has no chat-completions body cap)", resp.StatusCode)
+	}
+
+	captured := upstream.lastRequest("/v1/embeddings")
+	if captured == nil {
+		t.Fatalf("upstream never saw /v1/embeddings")
+	}
+	if len(captured.Body) != size {
+		t.Fatalf("upstream received body length = %d, want %d (body must reach upstream intact)", len(captured.Body), size)
+	}
+}
+
+// zeroReader is an endless source of zero bytes, used with io.LimitReader to
+// produce a large test request body without ever holding it as a single
+// in-memory []byte.
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = 0
+	}
+	return len(p), nil
+}
+
 // (g) malformed JSON on the cache path returns an OpenAI-shaped 400 error.
 func TestProxy_MalformedJSONReturns400(t *testing.T) {
 	upstream := newFakeUpstream(t)
