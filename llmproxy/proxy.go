@@ -266,13 +266,13 @@ func (s *Server) forwardAndMaybeStore(w http.ResponseWriter, r *http.Request, re
 		return
 	}
 
-	resp, err := s.client.Do(upstreamReq)
+	resp, err := s.client.Do(upstreamReq) //nolint:gosec // G704: upstream host comes only from the operator-pinned -upstream flag (validated absolute http/https at startup); the client controls only path/query/body
 	if err != nil {
 		s.log.Error("llmproxy: upstream request failed", "err", err)
 		writeOpenAIError(w, http.StatusBadGateway, "upstream request failed: "+err.Error(), "upstream_error")
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -341,13 +341,13 @@ func (s *Server) forwardStreamAndMaybeStore(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	resp, err := s.client.Do(upstreamReq)
+	resp, err := s.client.Do(upstreamReq) //nolint:gosec // G704: upstream host comes only from the operator-pinned -upstream flag (validated absolute http/https at startup); the client controls only path/query/body
 	if err != nil {
 		s.log.Error("llmproxy: upstream request failed", "err", err)
 		writeOpenAIError(w, http.StatusBadGateway, "upstream request failed: "+err.Error(), "upstream_error")
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	copyHeadersExceptHopByHop(w.Header(), resp.Header)
 	w.Header().Set("x-rostam-cache", cacheStatus)
@@ -395,13 +395,13 @@ func (s *Server) passthroughRequest(w http.ResponseWriter, r *http.Request, body
 		return
 	}
 
-	resp, err := s.client.Do(upstreamReq)
+	resp, err := s.client.Do(upstreamReq) //nolint:gosec // G704: upstream host comes only from the operator-pinned -upstream flag (validated absolute http/https at startup); the client controls only path/query/body
 	if err != nil {
 		s.log.Error("llmproxy: upstream request failed", "err", err)
 		writeOpenAIError(w, http.StatusBadGateway, "upstream request failed: "+err.Error(), "upstream_error")
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	copyHeadersExceptHopByHop(w.Header(), resp.Header)
 	if cacheStatus != "" {
