@@ -319,15 +319,15 @@ func TestSynthesizeResponse_RoundTrips(t *testing.T) {
 	}
 }
 
-func TestTenantOf_EmptyHeaderYieldsEmptyTenant(t *testing.T) {
-	if got := tenantOf(""); got != "" {
-		t.Fatalf("tenantOf(\"\") = %q, want empty", got)
+func TestTenantOf_EmptyHeadersYieldEmptyTenant(t *testing.T) {
+	if got := tenantOf("", "", ""); got != "" {
+		t.Fatalf("tenantOf with no credential headers = %q, want empty", got)
 	}
 }
 
 func TestTenantOf_DifferingHeadersDiffer(t *testing.T) {
-	a := tenantOf("Bearer sk-aaaa")
-	b := tenantOf("Bearer sk-bbbb")
+	a := tenantOf("Bearer sk-aaaa", "", "")
+	b := tenantOf("Bearer sk-bbbb", "", "")
 	if a == "" || b == "" {
 		t.Fatalf("tenantOf returned empty for non-empty header: a=%q b=%q", a, b)
 	}
@@ -337,9 +337,41 @@ func TestTenantOf_DifferingHeadersDiffer(t *testing.T) {
 }
 
 func TestTenantOf_SameHeaderSameTenant(t *testing.T) {
-	a := tenantOf("Bearer sk-aaaa")
-	b := tenantOf("Bearer sk-aaaa")
+	a := tenantOf("Bearer sk-aaaa", "", "")
+	b := tenantOf("Bearer sk-aaaa", "", "")
 	if a != b {
 		t.Fatalf("tenantOf(same) = %q vs %q, want equal", a, b)
+	}
+}
+
+// Azure OpenAI sends "api-key" and Anthropic-style surfaces send "x-api-key";
+// neither sets Authorization. Hashing only Authorization put all of them in
+// the one empty "no auth" tenant, so every such caller shared a cache.
+func TestTenantOf_AlternateCredentialHeadersIsolate(t *testing.T) {
+	for name, pair := range map[string][2]string{
+		"api-key":   {"azure-key-a", "azure-key-b"},
+		"x-api-key": {"anthropic-key-a", "anthropic-key-b"},
+	} {
+		var a, b string
+		if name == "api-key" {
+			a, b = tenantOf("", pair[0], ""), tenantOf("", pair[1], "")
+		} else {
+			a, b = tenantOf("", "", pair[0]), tenantOf("", "", pair[1])
+		}
+		if a == "" || b == "" {
+			t.Errorf("%s: tenantOf returned empty for a set credential header: a=%q b=%q", name, a, b)
+		}
+		if a == b {
+			t.Errorf("%s: two different keys share tenant %q", name, a)
+		}
+	}
+
+	// The three headers must not be interchangeable: the same secret in a
+	// different header is a different caller.
+	if tenantOf("k", "", "") == tenantOf("", "k", "") {
+		t.Fatal("Authorization and api-key with the same value share a tenant")
+	}
+	if tenantOf("", "k", "") == tenantOf("", "", "k") {
+		t.Fatal("api-key and x-api-key with the same value share a tenant")
 	}
 }

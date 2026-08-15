@@ -218,13 +218,18 @@ func synthesizeResponse(model, answer string, outTokens int) []byte {
 	return b
 }
 
-// tenantOf derives a cache-scope tenant identity from a request's
-// Authorization header, so one client's cached answers are never served to
-// another. The header is hashed rather than stored raw — the tenant value
-// ends up in cache metadata, and a credential doesn't belong there.
-func tenantOf(authHeader string) string {
-	if authHeader == "" {
+// tenantOf derives a cache-scope tenant identity from a request's credential
+// headers, so one client's cached answers are never served to another.
+//
+// All three headers are covered because an OpenAI-compatible surface is not
+// only OpenAI: Azure OpenAI authenticates with "api-key" and Anthropic with
+// "x-api-key", and hashing Authorization alone collapsed every such caller
+// into the single empty "no auth" tenant — every Azure user on one proxy
+// sharing one cache. The values are hashed, never stored raw: the tenant ends
+// up in cache metadata, which is no place for a credential.
+func tenantOf(authHeader, apiKeyHeader, xAPIKeyHeader string) string {
+	if authHeader == "" && apiKeyHeader == "" && xAPIKeyHeader == "" {
 		return ""
 	}
-	return strconv.FormatUint(xxhash.Sum64String(authHeader), 16)
+	return strconv.FormatUint(xxhash.Sum64String(authHeader+"\x00"+apiKeyHeader+"\x00"+xAPIKeyHeader), 16)
 }

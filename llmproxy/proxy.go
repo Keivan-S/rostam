@@ -171,7 +171,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tenant := tenantOf(r.Header.Get("Authorization"))
+	tenant := tenantOf(r.Header.Get("Authorization"), r.Header.Get("api-key"), r.Header.Get("x-api-key"))
 	prompt, scope, ok := req.cacheIdentity(tenant)
 	if !ok || !s.cache.Cacheable(req.temperature()) {
 		s.stats.uncacheable.Add(1)

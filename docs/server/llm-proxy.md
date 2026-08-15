@@ -158,11 +158,14 @@ always passes through.
 
 ## Tenancy
 
-Cache entries are scoped by caller: the proxy hashes the request's
-`Authorization` header (never storing it raw) and includes that hash in the
-scope key, so one client's cached answers are never served to another client
-using a different API key. Requests with no `Authorization` header share one
-"no auth" tenant scope.
+Cache entries are scoped by caller: the proxy hashes the request's credential
+headers — `Authorization`, `api-key` (Azure OpenAI) and `x-api-key` — never
+storing any of them raw, and includes that hash in the scope key, so one
+client's cached answers are never served to another client using a different
+key. All three are covered because an OpenAI-compatible surface is not only
+OpenAI: a proxy that looked at `Authorization` alone would put every Azure
+caller in the same tenant. Requests carrying none of the three share one "no
+auth" tenant scope.
 
 ## `/stats`
 

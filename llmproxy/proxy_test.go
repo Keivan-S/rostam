@@ -332,6 +332,39 @@ func TestProxy_StreamOptionsPassesThroughUncacheable(t *testing.T) {
 	}
 }
 
+// Azure-style tenancy: two callers that differ only in their "api-key" header
+// must not share a cache. Hashing Authorization alone put both in the empty
+// "no auth" tenant, so the second caller was served the first one's answers.
+func TestProxy_AzureAPIKeyTenantIsolation(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	upstream.script(chatPath, scriptedResponse{
+		body: chatCompletionJSON(t, "answer", "stop", 3),
+	})
+	proxy := newProxy(t, upstream, nil)
+
+	body := `{"model":"gpt-4","messages":[{"role":"user","content":"shared prompt"}]}`
+
+	resp1, _ := postChat(t, proxy.URL, body, map[string]string{"api-key": "azure-tenant-a"})
+	if got := resp1.Header.Get("x-rostam-cache"); got != "miss" {
+		t.Fatalf("first api-key request x-rostam-cache = %q, want miss", got)
+	}
+
+	resp2, _ := postChat(t, proxy.URL, body, map[string]string{"api-key": "azure-tenant-b"})
+	if got := resp2.Header.Get("x-rostam-cache"); got != "miss" {
+		t.Fatalf("second api-key request x-rostam-cache = %q, want miss (a different api-key must not see the first caller's cache)", got)
+	}
+
+	// The same api-key still gets its own hit — isolation must not disable
+	// caching for these callers.
+	resp3, _ := postChat(t, proxy.URL, body, map[string]string{"api-key": "azure-tenant-a"})
+	if got := resp3.Header.Get("x-rostam-cache"); got != "hit" {
+		t.Fatalf("repeat for api-key tenant-a x-rostam-cache = %q, want hit", got)
+	}
+	if n := upstream.requestCount(chatPath); n != 2 {
+		t.Fatalf("upstream requests = %d, want 2", n)
+	}
+}
+
 // (d) temperature above MaxTemp is uncacheable: the request passes through
 // to upstream and the uncacheable counter grows, but nothing is stored or
 // looked up.
