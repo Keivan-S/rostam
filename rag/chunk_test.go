@@ -4,15 +4,6 @@ package rag
 
 import "testing"
 
-func words(s string) int {
-	n := 0
-	for _, f := range splitWords(s) {
-		_ = f
-		n++
-	}
-	return n
-}
-
 func TestSplitTextEmpty(t *testing.T) {
 	if got := SplitText("", 10, 2); got != nil {
 		t.Fatalf("empty input: got %v, want nil", got)
