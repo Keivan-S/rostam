@@ -73,8 +73,9 @@ func TestMemorySurvivesReopen(t *testing.T) {
 		t.Fatalf("recall after reopen: id = %d, want %d", rec.Hits[0].ID, got.ID)
 	}
 
-	// The namespace registry (KV) and the collection contents must agree: a
-	// namespace listed but empty would mean only half the state survived.
+	// list_namespaces is derived from the surviving memories themselves, so
+	// this is a second, independent read of the same durability claim: both
+	// namespaces are only reported if both memories actually came back.
 	var ns struct {
 		Namespaces []string `json:"namespaces"`
 	}

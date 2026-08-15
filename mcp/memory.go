@@ -20,12 +20,11 @@ import (
 // Reserved names for the memory subsystem's collection, KV bookkeeping keys,
 // and metadata fields. Callers of remember/recall never see these directly.
 const (
-	memCollection = "mcp_memory"       // the vector collection backing remember/recall
-	nsField       = "__ns"             // metadata field: the memory's namespace
-	createdField  = "__created_unix"   // metadata field: unix-seconds creation time
-	defaultNS     = "default"          // namespace used when the caller omits one
-	kvEmbedder    = "__mcp/embedder"   // KV key: the embedIdentity this store was bootstrapped with
-	kvNamespaces  = "__mcp/namespaces" // KV key: JSON array of known namespaces
+	memCollection = "mcp_memory"     // the vector collection backing remember/recall
+	nsField       = "__ns"           // metadata field: the memory's namespace
+	createdField  = "__created_unix" // metadata field: unix-seconds creation time
+	defaultNS     = "default"        // namespace used when the caller omits one
+	kvEmbedder    = "__mcp/embedder" // KV key: the embedIdentity this store was bootstrapped with
 )
 
 // embedIdentity fingerprints the embedder a data dir's mcp_memory collection
@@ -187,74 +186,6 @@ func memoryID(ns, content string) uint64 {
 	return xxhash.Sum64String(ns + "\x00" + content)
 }
 
-// namespaces returns the known namespace list. An absent KV key (memory
-// never bootstrapped) is reported as an empty list, not an error.
-func (s *Server) namespaces(ctx context.Context) ([]string, error) {
-	raw, err := s.store.Get(ctx, []byte(kvNamespaces))
-	if err != nil {
-		if errors.Is(err, rostam.ErrNotFound) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("mcp: reading namespace list: %w", err)
-	}
-	var ns []string
-	if err := json.Unmarshal(raw, &ns); err != nil {
-		return nil, fmt.Errorf("mcp: decoding namespace list: %w", err)
-	}
-	return ns, nil
-}
-
-// addNamespace records ns in the namespace list if it is not already there,
-// keeping the list sorted.
-//
-// This is a read-modify-write on a single KV key with no CAS or lock, which is
-// safe only because Serve dispatches one request at a time over the stdio wire:
-// no two tool calls are ever in flight together in a session. Nothing else in
-// this package is concurrency-safe either (removeNamespace has the same shape),
-// so if dispatch ever goes concurrent, the registry needs a compare-and-swap
-// loop before anything else here is looked at.
-func (s *Server) addNamespace(ctx context.Context, ns string) error {
-	cur, err := s.namespaces(ctx)
-	if err != nil {
-		return err
-	}
-	for _, n := range cur {
-		if n == ns {
-			return nil
-		}
-	}
-	cur = append(cur, ns)
-	sort.Strings(cur)
-	b, err := json.Marshal(cur)
-	if err != nil {
-		return fmt.Errorf("mcp: encoding namespace list: %w", err)
-	}
-	return s.store.Put(ctx, []byte(kvNamespaces), b, 0)
-}
-
-// removeNamespace drops ns from the namespace list, if present. Called by
-// forget once a namespace's last memory has been deleted.
-func (s *Server) removeNamespace(ctx context.Context, ns string) error {
-	cur, err := s.namespaces(ctx)
-	if err != nil {
-		return err
-	}
-	out := cur[:0]
-	for _, n := range cur {
-		if n != ns {
-			out = append(out, n)
-		}
-	}
-	if len(out) == len(cur) {
-		return nil // ns was not present
-	}
-	b, err := json.Marshal(out)
-	if err != nil {
-		return fmt.Errorf("mcp: encoding namespace list: %w", err)
-	}
-	return s.store.Put(ctx, []byte(kvNamespaces), b, 0)
-}
-
 // memoryHit is one recalled (or listed, Task 5) memory: its id, content,
 // relevance score, and user metadata with the reserved fields stripped. No
 // Distance field: it's meaningless for BM25-only recall and for a scroll
@@ -388,9 +319,6 @@ func (s *Server) handleRemember(ctx context.Context, raw json.RawMessage) (any, 
 	if err := s.store.VectorUpsert(ctx, memCollection, id, vecs[0], args.Content, rostam.VectorInsertOpts{Metadata: md}); err != nil {
 		return nil, fmt.Errorf("mcp: remember: %w", err)
 	}
-	if err := s.addNamespace(ctx, ns); err != nil {
-		return nil, err
-	}
 	return map[string]any{"id": id, "namespace": ns}, nil
 }
 
@@ -500,11 +428,14 @@ type forgetArgs struct {
 	IDs []uint64 `json:"ids"`
 }
 
-// handleForget deletes memories by id and prunes any namespace left empty by
-// the deletion. Ids not found in the collection are reported back as
-// "missing" rather than erroring, so a caller can forget a batch without
-// first checking which ids still exist; per-id failures land in "errors" for
-// the same reason (see forgetResult).
+// handleForget deletes memories by id. Ids not found in the collection are
+// reported back as "missing" rather than erroring, so a caller can forget a
+// batch without first checking which ids still exist; per-id failures land in
+// "errors" for the same reason (see forgetResult).
+//
+// There is no namespace bookkeeping to do afterwards: a namespace is defined
+// by the memories carrying it (see handleListNamespaces), so deleting the last
+// one is all that "removing a namespace" means.
 func (s *Server) handleForget(ctx context.Context, raw json.RawMessage) (any, error) {
 	var args forgetArgs
 	if err := json.Unmarshal(raw, &args); err != nil {
@@ -523,30 +454,19 @@ func (s *Server) handleForget(ctx context.Context, raw json.RawMessage) (any, er
 		return nil, fmt.Errorf("mcp: forget: %w", err)
 	}
 
-	// Every point's delete is attempted, even after an earlier one fails:
-	// a batch with a mix of good and bad ids must still empty (and prune)
-	// whatever namespaces it legitimately can, instead of aborting the
-	// whole call and leaving an emptied namespace stuck in the registry.
-	affectedNS := make(map[string]bool, len(points))
+	// Every point's delete is attempted, even after an earlier one fails: a
+	// batch with a mix of good and bad ids must still delete whatever it
+	// legitimately can, instead of aborting the whole call and leaving the
+	// caller unable to tell "nothing happened" from "some of this went
+	// through".
 	deleted := make([]uint64, 0, len(points))
 	var delErrs []string
 	for _, p := range points {
-		if nsv, ok := p.Meta[nsField]; ok && nsv.Kind == vector.ValueString {
-			affectedNS[nsv.Str] = true
-		}
 		if _, err := s.store.VectorDelete(ctx, memCollection, p.ID); err != nil {
 			delErrs = append(delErrs, fmt.Sprintf("id %d: %s", p.ID, err))
 			continue
 		}
 		deleted = append(deleted, p.ID)
-	}
-
-	// Prune every namespace a delete was attempted against, regardless of
-	// whether some of those deletes failed above: a namespace another id in
-	// the same batch emptied must not be left stale in the registry just
-	// because a sibling id failed to delete.
-	if err := s.pruneEmptyNamespaces(ctx, affectedNS); err != nil {
-		delErrs = append(delErrs, err.Error())
 	}
 
 	if missing == nil {
@@ -565,27 +485,6 @@ type forgetResult struct {
 	Deleted []uint64 `json:"deleted"`
 	Missing []uint64 `json:"missing"`
 	Errors  []string `json:"errors,omitempty"`
-}
-
-// pruneEmptyNamespaces checks each namespace in ns with a 1-doc scroll probe
-// and drops it from the registry if nothing remains in it. Extracted from
-// handleForget so it can run against whatever was actually deleted even when
-// some deletes in the same batch failed, and so the partial-failure path is
-// unit-testable without needing to inject a store-level fault.
-func (s *Server) pruneEmptyNamespaces(ctx context.Context, ns map[string]bool) error {
-	for n := range ns {
-		nsFilter := rostam.VectorFilter{Op: vector.FilterEq, Field: nsField, Value: vector.NewString(n)}
-		docs, _, _, err := s.store.VectorScroll(ctx, memCollection, nsFilter, 1, rostam.VectorScrollOpts{})
-		if err != nil {
-			return fmt.Errorf("checking namespace %q: %w", n, err)
-		}
-		if len(docs) == 0 {
-			if err := s.removeNamespace(ctx, n); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
 }
 
 // listMemoriesArgs is the list_memories tool's decoded input.
@@ -631,18 +530,55 @@ func (s *Server) handleListMemories(ctx context.Context, raw json.RawMessage) (a
 	return map[string]any{"memories": memories, "next_cursor": cursor}, nil
 }
 
-// handleListNamespaces reports every namespace currently holding at least
-// one memory.
+// nsScanPage is how many memories one list_namespaces page pulls. Only each
+// doc's __ns field is kept, so the page size trades round trips against
+// per-page memory, and memory sets are small.
+const nsScanPage = 500
+
+// handleListNamespaces reports every namespace currently holding at least one
+// memory, by scrolling the collection and collecting the distinct __ns values.
+//
+// This used to read a KV registry that remember appended to and forget pruned.
+// That registry was a read-modify-write on one key with no CAS, correct only
+// under the assumption of a single session — which does not hold in remote
+// mode, where several `mcp -connect` processes share one store and each has
+// its own Server. Two of them interleaving could drop a namespace from the
+// list permanently while its memories sat there, and no later operation would
+// ever notice.
+//
+// A scan costs more than the registry's single Get, but it cannot be wrong:
+// the memories ARE the namespace list. It also deletes the whole class of
+// bookkeeping bugs the registry needed (seeding it at bootstrap, appending on
+// remember, pruning on forget, and keeping all three consistent when a batch
+// half-failed).
 func (s *Server) handleListNamespaces(ctx context.Context, _ json.RawMessage) (any, error) {
 	if err := s.ensureMemory(ctx); err != nil {
 		return nil, err
 	}
-	ns, err := s.namespaces(ctx)
-	if err != nil {
-		return nil, err
+	seen := make(map[string]struct{})
+	var cursor string
+	for {
+		// A zero filter is match-all: every memory, every namespace.
+		docs, _, next, err := s.store.VectorScroll(ctx, memCollection, rostam.VectorFilter{}, nsScanPage, rostam.VectorScrollOpts{Cursor: cursor})
+		if err != nil {
+			return nil, fmt.Errorf("mcp: list_namespaces: %w", err)
+		}
+		for _, d := range docs {
+			if v, ok := d.Metadata[nsField]; ok && v.Kind == vector.ValueString {
+				seen[v.Str] = struct{}{}
+			}
+		}
+		// A cursor that does not advance would loop forever; treat it as
+		// exhausted rather than trusting the backend to always terminate.
+		if next == "" || next == cursor {
+			break
+		}
+		cursor = next
 	}
-	if ns == nil {
-		ns = []string{}
+	out := make([]string, 0, len(seen))
+	for n := range seen {
+		out = append(out, n)
 	}
-	return map[string]any{"namespaces": ns}, nil
+	sort.Strings(out)
+	return map[string]any{"namespaces": out}, nil
 }

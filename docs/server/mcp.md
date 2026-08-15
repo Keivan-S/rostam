@@ -182,9 +182,9 @@ than a protocol-level error, so a bad argument never tears down the session.
 |---|---|---|
 | `remember` | `content` (required), `namespace` (default `"default"`), `metadata` (flat JSON object) | Embeds (or stubs) `content` and upserts it into the `mcp_memory` collection. Re-remembering identical content in the same namespace upserts the same point — dedupe by `(namespace, content)` is free. Returns `{id, namespace}`. |
 | `recall` | `query` (required), `namespace` (default `"default"`), `k` (default 5), `filter` (optional, ANDed with the namespace) | BM25-only or hybrid dense+BM25, per the embedder mode. Returns `{hits: [{id, content, score, metadata}]}`. |
-| `forget` | `ids` (required, array of ids) | Deletes memories by id and prunes any namespace left empty; a per-id failure doesn't abort the rest of the batch. Returns `{"deleted":[...],"missing":[...],"errors":[...]}` — `errors` is present only when at least one id failed to delete, so a fully successful call returns just `{deleted, missing}`. Same shape as `delete` below. |
+| `forget` | `ids` (required, array of ids) | Deletes memories by id; a per-id failure doesn't abort the rest of the batch. Returns `{"deleted":[...],"missing":[...],"errors":[...]}` — `errors` is present only when at least one id failed to delete, so a fully successful call returns just `{deleted, missing}`. Same shape as `delete` below. |
 | `list_memories` | `namespace` (default `"default"`), `limit` (default 50, max 500), `cursor` (from a previous call's `next_cursor`) | Pages through a namespace's memories in id order. Returns `{memories: [...], next_cursor}`. |
-| `list_namespaces` | — | Returns `{namespaces: [...]}` from the namespace registry — O(1), not a scan. |
+| `list_namespaces` | — | Returns `{namespaces: [...]}`, sorted. Derived from the memories themselves by scanning the collection, so it always agrees with what `recall`/`list_memories` can find — a namespace exists exactly as long as at least one memory carries it, and forgetting the last one makes it disappear with no separate bookkeeping step. |
 
 Memory hits (`remember`/`recall`/`list_memories`) never carry a `distance`
 field — it has no meaning for BM25-only recall or for a plain listing.
