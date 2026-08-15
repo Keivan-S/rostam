@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+
+	"github.com/cespare/xxhash/v2"
 )
 
 // Embedder turns text into vectors. The SAME embedder (model+version) must be
@@ -43,6 +45,12 @@ func normalizeVec(v []float32) {
 // NewStubEmbedder returns a deterministic, dependency-free Embedder for tests
 // and local demos: it hashes text into a normalized vector of length dim. NOT
 // for production (no semantic meaning) — use OpenAIEmbedder there.
+//
+// Two different texts produce the same vector only if they collide in the
+// 64-bit seed hash (collision space 2^64), which is the same budget the cache
+// already spends on entry ids. A narrower hash would not do: the proxy's
+// "exact" mode treats a vector match as proof the prompts are identical, so a
+// collision there is a wrong answer served to a user, not just a wasted slot.
 func NewStubEmbedder(model string, dim int) Embedder {
 	return stubEmbedder{model: model, dim: dim}
 }
@@ -55,17 +63,31 @@ type stubEmbedder struct {
 func (s stubEmbedder) Model() string { return s.model }
 func (s stubEmbedder) Dim() int      { return s.dim }
 
+// splitmix64Gamma and the two multipliers below are the standard splitmix64
+// constants: one increment of the golden-ratio gamma plus two xor-shift
+// multiply rounds turn a counter into a well-distributed 64-bit value. Used
+// here to expand one 64-bit seed into dim per-dimension values without ever
+// narrowing the state to 32 bits.
+const (
+	splitmix64Gamma = 0x9e3779b97f4a7c15
+	splitmix64Mix1  = 0xbf58476d1ce4e5b9
+	splitmix64Mix2  = 0x94d049bb133111eb
+	// int64Scale maps a signed 64-bit value into roughly [-1, 1).
+	int64Scale = 1 << 63
+)
+
 func (s stubEmbedder) Embed(_ context.Context, texts []string) ([][]float32, error) {
 	out := make([][]float32, len(texts))
 	for i, t := range texts {
 		v := make([]float32, s.dim)
-		h := uint32(2166136261)
-		for _, b := range []byte(t) {
-			h = (h ^ uint32(b)) * 16777619
-		}
+		state := xxhash.Sum64String(t)
 		for j := 0; j < s.dim; j++ {
-			h = (h ^ uint32(j)) * 16777619
-			v[j] = float32(int32(h)) / 2147483647.0
+			state += splitmix64Gamma
+			z := state
+			z = (z ^ (z >> 30)) * splitmix64Mix1
+			z = (z ^ (z >> 27)) * splitmix64Mix2
+			z ^= z >> 31
+			v[j] = float32(float64(int64(z)) / float64(int64Scale))
 		}
 		normalizeVec(v)
 		out[i] = v

@@ -40,13 +40,22 @@ const mcpDataAuto = "auto"
 // each need their own copy.
 var errDataDirBusy = errors.New("data directory is held by another process")
 
+// storeFlags holds the flags common to any subcommand that connects to or
+// embeds a rostam.Store: an embedded -data directory, or -connect plus its
+// auth token and TLS options. It is shared between subcommands (mcpFlags
+// embeds it today; a future llm-proxy subcommand will too) so the
+// store-selection logic in connectStore only has to be written once.
+type storeFlags struct {
+	data, connect, authToken          string
+	tlsCA, tlsCert, tlsKey, tlsServer string
+}
+
 // mcpFlags holds the parsed `mcp` subcommand flags. It is passed to mcpSetup
 // as plain data so setup logic is unit-testable without touching flag.FlagSet
 // or the real environment.
 type mcpFlags struct {
-	data, connect, authToken          string
-	tlsCA, tlsCert, tlsKey, tlsServer string
-	destructive                       bool
+	storeFlags
+	destructive bool
 }
 
 // mcpRuntime is what mcpSetup produces: a ready store and (optionally) a
@@ -122,7 +131,7 @@ func runMcpCmd(args []string) {
 	unlock := func() error { return nil }
 	if fl.connect == "" {
 		var lerr error
-		unlock, lerr = mcpClaimDataDir(fl.data)
+		unlock, lerr = claimDataDir(fl.data)
 		switch {
 		case errors.Is(lerr, errDataDirBusy):
 			fatal("mcp: another rostam-server mcp process is using this data directory; "+
@@ -199,9 +208,10 @@ func runMcpCmd(args []string) {
 	}
 }
 
-// mcpClaimDataDir creates the embedded data directory and takes the
-// single-writer lock on it, returning the closer that releases it. A "" dir is
-// heap mode: nothing on disk to create or claim, so the closer is a no-op.
+// claimDataDir creates an embedded data directory and takes the single-writer
+// lock on it, returning the closer that releases it. A "" dir is heap mode:
+// nothing on disk to create or claim, so the closer is a no-op. Shared by any
+// subcommand that can embed a store (mcp today; llm-proxy will too).
 //
 // The directory has to be created here rather than being left to the engine
 // further down, because the lock file lives INSIDE it and is opened first —
@@ -213,7 +223,7 @@ func runMcpCmd(args []string) {
 // It returns its errors instead of calling fatal so both paths are testable
 // without a subprocess, the same reason the tiering validation is a returning
 // function. Only a real lock conflict carries errDataDirBusy.
-func mcpClaimDataDir(dir string) (func() error, error) {
+func claimDataDir(dir string) (func() error, error) {
 	noop := func() error { return nil }
 	if dir == "" {
 		return noop, nil
@@ -235,7 +245,7 @@ func mcpSetup(fl mcpFlags, lookupEnv func(string) (string, bool)) (mcpRuntime, e
 		return mcpRuntime{}, errors.New("mcp: use -data or -connect, not both")
 	}
 
-	embedder, err := mcpEmbedderFromEnv(lookupEnv)
+	embedder, err := embedderFromEnv(lookupEnv)
 	if err != nil {
 		return mcpRuntime{}, err
 	}
@@ -247,7 +257,7 @@ func mcpSetup(fl mcpFlags, lookupEnv func(string) (string, bool)) (mcpRuntime, e
 
 	var store rostam.Store
 	if fl.connect != "" {
-		store, err = mcpConnectStore(fl, reg, lookupEnv)
+		store, err = connectStore(fl.storeFlags, reg, lookupEnv)
 	} else {
 		// Size the cache for what this actually is: one person's memory store,
 		// reached one tool call at a time over a pipe. The defaults are sized for a
@@ -271,35 +281,36 @@ func mcpSetup(fl mcpFlags, lookupEnv func(string) (string, bool)) (mcpRuntime, e
 	return mcpRuntime{store: store, embedder: embedder}, nil
 }
 
-// mcpEmbedderFromEnv reads the ROSTAM_EMBED_* variables and builds a hosted
+// embedderFromEnv reads the ROSTAM_EMBED_* variables and builds a hosted
 // embedder, or nil for BM25-only mode. ROSTAM_EMBED_ENDPOINT is the trigger:
 // unset (along with everything else) means BM25-only; set without a valid
 // ROSTAM_EMBED_MODEL/ROSTAM_EMBED_DIM is a configuration error naming the
 // exact missing/invalid variable, so a typo'd env var fails loud at startup
-// rather than silently falling back to BM25-only.
-func mcpEmbedderFromEnv(lookupEnv func(string) (string, bool)) (semcache.Embedder, error) {
+// rather than silently falling back to BM25-only. Shared by any subcommand
+// that wants a hosted embedder (mcp today; llm-proxy will too).
+func embedderFromEnv(lookupEnv func(string) (string, bool)) (semcache.Embedder, error) {
 	endpoint, _ := lookupEnv("ROSTAM_EMBED_ENDPOINT")
 	if endpoint == "" {
 		return nil, nil
 	}
 	model, _ := lookupEnv("ROSTAM_EMBED_MODEL")
 	if model == "" {
-		return nil, errors.New("mcp: ROSTAM_EMBED_ENDPOINT is set but ROSTAM_EMBED_MODEL is missing")
+		return nil, errors.New("rostam-server: ROSTAM_EMBED_ENDPOINT is set but ROSTAM_EMBED_MODEL is missing")
 	}
 	dimStr, _ := lookupEnv("ROSTAM_EMBED_DIM")
 	if dimStr == "" {
-		return nil, errors.New("mcp: ROSTAM_EMBED_ENDPOINT is set but ROSTAM_EMBED_DIM is missing")
+		return nil, errors.New("rostam-server: ROSTAM_EMBED_ENDPOINT is set but ROSTAM_EMBED_DIM is missing")
 	}
 	dim, err := strconv.Atoi(dimStr)
 	if err != nil {
-		return nil, fmt.Errorf("mcp: ROSTAM_EMBED_DIM=%q is not a valid integer: %w", dimStr, err)
+		return nil, fmt.Errorf("rostam-server: ROSTAM_EMBED_DIM=%q is not a valid integer: %w", dimStr, err)
 	}
 	// Atoi is happy with 0 and negatives, and neither is a dimension. Caught
 	// here so the documented fail-fast holds: otherwise startup succeeds and
 	// the misconfiguration only surfaces later, as a collection-creation or
 	// embedding failure inside the first memory tool call.
 	if dim <= 0 {
-		return nil, fmt.Errorf("mcp: ROSTAM_EMBED_DIM=%q must be a positive integer", dimStr)
+		return nil, fmt.Errorf("rostam-server: ROSTAM_EMBED_DIM=%q must be a positive integer", dimStr)
 	}
 	apiKey, _ := lookupEnv("ROSTAM_EMBED_API_KEY")
 	oe := semcache.NewOpenAIEmbedder(apiKey, model, dim)
@@ -312,11 +323,12 @@ func mcpEmbedderFromEnv(lookupEnv func(string) (string, bool)) (semcache.Embedde
 	return oe, nil
 }
 
-// mcpConnectStore builds the remote-mode Store for -connect: the auth token
+// connectStore builds the remote-mode Store for -connect: the auth token
 // (flag, else ROSTAM_AUTH_TOKEN) and TLS config (built only when any -tls-*
 // flag is set, so plaintext stays the zero-config default) feed
-// rostam.NewClient.
-func mcpConnectStore(fl mcpFlags, reg *ops.Registry, lookupEnv func(string) (string, bool)) (rostam.Store, error) {
+// rostam.NewClient. Shared by any subcommand that offers -connect (mcp
+// today; llm-proxy will too).
+func connectStore(fl storeFlags, reg *ops.Registry, lookupEnv func(string) (string, bool)) (rostam.Store, error) {
 	token := fl.authToken
 	if token == "" {
 		if v, ok := lookupEnv("ROSTAM_AUTH_TOKEN"); ok {
@@ -328,7 +340,7 @@ func mcpConnectStore(fl mcpFlags, reg *ops.Registry, lookupEnv func(string) (str
 	if fl.tlsCA != "" || fl.tlsCert != "" || fl.tlsKey != "" || fl.tlsServer != "" {
 		cfg, err := tlsutil.ClientTLS(fl.tlsCA, fl.tlsCert, fl.tlsKey, fl.tlsServer)
 		if err != nil {
-			return nil, fmt.Errorf("mcp: -connect TLS config: %w", err)
+			return nil, fmt.Errorf("rostam-server: -connect TLS config: %w", err)
 		}
 		tlsCfg = cfg
 	}
@@ -340,7 +352,7 @@ func mcpConnectStore(fl mcpFlags, reg *ops.Registry, lookupEnv func(string) (str
 		TLSConfig: tlsCfg,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("mcp: connect to %q: %w", fl.connect, err)
+		return nil, fmt.Errorf("rostam-server: connect to %q: %w", fl.connect, err)
 	}
 	return store, nil
 }

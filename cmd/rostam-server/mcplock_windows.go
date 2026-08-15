@@ -12,11 +12,13 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// mcpLockName is the lock file an embedded `mcp` session holds inside its data
-// directory for the lifetime of the process. Same name as the unix variant:
-// the two never coexist, but a shared data directory copied between platforms
-// should not grow a second lock file.
-const mcpLockName = ".mcp.lock"
+// dataDirLockName is the lock file an embedded session (mcp today; llm-proxy
+// will too) holds inside its data directory for the lifetime of the process.
+// Same name as the unix variant: the two never coexist, but a shared data
+// directory copied between platforms should not grow a second lock file. The
+// name is kept as ".mcp.lock" for compatibility: existing user data dirs
+// already contain a lock file with this name.
+const dataDirLockName = ".mcp.lock"
 
 // Win32 LockFileEx flags. golang.org/x/sys/windows declares the call but not
 // these constants, so they are spelled out here from the Win32 documentation.
@@ -41,7 +43,7 @@ const (
 // documented in mcp.go was simply not enforced on Windows — a platform the
 // release builds ship a binary for.
 func lockDataDir(dir string) (func() error, error) {
-	path := filepath.Join(dir, mcpLockName)
+	path := filepath.Join(dir, dataDirLockName)
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("opening lock file %s: %w", path, err)

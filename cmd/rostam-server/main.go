@@ -92,6 +92,10 @@ func main() {
 		runMcpCmd(os.Args[2:])
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "llm-proxy" {
+		runLlmProxyCmd(os.Args[2:])
+		return
+	}
 	// EXPERIMENT: debug pprof endpoint when ROSTAM_PPROF=host:port is set. Also
 	// enables block + mutex profiling (off by default) so /debug/pprof/block and
 	// /debug/pprof/mutex expose goroutine-hop waits and lock contention — the

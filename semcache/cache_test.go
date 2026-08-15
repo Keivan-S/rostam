@@ -117,6 +117,48 @@ func TestLookupHitMissAndScope(t *testing.T) {
 	}
 }
 
+func TestTenantIsolation(t *testing.T) {
+	c := newTestCache(t)
+	ctx := context.Background()
+	scopeA := Scope{Model: "m", Temperature: 0, Tenant: "alice"}
+	scopeB := Scope{Model: "m", Temperature: 0, Tenant: "bob"}
+
+	// Store under tenant A.
+	if err := c.Store(ctx, "hello", scopeA, "answer_for_alice", 5); err != nil {
+		t.Fatalf("Store under tenant A: %v", err)
+	}
+
+	// Lookup with tenant B must miss.
+	if _, ok, err := c.Lookup(ctx, "hello", scopeB); err != nil || ok {
+		t.Fatalf("tenant B must not see tenant A's cache, got ok=%v err=%v", ok, err)
+	}
+
+	// Lookup with tenant A must hit.
+	hit, ok, err := c.Lookup(ctx, "hello", scopeA)
+	if err != nil || !ok {
+		t.Fatalf("tenant A must hit its own cache, got ok=%v err=%v", ok, err)
+	}
+	if hit.Answer != "answer_for_alice" {
+		t.Fatalf("wrong answer for tenant A: %v", hit.Answer)
+	}
+
+	// Store a different answer under tenant B.
+	if err := c.Store(ctx, "hello", scopeB, "answer_for_bob", 7); err != nil {
+		t.Fatalf("Store under tenant B: %v", err)
+	}
+
+	// Both should now hit with their respective answers.
+	hitA, ok, err := c.Lookup(ctx, "hello", scopeA)
+	if err != nil || !ok || hitA.Answer != "answer_for_alice" {
+		t.Fatalf("tenant A after B's store: ok=%v err=%v answer=%v", ok, err, hitA.Answer)
+	}
+
+	hitB, ok, err := c.Lookup(ctx, "hello", scopeB)
+	if err != nil || !ok || hitB.Answer != "answer_for_bob" {
+		t.Fatalf("tenant B after store: ok=%v err=%v answer=%v", ok, err, hitB.Answer)
+	}
+}
+
 func TestCacheableHonorsMaxTemp(t *testing.T) {
 	c := newTestCache(t) // MaxTemp defaults to 0
 	if !c.Cacheable(0) {

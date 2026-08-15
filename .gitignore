@@ -43,8 +43,10 @@ clients/python/dist/
 clients/python/build/
 clients/python/*.egg-info/
 
-# Built server binary
+# Built server binary. The .exe is what `GOOS=windows go build ./cmd/...`
+# drops here during a cross-compile check; it was committed by accident once.
 /rostam-server
+/rostam-server.exe
 
 # internal agent/dev planning artifacts — never commit
 docs/superpowers/
@@ -59,4 +61,3 @@ site/
 
 # goreleaser build output
 dist/
-/rostam-server.exe

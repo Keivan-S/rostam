@@ -36,6 +36,23 @@ claude mcp add rostam -- rostam-server mcp
 → [MCP server](https://docs.rostamlabs.com/server/mcp/) for the full tool
 reference, client config snippets, and embedder configuration.
 
+## LLM response caching
+
+`rostam-server llm-proxy` is an OpenAI-compatible caching reverse proxy:
+change one line (`base_url="http://localhost:8484/v1"`) and an eligible
+repeated chat-completions request — cacheable shape, matching scope, and a
+prompt that hits the cache — is answered from a local semantic cache instead
+of hitting the upstream API. Exact byte-identical matching works out of the
+box with no embedding key; pointing it at an OpenAI-compatible embedder
+upgrades it to matching near-duplicate prompts too.
+
+```sh
+rostam-server llm-proxy
+```
+
+→ [LLM caching proxy](https://docs.rostamlabs.com/server/llm-proxy/) for
+flags, cache-scoping rules, and what's never cached.
+
 And two engines, usable together or entirely on their own:
 
 - a **vector search engine** ([`vector/`](./vector)) — HNSW, IVF and Vamana

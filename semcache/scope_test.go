@@ -25,6 +25,8 @@ func TestScopeKeyStableAndSensitive(t *testing.T) {
 		"tools":       func(s Scope) Scope { s.Tools = []string{"a"}; return s },
 		"temperature": func(s Scope) Scope { s.Temperature = 0.7; return s },
 		"max-tokens":  func(s Scope) Scope { s.MaxTokens = 2048; return s },
+		"tenant":      func(s Scope) Scope { s.Tenant = "bob"; return s },
+		"extra":       func(s Scope) Scope { s.Extra = "json-mode"; return s },
 	} {
 		if name == "embed-model" {
 			if base.key("emb-1") == base.key("emb-2") {
@@ -35,5 +37,30 @@ func TestScopeKeyStableAndSensitive(t *testing.T) {
 		if base.key("emb-1") == mut(base).key("emb-1") {
 			t.Errorf("key insensitive to %s", name)
 		}
+	}
+}
+
+func TestScopeKeyTenantIsolates(t *testing.T) {
+	a := Scope{Model: "m", Tenant: "alice"}
+	b := Scope{Model: "m", Tenant: "bob"}
+	if a.key("e") == b.key("e") {
+		t.Fatal("tenant must partition the scope key")
+	}
+	if a.key("e") != (Scope{Model: "m", Tenant: "alice"}).key("e") {
+		t.Fatal("equal scopes must produce equal keys")
+	}
+}
+
+func TestScopeKeyExtraIsolates(t *testing.T) {
+	a := Scope{Model: "m", Extra: "json-mode"}
+	b := Scope{Model: "m", Extra: "prose-mode"}
+	if a.key("e") == b.key("e") {
+		t.Fatal("Extra must partition the scope key")
+	}
+	if a.key("e") != (Scope{Model: "m", Extra: "json-mode"}).key("e") {
+		t.Fatal("equal scopes must produce equal keys")
+	}
+	if (Scope{Model: "m"}).key("e") != (Scope{Model: "m", Extra: ""}).key("e") {
+		t.Fatal("an empty Extra must not change the key")
 	}
 }
