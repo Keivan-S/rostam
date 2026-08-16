@@ -285,8 +285,10 @@ func (cc collectionConfig) toConfig() (vector.Config, string) {
 			B:        cc.FullText.B,
 		}
 	}
-	// Fill the standard HNSW defaults so a caller need only supply dim — the
-	// engine rejects zero M/Ef rather than defaulting them itself.
+	// Fill the standard HNSW defaults so a caller need only supply dim. The
+	// engine now also defaults these (vector.applyHNSWDefaults), so this is
+	// belt-and-suspenders rather than load-bearing — kept so the HTTP contract
+	// does not depend on engine-internal behaviour.
 	m, efc, efs := cc.M, cc.EfConstruction, cc.EfSearch
 	if m <= 0 {
 		m = 16

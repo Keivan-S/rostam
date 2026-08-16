@@ -71,11 +71,39 @@ type Collection struct {
 // IndexType switch can pick IVF-Flat). Returns the same config-validation
 // errors as the chosen implementation.
 func NewCollection(name string, cfg Config) (*Collection, error) {
+	cfg = applyHNSWDefaults(cfg)
 	idx, err := newIndex(cfg)
 	if err != nil {
 		return nil, err
 	}
 	return &Collection{name: name, cfg: cfg, idx: idx}, nil
+}
+
+// applyHNSWDefaults fills the standard graph parameters when a caller leaves
+// them zero, so an HNSW collection built from just Dim and Metric works —
+// matching the "default 16" the Config.M comment has always promised, and the
+// defaults the HTTP and Python layers already apply before the engine sees the
+// config. Previously only those outer layers defaulted and the engine rejected
+// zero, so the same create succeeded over the wire and failed from the Go
+// library. Vamana resolves its own geometry in applyVamanaDefaults; IVF requires
+// its parameters and validates them, so both are left untouched — only the
+// zero-value (HNSW) IndexType is filled here. Non-positive is treated as unset,
+// matching the HTTP layer, so a negative value still becomes the default rather
+// than a surprise ErrInvalidM.
+func applyHNSWDefaults(cfg Config) Config {
+	if cfg.IndexType != IndexHNSW {
+		return cfg
+	}
+	if cfg.M <= 0 {
+		cfg.M = 16
+	}
+	if cfg.EfConstruction <= 0 {
+		cfg.EfConstruction = 200
+	}
+	if cfg.EfSearch <= 0 {
+		cfg.EfSearch = 64
+	}
+	return cfg
 }
 
 // newIndex builds the in-memory VectorIndex implementation for cfg, dispatching
