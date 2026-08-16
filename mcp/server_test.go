@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,12 +25,33 @@ func TestInitializeHandshake(t *testing.T) {
 			Name    string `json:"name"`
 			Version string `json:"version"`
 		} `json:"serverInfo"`
+		Instructions string `json:"instructions"`
 	}
 	if err := json.Unmarshal(res, &init); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	if init.ProtocolVersion != "2025-06-18" || init.Capabilities.Tools == nil || init.ServerInfo.Name != "rostam" {
 		t.Fatalf("bad initialize result: %s", res)
+	}
+	// The instructions string is how the server teaches an agent WHEN to use
+	// the memory tools; clients inject it into the model's context. Assert each
+	// load-bearing doctrine rule is present via a distinctive marker (not just
+	// non-empty, and not the full wording) so a regression that drops any single
+	// rule fails here rather than silently shipping.
+	got := strings.ToLower(init.Instructions)
+	for rule, marker := range map[string]string{
+		"recall-at-task-start":    "recall",
+		"before-re-reading":       "re-reading",
+		"remember-durable-facts":  "remember",
+		"one-self-contained-fact": "self-contained",
+		"namespace-per-project":   "namespace",
+		"never-store-secrets":     "secret",
+		"orient-list-namespaces":  "list_namespaces",
+		"orient-list-memories":    "list_memories",
+	} {
+		if !strings.Contains(got, marker) {
+			t.Errorf("initialize instructions missing the %s rule (marker %q); got %q", rule, marker, init.Instructions)
+		}
 	}
 	// The version used to be a literal "0.1.0" written once and never touched,
 	// so a v0.2.0 binary introduced itself to its client as 0.1.0 and every bug
@@ -43,6 +65,38 @@ func TestInitializeHandshake(t *testing.T) {
 	}
 	if init.ServerInfo.Version == "" {
 		t.Error("serverInfo.version is empty; clients display this")
+	}
+}
+
+func TestMemoryToolDescriptionsCarryUsageNudges(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t)})
+	c.initialize()
+	res := c.rpc("tools/list", nil, false)
+	var out struct {
+		Tools []struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(res, &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	desc := map[string]string{}
+	for _, tl := range out.Tools {
+		desc[tl.Name] = strings.ToLower(tl.Description)
+	}
+	// Each nudge must survive independently of the exact wording: recall nudges
+	// "at task start / before re-reading / project namespace"; remember nudges
+	// "one self-contained fact / not transient / project namespace / no secrets".
+	for _, marker := range []string{"start", "re-reading", "namespace"} {
+		if d := desc["recall"]; !strings.Contains(d, marker) {
+			t.Errorf("recall description missing %q nudge: %q", marker, d)
+		}
+	}
+	for _, marker := range []string{"self-contained", "transient", "namespace", "secret"} {
+		if d := desc["remember"]; !strings.Contains(d, marker) {
+			t.Errorf("remember description missing %q nudge: %q", marker, d)
+		}
 	}
 }
 
