@@ -18,6 +18,18 @@ import (
 
 const protocolVersion = "2025-06-18"
 
+// instructions is the MCP top-level `instructions` string returned from
+// initialize. Clients inject it into the model's context, so it is how the
+// server teaches an agent WHEN to use the memory tools — the tools alone don't
+// convey that. Keep it short, imperative, and client-agnostic.
+const instructions = `Rostam is persistent, namespaced memory for carrying facts across sessions so you don't re-derive what you already know. Use it well:
+- At the start of a nontrivial task, call recall with the task's keywords BEFORE re-reading large files or re-exploring a codebase — recall is cheaper than rediscovery.
+- Namespace per project: pass namespace = the project/repo directory name (not "default") so facts stay scoped and don't collide across projects.
+- When you learn a durable fact (a decision, a gotcha, a build/test command, an investigation result), call remember — one self-contained fact per call, phrased so it still makes sense when recalled later.
+- Prefer recall over re-reading a large file to answer "what did we already establish about X".
+- Never store secrets or credentials.
+- Use list_namespaces and list_memories to orient when unsure what's stored.`
+
 // Config configures a Server.
 type Config struct {
 	Store       rostam.Store      // required: embedded or remote engine
@@ -171,6 +183,9 @@ func (s *Server) dispatch(ctx context.Context, c *conn, req *request) error {
 			// Derived, not written down: a literal here goes stale at the
 			// next release and the client shows a version that never existed.
 			"serverInfo": map[string]any{"name": "rostam", "version": buildinfo.Version()},
+			// Teaches the agent WHEN to use the memory tools; clients inject
+			// this into the model's context.
+			"instructions": instructions,
 		})
 	case "ping":
 		return c.reply(req.ID, map[string]any{})

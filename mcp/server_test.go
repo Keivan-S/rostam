@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,12 +25,21 @@ func TestInitializeHandshake(t *testing.T) {
 			Name    string `json:"name"`
 			Version string `json:"version"`
 		} `json:"serverInfo"`
+		Instructions string `json:"instructions"`
 	}
 	if err := json.Unmarshal(res, &init); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	if init.ProtocolVersion != "2025-06-18" || init.Capabilities.Tools == nil || init.ServerInfo.Name != "rostam" {
 		t.Fatalf("bad initialize result: %s", res)
+	}
+	// The instructions string is how the server teaches an agent WHEN to use
+	// the memory tools; clients inject it into the model's context. Assert it's
+	// present and carries the load-bearing doctrine, not just non-empty.
+	for _, want := range []string{"recall", "remember", "namespace", "secret"} {
+		if !strings.Contains(strings.ToLower(init.Instructions), want) {
+			t.Errorf("initialize instructions missing %q; got %q", want, init.Instructions)
+		}
 	}
 	// The version used to be a literal "0.1.0" written once and never touched,
 	// so a v0.2.0 binary introduced itself to its client as 0.1.0 and every bug
@@ -43,6 +53,33 @@ func TestInitializeHandshake(t *testing.T) {
 	}
 	if init.ServerInfo.Version == "" {
 		t.Error("serverInfo.version is empty; clients display this")
+	}
+}
+
+func TestMemoryToolDescriptionsCarryUsageNudges(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t)})
+	c.initialize()
+	res := c.rpc("tools/list", nil, false)
+	var out struct {
+		Tools []struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(res, &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	desc := map[string]string{}
+	for _, tl := range out.Tools {
+		desc[tl.Name] = strings.ToLower(tl.Description)
+	}
+	// recall should nudge "call at task start / before re-reading"; remember
+	// should nudge "one self-contained fact / project namespace / no secrets".
+	if d, ok := desc["recall"]; !ok || !strings.Contains(d, "start") || !strings.Contains(d, "namespace") {
+		t.Errorf("recall description missing usage nudge: %q", desc["recall"])
+	}
+	if d, ok := desc["remember"]; !ok || !strings.Contains(d, "namespace") || !strings.Contains(d, "secret") {
+		t.Errorf("remember description missing usage nudge: %q", desc["remember"])
 	}
 }
 

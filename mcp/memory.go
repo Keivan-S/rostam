@@ -240,7 +240,7 @@ type memoryHit struct {
 func (s *Server) registerMemoryTools() {
 	s.register(toolDef{
 		Name:        "remember",
-		Description: "Store a fact in persistent memory for later recall.",
+		Description: `Store a fact in persistent memory for later recall. Store ONE self-contained, durable fact per call (a decision, gotcha, command, or finding), phrased so it stands alone when recalled later — not transient chatter, and never secrets. Pass namespace = the project directory name so facts stay project-scoped.`,
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -254,7 +254,7 @@ func (s *Server) registerMemoryTools() {
 	})
 	s.register(toolDef{
 		Name:        "recall",
-		Description: "Search stored memories by relevance to a query, scoped to a namespace.",
+		Description: `Search stored memories by relevance to a query, scoped to a namespace. Call this at the START of a task, before re-reading large files or re-exploring a codebase — it's cheaper than rediscovering what you already know. Pass namespace = the project directory name.`,
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
