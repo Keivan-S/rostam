@@ -47,7 +47,13 @@ jobs:
           # and the code paths below catch that.
           WATCHED='^(cmd/|mcp/|rag/|llmproxy/|httpapi/|server/|clients/)'
 
-          changed=$(git diff --name-only "$BASE".."$HEAD")
+          # Three-dot: diff from the merge-base, i.e. only what this PR
+          # introduces. Two-dot compares the two tips, so anything that landed
+          # on the base branch after this PR diverged shows up as part of it —
+          # and for THIS check that is self-defeating: an unrelated changelog
+          # edit on main would appear in the range and silently pass a PR that
+          # has no entry of its own. Demonstrated, not theorised.
+          changed=$(git diff --name-only "$BASE"..."$HEAD")
 
           # A PR that only touches tests is not a user-visible change, so strip
           # test files before deciding. Without this the guard fires on
