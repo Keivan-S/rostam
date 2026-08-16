@@ -47,6 +47,17 @@ the user to know which kind of question they are asking.
 `-no-hybrid` restores pure dense KNN. Note the returned `Score` is the fusion
 score, not the original per-lane score — they are not comparable across modes.
 
+### The Go library defaults HNSW parameters
+
+`vector.NewCollection` used to reject a config that left `M`, `EfConstruction`
+or `EfSearch` at zero, even though `Config.M` documents "default 16" and the
+HTTP and Python layers fill exactly those. The same create therefore succeeded
+over the wire and failed from the Go library — including the quickstart's
+embedded example. The engine now fills the standard 16 / 200 / 64 when they are
+left zero, matching the other entry points. Only the HNSW (default) index type
+is affected; IVF still requires and validates its parameters, and
+`Config.Validate()` is unchanged.
+
 ### The MCP server explains itself to the agent
 
 Tool schemas say what a tool does; they do not say *when* to reach for it. So an
