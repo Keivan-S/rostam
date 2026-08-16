@@ -3,6 +3,69 @@
 Notable user-visible changes. Entries that alter existing behaviour are marked
 **Breaking** and say what to do about it.
 
+## v0.3.0 — 2026-08-16
+
+### A RAG CLI with no pipeline to assemble
+
+`rostam-server rag` turns the engine into a retrieval-augmented-generation tool
+you can point at a directory:
+
+```sh
+rostam-server rag ingest ./docs
+rostam-server rag query "How does the LLM proxy decide what's cacheable?"
+```
+
+`ingest` chunks and indexes every recognized file into a local corpus
+(`./.rostam-rag` by default) — recognized meaning a known text extension whose
+contents are valid UTF-8; anything else is skipped and reported, and a source
+that *becomes* invalid has its stale chunks purged rather than left to be
+returned by searches. `query` returns the matching chunks with a
+`source#chunk-index` and score, and `ask` sends them to an LLM and prints an
+answer that cites the chunks it used. There is no separate ingestion service
+and no vector store to stand up first.
+
+As with the MCP server, it does something useful before you configure anything:
+retrieval runs on BM25 with no embedder, no API key and no network. Pointing it
+at an OpenAI-compatible embedding endpoint upgrades retrieval in place, without
+changing the commands. Full flag and file-type reference:
+[RAG CLI](server/rag.md).
+
+### Retrieval fuses dense and BM25 by default
+
+With an embedder configured, `rag query` and `rag ask` now run **both** a dense
+KNN search and a BM25 search and fuse the two ranked lists, rather than
+searching dense alone. Fusion is reciprocal-rank by default, with a weighted
+rank-blend available; chunks are deduplicated on `source#index`, and ties break
+in a fixed first-seen order so the same corpus and query always produce the same
+output.
+
+This matters because the two lanes fail differently: dense retrieval misses
+exact identifiers, error strings and flag names that a user copies verbatim into
+a question, and BM25 misses paraphrase. Fusing them covers both without asking
+the user to know which kind of question they are asking.
+
+`-no-hybrid` restores pure dense KNN. Note the returned `Score` is the fusion
+score, not the original per-lane score — they are not comparable across modes.
+
+### The MCP server explains itself to the agent
+
+Tool schemas say what a tool does; they do not say *when* to reach for it. So an
+agent with memory available would still re-read a file it had already
+summarised. The server now returns MCP's top-level `instructions` from
+`initialize` — clients inject it into the model's context — and the `remember`
+and `recall` descriptions carry the same guidance at the point of use.
+
+The doctrine is short and deliberate: recall at the start of a task before
+re-exploring a codebase, namespace per project rather than `default`, one
+self-contained durable fact per `remember`, and never store secrets.
+
+### Fixed: the MCP server reported the wrong version
+
+`initialize` answered with a hardcoded `0.1.0`, so a v0.2.0 binary introduced
+itself to Claude Code, Cursor and every other client as 0.1.0 — and every bug
+report filed through an MCP client named the wrong release. It now reports the
+binary's real version, derived from the same source `-version` uses.
+
 ## v0.2.0 — 2026-08-15
 
 ### The MCP server: agent memory with nothing to set up
