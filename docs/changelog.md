@@ -16,7 +16,10 @@ rostam-server rag query "How does the LLM proxy decide what's cacheable?"
 ```
 
 `ingest` chunks and indexes every recognized file into a local corpus
-(`./.rostam-rag` by default), `query` returns the matching chunks with a
+(`./.rostam-rag` by default) — recognized meaning a known text extension whose
+contents are valid UTF-8; anything else is skipped and reported, and a source
+that *becomes* invalid has its stale chunks purged rather than left to be
+returned by searches. `query` returns the matching chunks with a
 `source#chunk-index` and score, and `ask` sends them to an LLM and prints an
 answer that cites the chunks it used. There is no separate ingestion service
 and no vector store to stand up first.
