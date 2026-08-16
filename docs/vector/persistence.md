@@ -9,10 +9,14 @@ take a WAL. Both snapshot like dense collections.
 !!! info "Go library and server configuration only"
 
     Nothing on this page is reachable from the Python client: it has no
-    snapshot, flush, or cold-tier methods. Persistence is chosen when the
-    collection or server is created — `-data` on `rostam-server`, `DataDir` on
-    the store, or the persistence fields on `vector.Config` — and then happens
-    without further calls.
+    snapshot, flush, or cold-tier methods.
+
+    Two different things are described below. **Durable storage** is chosen at
+    creation — `-data` on `rostam-server`, `DataDir` on the store, or the
+    persistence fields on `vector.Config` — and then keeps itself up to date
+    with no further calls. **Snapshots, flush and the cold tier are explicit
+    operations**: `Snapshot`, `Restore`, `Flush`, `EvictCollection` and
+    `SweepCold` are calls you make from Go or drive from the server.
 
 
 ## Snapshots

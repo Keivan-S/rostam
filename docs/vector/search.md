@@ -33,6 +33,7 @@ designing around one:
     from rostam import RostamClient, filters as f
 
     c = RostamClient("http://localhost:8080")
+    query = [0.1, 0.2, 0.3, 0.4]   # your embedding model's output
 
     hits = c.search("docs", query, k=10)                       # ids, distances, scores
     hits = c.search("docs", query, k=10, filter=f.eq("tenant", "acme"))
@@ -121,6 +122,8 @@ Collapse hits by a payload field (e.g. one best chunk per source document):
 === "Python"
 
     ```python
+    query = [0.1, 0.2, 0.3, 0.4]
+
     groups = c.search_groups("docs", query, k=5,
                              group_by="doc_id", group_size=2)
     for g in groups:

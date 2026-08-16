@@ -48,8 +48,9 @@ in. Set them explicitly in Go:
     # The server fills in M / ef_construction / ef_search when omitted.
     c.create_collection("docs", dim=768, metric="cosine")
 
-    # ...or set them explicitly.
-    c.create_collection("docs", dim=768, metric="cosine",
+    # The same collection with the knobs set explicitly. These are
+    # alternatives — creating "docs" twice raises "collection already exists".
+    c.create_collection("docs-tuned", dim=768, metric="cosine",
                         m=16, ef_construction=200, ef_search=64)
     ```
 

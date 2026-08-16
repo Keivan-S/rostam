@@ -35,8 +35,19 @@ runtime dependencies.
     ```
 
     Multi-arch (amd64/arm64). The image binds `0.0.0.0`, so it **requires** a
-    token — passing it by environment variable keeps the secret out of the
-    process table and out of `docker inspect`.
+    token. An environment variable keeps it off the command line and out of
+    `ps`, but it is *not* hidden: `docker inspect` shows it under `Config.Env`.
+    For anything beyond local use, mount a secret or use your orchestrator's
+    secret store.
+
+    The image serves **HTTP only** — its default command is
+    `-http 0.0.0.0:8080` and only 8080 is exposed. To also speak the binary TCP
+    protocol, override the command and publish the port:
+
+    ```sh
+    docker run -p 8080:8080 -p 8081:8081 -e ROSTAM_API_KEY=secret \
+      ghcr.io/rostamlabs/rostam -http 0.0.0.0:8080 -tcp 0.0.0.0:8081
+    ```
 
 === "Go"
 
@@ -74,8 +85,13 @@ without the token.
 
 ## Your first search
 
-Create a collection, add a point, and search it. Against the container, add
-`-H 'Authorization: Bearer secret'` (curl) or pass the token to the client.
+Create a collection, add a point, and search it. These target the **loopback**
+server from [Run it](#run-it), which needs no token.
+
+Against the container, authenticate every call: add
+`-H 'Authorization: Bearer secret'` to each curl, construct the Python client as
+`RostamClient("http://localhost:8080", api_key="secret")`, and set
+`ClientConfig.AuthToken` in Go.
 
 === "curl"
 
@@ -125,6 +141,7 @@ Create a collection, add a point, and search it. Against the container, add
 === "Go"
 
     ```sh
+    go mod init example.com/myapp    # modern Go needs a module first
     go get github.com/rostamlabs/rostam
     ```
 
@@ -143,7 +160,8 @@ Create a collection, add a point, and search it. Against the container, add
     func main() {
     	ctx := context.Background()
 
-    	// Talks to the -tcp port, not -http.
+    	// The -tcp port from "Run it" above, not -http. The container does not
+    	// serve TCP unless you override its command as shown in Install.
     	store, err := rostam.NewClient(rostam.ClientConfig{
     		Servers: []string{"127.0.0.1:8081"},
     	})

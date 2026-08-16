@@ -108,6 +108,7 @@ an ordering, and inventing one leaves `x >= 3 AND x <= 2` matching a NaN row.
 from rostam import RostamClient, filters as f
 
 c = RostamClient("http://localhost:8080")
+query = [0.1, 0.2, 0.3, 0.4]   # your embedding model's output
 
 c.search_docs("docs", query, k=5, filter=f.eq("tenant", "acme"))
 c.search_docs("docs", query, k=5, filter=f.in_("tenant", ["acme", "beta"]))
@@ -125,6 +126,7 @@ out of reach: a filter is just a dict, so spell out the JSON form and pass it
 directly.
 
 ```python
+# Continues from the client and `query` above.
 # Full-text match — no helper, so write the wire form.
 c.search_docs("docs", query, k=5, filter={
     "op": "match", "field": "$content",
