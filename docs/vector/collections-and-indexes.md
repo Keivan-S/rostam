@@ -24,10 +24,9 @@ col, err := vector.NewCollection("docs", vector.Config{
 | `MaxEfSearch` | 1024 | cap on the automatic ef widening filtered search uses; unfiltered search ignores it |
 | `Seed` | 0 | RNG seed for deterministic builds |
 
-† **Defaulted over HTTP and from the Python client, but required in the Go
-library.** `vector.NewCollection` validates these and rejects zero with
-`vector: invalid M (must be > 0 and <= 128)`; only the Vamana path fills them
-in. Set them explicitly in Go:
+† **Defaulted to 16 / 200 / 64 when omitted**, on every entry point — the HTTP
+API, the Python client and the Go library alike. Setting them explicitly is
+optional; the examples below do so to keep the recall/latency dials visible:
 
 === "Go"
 
@@ -36,7 +35,7 @@ in. Set them explicitly in Go:
     	Dim:    768,
     	Metric: vector.Cosine,
 
-    	M:              16,   // required here — not defaulted
+    	M:              16,   // optional — shown to make the dial visible
     	EfConstruction: 200,
     	EfSearch:       64,
     })

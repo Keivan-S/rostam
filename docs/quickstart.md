@@ -170,8 +170,8 @@ Against the container, authenticate every call: add
     	}
     	defer store.Close()
 
-    	// M / EfConstruction / EfSearch are required here — unlike the REST and
-    	// Python paths, the Go API does not fill them in.
+    	// M / EfConstruction / EfSearch default to 16 / 200 / 64 when omitted,
+    	// as they do over REST and Python. Set here to keep the tuning visible.
     	if err := store.CreateCollection(ctx, "docs", rostam.VectorConfig{
     		Dim: 4, Metric: vector.Cosine,
     		M: 16, EfConstruction: 200, EfSearch: 64,
@@ -236,7 +236,8 @@ func main() {
 		Metric: vector.Cosine,
 		Quant:  vector.QuantSQ8, // int8 codes: 4× smaller, ~98% recall retained
 
-		// Required: the HNSW path validates these and does not fill them in.
+		// Optional — these default to 16 / 200 / 64. Shown so the recall/latency
+		// dials are visible in the example you copy from.
 		M:              16,
 		EfConstruction: 200,
 		EfSearch:       64,
