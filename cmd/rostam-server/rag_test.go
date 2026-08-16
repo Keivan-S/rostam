@@ -39,6 +39,11 @@ func TestRagAlphaOutOfRangeErrors(t *testing.T) {
 	if err == nil {
 		t.Fatal("alpha > 1 should error")
 	}
+	// NaN passes every float comparison as false, so it slips past a naive
+	// `> 1` guard and poisons the weighted fusion — it must be rejected.
+	if err := runRagCmdE([]string{"query", "--data", data, "--corpus", "docs", "--alpha", "NaN", "hello"}); err == nil {
+		t.Fatal("alpha NaN should error")
+	}
 }
 
 func TestRagQueryWithNoHybridFlagRuns(t *testing.T) {
