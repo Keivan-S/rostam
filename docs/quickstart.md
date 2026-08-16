@@ -7,25 +7,59 @@ mode — the server and Python paths first, the Go embedding paths after.
 
 ## Requirements
 
-- **Go 1.26+** for library use and building the server.
+**Nothing, to run the server.** It ships as a single static binary with no
+runtime dependencies.
+
+- **Go 1.26+** only if you embed the library or build from source.
 - The default full-module build requires **cgo** (the WASM stored-procedure
   backend uses `wasmtime-go`). The vector engine and cache packages are pure Go —
   see [Development](development.md#building) for `CGO_ENABLED=0` builds.
 - mmap persistence and the AVX2 kernels are Linux/amd64; everything has a
   portable fallback.
 
-## Run the server
+## Install the server
+
+=== "Install script"
+
+    ```sh
+    curl -fsSL https://rostamlabs.com/install.sh | sh
+    ```
+
+    Detects your OS and architecture, downloads the matching release binary and
+    puts it in `~/.local/bin`. Set `ROSTAM_INSTALL_DIR` to place it elsewhere.
+
+=== "Docker"
+
+    ```sh
+    docker run -p 8080:8080 -e ROSTAM_API_KEY=secret ghcr.io/rostamlabs/rostam
+    ```
+
+    Multi-arch (amd64/arm64). The image binds `0.0.0.0`, so it **requires** a
+    token — passing it by environment variable keeps the secret out of the
+    process table and out of `docker inspect`.
+
+=== "Go"
+
+    ```sh
+    go install github.com/rostamlabs/rostam/cmd/rostam-server@latest
+    ```
+
+=== "From source"
+
+    ```sh
+    git clone https://github.com/rostamlabs/rostam
+    cd rostam
+    go build -o rostam-server ./cmd/rostam-server
+    ```
+
+## Run it
 
 `rostam-server` exposes the same engine over three transports: REST (`-http`),
-gRPC (`-grpc`), and a compact binary TCP protocol (`-tcp`). From a clone of the
-repo:
+gRPC (`-grpc`), and a compact binary TCP protocol (`-tcp`). Start it with REST
+and TCP on loopback, persisting to `./data`:
 
 ```sh
-git clone https://github.com/rostamlabs/rostam
-cd rostam
-
-# Single node: REST on loopback :8080, persisted to ./data
-go run ./cmd/rostam-server -http 127.0.0.1:8080 -data ./data
+rostam-server -http 127.0.0.1:8080 -tcp 127.0.0.1:8081 -data ./data
 ```
 
 !!! note "Non-loopback binds require authentication"
@@ -35,64 +69,130 @@ go run ./cmd/rostam-server -http 127.0.0.1:8080 -data ./data
     `ROSTAM_API_KEY`, or pass `-insecure` to run open deliberately — see
     [Security](server/security.md).
 
-### In a container
-
-The image binds `0.0.0.0`, so it requires a token. Passing it by environment
-variable keeps the secret out of the process table and out of `docker inspect`:
-
-```sh
-docker build -f cmd/rostam-server/Dockerfile -t rostam-server .
-docker run -p 8080:8080 -e ROSTAM_API_KEY=secret rostam-server
-```
-
-`GET /v1/health` and `/v1/ready` remain auth-exempt so orchestrator probes work
+`GET /v1/health` and `/v1/ready` stay auth-exempt so orchestrator probes work
 without the token.
 
-Create a collection, insert a point, and search — with plain curl. These assume
-the loopback server above; against the container, add
-`-H 'Authorization: Bearer secret'` to each call:
+## Your first search
 
-```sh
-# Create a 4-dimensional cosine collection
-curl -s localhost:8080/v1/collections \
-  -d '{"name":"docs","config":{"dim":4,"metric":"cosine"}}'
+Create a collection, add a point, and search it. Against the container, add
+`-H 'Authorization: Bearer secret'` (curl) or pass the token to the client.
 
-# Upsert a point (metadata values use a tagged encoding — see docs/vector/filtering.md)
-curl -s localhost:8080/v1/collections/docs/points \
-  -d '{"id":1,"vector":[0.1,0.2,0.3,0.4],"content":"hello rostam",
-       "metadata":{"tenant":{"kind":"string","str":"acme"}},"upsert":true}'
+=== "curl"
 
-# Search
-curl -s localhost:8080/v1/collections/docs/points/search \
-  -d '{"query":[0.1,0.2,0.3,0.4],"k":3}'
-```
+    ```sh
+    # Create a 4-dimensional cosine collection
+    curl -s localhost:8080/v1/collections \
+      -d '{"name":"docs","config":{"dim":4,"metric":"cosine"}}'
+
+    # Upsert a point. Metadata values use a tagged encoding — see Filtering.
+    curl -s localhost:8080/v1/collections/docs/points \
+      -d '{"id":1,"vector":[0.1,0.2,0.3,0.4],"content":"hello rostam",
+           "metadata":{"tenant":{"kind":"string","str":"acme"}},"upsert":true}'
+
+    # Search
+    curl -s localhost:8080/v1/collections/docs/points/search \
+      -d '{"query":[0.1,0.2,0.3,0.4],"k":3}'
+    ```
+
+=== "Python"
+
+    ```sh
+    pip install rostam-client
+    ```
+
+    ```python
+    from rostam import RostamClient, filters as f
+
+    c = RostamClient("http://localhost:8080")
+
+    c.create_collection("docs", dim=4, metric="cosine")
+    c.upsert("docs", 1, [0.1, 0.2, 0.3, 0.4],
+             content="hello rostam",
+             metadata={"tenant": "acme"})
+
+    # search() returns ids, distances and scores.
+    hits = c.search("docs", [0.1, 0.2, 0.3, 0.4], k=3)
+
+    # search_docs() returns the stored content too, and takes a filter.
+    docs = c.search_docs("docs", [0.1, 0.2, 0.3, 0.4], k=3,
+                         filter=f.eq("tenant", "acme"))
+    print([(d.id, d.content) for d in docs])
+    ```
+
+    The client sends plain Python values — it applies the tagged metadata
+    encoding for you. Full reference: [Python client](api/python.md).
+
+=== "Go"
+
+    ```sh
+    go get github.com/rostamlabs/rostam
+    ```
+
+    ```go
+    package main
+
+    import (
+    	"context"
+    	"fmt"
+    	"log"
+
+    	"github.com/rostamlabs/rostam"
+    	"github.com/rostamlabs/rostam/vector"
+    )
+
+    func main() {
+    	ctx := context.Background()
+
+    	// Talks to the -tcp port, not -http.
+    	store, err := rostam.NewClient(rostam.ClientConfig{
+    		Servers: []string{"127.0.0.1:8081"},
+    	})
+    	if err != nil {
+    		log.Fatal(err)
+    	}
+    	defer store.Close()
+
+    	// M / EfConstruction / EfSearch are required here — unlike the REST and
+    	// Python paths, the Go API does not fill them in.
+    	if err := store.CreateCollection(ctx, "docs", rostam.VectorConfig{
+    		Dim: 4, Metric: vector.Cosine,
+    		M: 16, EfConstruction: 200, EfSearch: 64,
+    	}); err != nil {
+    		log.Fatal(err)
+    	}
+
+    	if err := store.VectorUpsert(ctx, "docs", 1,
+    		[]float32{0.1, 0.2, 0.3, 0.4}, "hello rostam",
+    		rostam.VectorInsertOpts{}); err != nil {
+    		log.Fatal(err)
+    	}
+
+    	hits, err := store.VectorSearch(ctx, "docs", []float32{0.1, 0.2, 0.3, 0.4}, 3)
+    	if err != nil {
+    		log.Fatal(err)
+    	}
+    	fmt.Println(hits)
+    }
+    ```
+
+    Full reference: [Go client](api/go-client.md).
 
 The full endpoint inventory is in the [HTTP API reference](api/http.md). To add
 authentication and TLS, see [Security](server/security.md); for multi-node
 clusters, see [Clustering](server/clustering.md).
 
-## Use it from Python
+## Large initial loads
 
-The Python client is a dependency-free REST wrapper (source lives under
-`clients/python`):
-
-```sh
-pip install rostam-client
-```
+For a first bulk import, `bulk_stage(...)` + `bulk_build(...)` ship vectors over
+a binary wire and build the index on all cores — far faster than upserting point
+by point:
 
 ```python
-from rostam import RostamClient
-
-c = RostamClient("http://localhost:8080")
-c.create_collection("docs", dim=4)
-c.upsert("docs", 1, [0.1, 0.2, 0.3, 0.4], content="hello rostam",
-         metadata={"tenant": "acme"})
-hits = c.search_docs("docs", [0.1, 0.2, 0.3, 0.4], k=3)
+c.bulk_stage("docs", ids, vectors)
+c.bulk_build("docs")          # concurrent build, all cores
 ```
 
-For large initial loads, `c.bulk_stage(...)` + `c.bulk_build(...)` ship vectors
-over a binary wire and build the index on all cores. Full method reference:
-[Python client](api/python.md).
+Full method reference: [Python client](api/python.md).
 
 ## Embedded vector search (Go library)
 
@@ -117,6 +217,11 @@ func main() {
 		Dim:    768,
 		Metric: vector.Cosine,
 		Quant:  vector.QuantSQ8, // int8 codes: 4× smaller, ~98% recall retained
+
+		// Required: the HNSW path validates these and does not fill them in.
+		M:              16,
+		EfConstruction: 200,
+		EfSearch:       64,
 	})
 	if err != nil {
 		panic(err)
