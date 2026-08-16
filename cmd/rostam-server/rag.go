@@ -36,6 +36,8 @@ type ragFlags struct {
 	embedDim     int
 	llmURL       string
 	llmModel     string
+	noHybrid     bool
+	alpha        float64
 }
 
 // runRagCmd implements `rostam-server rag`: an ingest/ask/query CLI over the
@@ -71,9 +73,14 @@ func runRagCmdE(args []string) error {
 	fs.IntVar(&fl.embedDim, "embed-dim", 0, "embedding vector dimension (overrides ROSTAM_EMBED_DIM)")
 	fs.StringVar(&fl.llmURL, "llm-url", "", "LLM chat-completions endpoint URL (overrides ROSTAM_LLM_URL)")
 	fs.StringVar(&fl.llmModel, "llm-model", "", "LLM model id (overrides ROSTAM_LLM_MODEL)")
+	fs.BoolVar(&fl.noHybrid, "no-hybrid", false, "disable dense+BM25 fusion; use pure dense KNN when an embedder is configured")
+	fs.Float64Var(&fl.alpha, "alpha", -1, "weighted-fusion dense weight in [0,1]; unset (<0) uses RRF")
 	if err := fs.Parse(rest); err != nil {
 		return err
 	}
+	// Alpha validation lives in the rag package (Retrieve/Ask), so it covers
+	// both the CLI and any library caller of WithHybrid — no need to duplicate
+	// the NaN/>1 check here.
 
 	resolveEnv(&fl, os.LookupEnv)
 	embedKey, _ := os.LookupEnv("ROSTAM_EMBED_KEY")
@@ -159,6 +166,15 @@ func buildEmbedder(fl ragFlags, embedKey string) semcache.Embedder {
 	return oe
 }
 
+// ragOptions builds the []rag.Option for Retrieve/Ask from the parsed CLI
+// flags: hybrid fusion is on by default, unless -no-hybrid was passed.
+func ragOptions(fl ragFlags) []rag.Option {
+	if fl.noHybrid {
+		return nil
+	}
+	return []rag.Option{rag.WithHybrid(fl.alpha)}
+}
+
 func embedderDim(emb semcache.Embedder) int {
 	if emb == nil {
 		return 0
@@ -194,7 +210,7 @@ func runRagQuery(ctx context.Context, r rag.Retriever, emb semcache.Embedder, fl
 		return errors.New("usage: rostam-server rag query [flags] <text>")
 	}
 	query := args[0]
-	hits, err := rag.Retrieve(ctx, r, emb, fl.corpus, query, fl.k)
+	hits, err := rag.Retrieve(ctx, r, emb, fl.corpus, query, fl.k, ragOptions(fl)...)
 	if err != nil {
 		return fmt.Errorf("query: %w", err)
 	}
@@ -213,7 +229,7 @@ func runRagAsk(ctx context.Context, r rag.Retriever, emb semcache.Embedder, fl r
 		Model:      fl.llmModel,
 		HTTPClient: &http.Client{Timeout: 5 * time.Minute},
 	}
-	res, err := rag.Ask(ctx, r, emb, llm, fl.corpus, question, fl.k)
+	res, err := rag.Ask(ctx, r, emb, llm, fl.corpus, question, fl.k, ragOptions(fl)...)
 	if err != nil {
 		return fmt.Errorf("ask: %w", err)
 	}

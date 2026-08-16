@@ -67,8 +67,9 @@ rostam-server rag ask "How does the LLM proxy decide what's cacheable?"
 ```
 
 Retrieval works out of the box on BM25 full-text search; pointing it at an
-OpenAI-compatible embedder upgrades it to dense vector search. `rag query`
-does retrieval alone, with no LLM required.
+OpenAI-compatible embedder upgrades it to dense+BM25 hybrid fusion by default
+(`-no-hybrid` selects pure dense search). `rag query` does retrieval alone,
+with no LLM required.
 
 → [RAG CLI](https://docs.rostamlabs.com/server/rag/) for flags,
 embedded-vs-remote mode, and supported file types.

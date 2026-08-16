@@ -57,12 +57,14 @@ spend a generation call on it.
 | `-embed-dim` | `ROSTAM_EMBED_DIM` | (unset) | Embedding vector dimension. |
 | `-llm-url` | `ROSTAM_LLM_URL` | (unset) | LLM chat-completions endpoint URL (`ask` only). |
 | `-llm-model` | `ROSTAM_LLM_MODEL` | (unset) | LLM model id (`ask` only). |
+| `-no-hybrid` | — | `false` | Disable dense+BM25 fusion; use pure dense kNN when an embedder is configured. No effect on the BM25-only path. |
+| `-alpha` | — | `-1` (unset) | Weighted-fusion dense weight, `0`..`1`. Unset (any negative value) uses reciprocal-rank fusion (RRF) instead of weighted fusion. Values `> 1` are rejected. |
 | — | `ROSTAM_EMBED_KEY` | (unset) | Bearer key for the embedding endpoint. Env-only, deliberately: there is no `-embed-key` flag, so the key never lands in `/proc` or shell history. |
 | — | `ROSTAM_LLM_KEY` | (unset) | Bearer key for the LLM endpoint. Env-only, same reasoning as `ROSTAM_EMBED_KEY`. |
 
 Every flag above has an env-variable counterpart except the two secrets and
-`-data`/`-endpoint`/`-corpus`/`-k`/`-chunk-size`/`-chunk-overlap`, which are
-flag-only. Where both a flag and an env variable are set, the flag wins.
+`-data`/`-endpoint`/`-corpus`/`-k`/`-chunk-size`/`-chunk-overlap`/`-no-hybrid`/`-alpha`,
+which are flag-only. Where both a flag and an env variable are set, the flag wins.
 
 ## Embedded vs. remote (`-endpoint`)
 
@@ -84,7 +86,9 @@ Retrieval defaults to BM25 full-text search — no embedder configuration
 needed, works immediately after `rag ingest`. Set `-embed-url`,
 `-embed-model`, and `-embed-dim` (or the equivalent `ROSTAM_EMBED_*` env
 vars, plus `ROSTAM_EMBED_KEY` if the endpoint needs one) and retrieval
-switches to dense kNN search over the embedded vectors instead.
+switches to **dense+BM25 hybrid fusion** by default (see
+[Hybrid fusion](#hybrid-fusion-dense--bm25) below); `-no-hybrid` selects
+pure dense kNN over the embedded vectors instead.
 
 Note that ingestion and retrieval must agree: chunks embedded at ingest
 time are only useful for dense search if the same embedder configuration
@@ -100,9 +104,26 @@ ingest would need, and an existing corpus can't be resized in place:
 wipe the `-data` dir) rather than silently leaving stale or mismatched
 vectors behind.
 
-Combined dense+BM25 fusion (hybrid search) is a planned upgrade, not yet
-wired into the CLI — today it's one or the other, decided entirely by
-whether an embedder is configured.
+### Hybrid fusion (dense + BM25)
+
+With an embedder configured, `rag query`/`rag ask` now default to
+**dense+BM25 fusion**: both lanes run, and their hits are combined by
+reciprocal-rank fusion (RRF) into a single ranked list. This typically
+improves recall over either lane alone — it catches both exact keyword
+matches and semantically related chunks that don't share vocabulary with the
+query. (It's a recall improvement, not a guarantee: at a fixed top-`k`,
+fusing can occasionally demote a result that a single lane would have
+surfaced — use `-no-hybrid` if you specifically want the pure-dense ranking.)
+
+- `-no-hybrid` disables fusion and falls back to pure dense kNN (the
+  pre-fusion behavior) — useful when you want the embedder's ranking
+  untouched by BM25.
+- `-alpha` switches fusion from RRF to weighted fusion: a value in `0..1`
+  sets the dense lane's weight (`1-alpha` goes to BM25). Leaving `-alpha`
+  unset (the default, a negative sentinel) keeps RRF, which needs no tuning.
+
+Both flags are inert on the BM25-only path (no embedder configured) — there
+is no dense lane to fuse with, so `-no-hybrid`/`-alpha` are simply ignored.
 
 ## Offline use with Ollama
 

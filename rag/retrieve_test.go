@@ -2,10 +2,28 @@ package rag
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	"github.com/rostamlabs/rostam/semcache"
 )
+
+func TestRetrieveRejectsInvalidHybridAlpha(t *testing.T) {
+	rr := &recordingRetriever{}
+	ctx := context.Background()
+	// WithHybrid takes any float64; Retrieve must reject NaN and >1 (a library
+	// caller bypasses the CLI flag validation). Negative alpha = RRF sentinel.
+	for _, bad := range []float64{2, math.NaN()} {
+		if _, err := Retrieve(ctx, rr, nil, "docs", "q", 5, WithHybrid(bad)); err == nil {
+			t.Errorf("Retrieve WithHybrid(%v) should error", bad)
+		}
+	}
+	for _, ok := range []float64{-1, 0, 0.5, 1} {
+		if _, err := Retrieve(ctx, rr, nil, "docs", "q", 5, WithHybrid(ok)); err != nil {
+			t.Errorf("Retrieve WithHybrid(%v) should not error on alpha, got %v", ok, err)
+		}
+	}
+}
 
 func TestRetrieveBM25(t *testing.T) {
 	dir := t.TempDir()
@@ -47,5 +65,40 @@ func TestRetrieveDenseUsesEmbedder(t *testing.T) {
 	}
 	if len(hits) == 0 {
 		t.Fatalf("dense retrieve returned nothing")
+	}
+}
+
+// recordingRetriever records each Search call's queryVec nil-ness, since
+// HybridSearch no longer exists on Retriever: fusion now drives Retrieve to
+// call Search twice (once dense, once BM25) instead of routing to a separate
+// method.
+type recordingRetriever struct {
+	Retriever
+	denseVecCalls []bool // one entry per Search call; true = queryVec was non-nil
+}
+
+func (r *recordingRetriever) Search(ctx context.Context, c, qt string, qv []float32, k int) ([]Hit, error) {
+	r.denseVecCalls = append(r.denseVecCalls, len(qv) > 0)
+	return []Hit{{Content: "y", Source: "s"}}, nil
+}
+
+func TestRetrieveRoutesToHybridWhenEnabled(t *testing.T) {
+	rr := &recordingRetriever{}
+	emb := semcache.NewStubEmbedder("stub", 8)
+	_, _ = Retrieve(context.Background(), rr, emb, "docs", "q", 5, WithHybrid(-1))
+	if len(rr.denseVecCalls) != 2 || rr.denseVecCalls[0] != true || rr.denseVecCalls[1] != false {
+		t.Fatalf("WithHybrid+embedder should call Search twice, once dense (vec) then once BM25 (nil): %v", rr.denseVecCalls)
+	}
+
+	rr2 := &recordingRetriever{}
+	_, _ = Retrieve(context.Background(), rr2, emb, "docs", "q", 5)
+	if len(rr2.denseVecCalls) != 1 || rr2.denseVecCalls[0] != true {
+		t.Fatalf("no WithHybrid should call Search once, dense: %v", rr2.denseVecCalls)
+	}
+
+	rr3 := &recordingRetriever{}
+	_, _ = Retrieve(context.Background(), rr3, nil, "docs", "q", 5, WithHybrid(-1))
+	if len(rr3.denseVecCalls) != 1 || rr3.denseVecCalls[0] != false {
+		t.Fatalf("no embedder should call Search once, BM25, even with WithHybrid: %v", rr3.denseVecCalls)
 	}
 }
