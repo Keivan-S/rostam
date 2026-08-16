@@ -12,6 +12,7 @@ import (
 
 	"github.com/rostamlabs/rostam"
 	"github.com/rostamlabs/rostam/ops"
+	"github.com/rostamlabs/rostam/semcache"
 	"github.com/rostamlabs/rostam/vector"
 )
 
@@ -107,6 +108,76 @@ func TestEmbeddedRetrieverEnsureCorpusDimMismatch(t *testing.T) {
 
 func TestHTTPRetrieverImplementsInterface(t *testing.T) {
 	var _ Retriever = (*HTTPRetriever)(nil) // compile-time interface check
+}
+
+func TestEmbeddedHybridSearchReturnsContentAndFuses(t *testing.T) {
+	dir := t.TempDir()
+	r, err := NewEmbeddedRetriever(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = r.Close() }()
+	ctx := context.Background()
+	emb := semcache.NewStubEmbedder("stub", 8)
+	if err := r.EnsureCorpus(ctx, "docs", emb.Dim()); err != nil {
+		t.Fatal(err)
+	}
+	texts := []string{"epoll event loop transport", "raft shard core count"}
+	vecs, _ := emb.Embed(ctx, texts)
+	_ = r.Upsert(ctx, "docs", []StoredChunk{
+		{ID: 1, Content: texts[0], Vector: vecs[0], Source: "a.md", Index: 0},
+		{ID: 2, Content: texts[1], Vector: vecs[1], Source: "b.md", Index: 0},
+	})
+	qv, _ := emb.Embed(ctx, []string{"epoll transport"})
+	hits, err := r.HybridSearch(ctx, "docs", "epoll transport", qv[0], 5, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) == 0 || hits[0].Content == "" || hits[0].Source == "" {
+		t.Fatalf("hybrid hits must carry content+source: %+v", hits)
+	}
+}
+
+func TestHTTPRetrieverStillImplementsRetriever(t *testing.T) {
+	var _ Retriever = (*HTTPRetriever)(nil)
+	var _ Retriever = (*EmbeddedRetriever)(nil)
+}
+
+// TestHTTPRetrieverHybridSearchRoundtrip mirrors
+// TestHTTPRetrieverRoundtripBM25's in-process server harness but exercises
+// HybridSearch end to end (dense + BM25 lanes fused) over the wire, proving
+// behavioral parity with TestEmbeddedHybridSearchReturnsContentAndFuses.
+func TestHTTPRetrieverHybridSearchRoundtrip(t *testing.T) {
+	srv, addr := startRemoteServer(t)
+	defer func() { _ = srv.Close() }()
+
+	r, err := NewHTTPRetriever(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = r.Close() }()
+	ctx := context.Background()
+	emb := semcache.NewStubEmbedder("stub", 8)
+	if err := r.EnsureCorpus(ctx, "docs", emb.Dim()); err != nil {
+		t.Fatal(err)
+	}
+	texts := []string{"epoll event loop transport", "raft shard core count"}
+	vecs, _ := emb.Embed(ctx, texts)
+	chunks := []StoredChunk{
+		{ID: 1, Content: texts[0], Vector: vecs[0], Source: "a.md", Index: 0},
+		{ID: 2, Content: texts[1], Vector: vecs[1], Source: "b.md", Index: 0},
+	}
+	if err := r.Upsert(ctx, "docs", chunks); err != nil {
+		t.Fatal(err)
+	}
+	qv, _ := emb.Embed(ctx, []string{"epoll transport"})
+	hits, err := r.HybridSearch(ctx, "docs", "epoll transport", qv[0], 5, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) == 0 || hits[0].Content == "" || hits[0].Source == "" {
+		t.Fatalf("hybrid hits must carry content+source: %+v", hits)
+	}
 }
 
 // freeTCPPort returns a loopback address nothing is listening on at the
