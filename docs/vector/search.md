@@ -4,14 +4,50 @@ All search entry points live on the collection (library) and under
 `/v1/collections/{name}/points/...` (HTTP). Results are `(id, distance)` pairs;
 fusion-based searches also carry a `score`.
 
+**Not every mode is reachable from every entry point.** Check here before
+designing around one:
+
+| Mode | Go library | HTTP | Python client |
+|---|---|---|---|
+| [kNN](#k-nearest-neighbors) | ✅ | ✅ | ✅ |
+| [MMR](#mmr-diversified-retrieval) | ✅ | — | — |
+| [Recommend](#recommendation-positivenegative-examples) | ✅ | via [Query API](#unified-query-api-multi-stage-fusion-rerank) | — |
+| [Discover](#discovery-context-pairs) | ✅ | via [Query API](#unified-query-api-multi-stage-fusion-rerank) | — |
+| [Grouping](#grouping-top-k-per-group) | ✅ | ✅ | ✅ |
+| [Scroll](#scroll-filtered-listing-with-pagination) | ✅ | ✅ | ✅ |
+
 ## k-nearest neighbors
 
-```go
-hits, err := col.Search(query, 10)                       // plain kNN
-hits, err = col.SearchFiltered(query, 10, filter)        // kNN + metadata filter
-hits, err = col.SearchInto(dst, query, 10, filter)       // allocation-light: reuses dst
-docs, err := col.SearchDocs(query, 10, filter)           // hits + stored content + metadata
-```
+=== "Go"
+
+    ```go
+    hits, err := col.Search(query, 10)                       // plain kNN
+    hits, err = col.SearchFiltered(query, 10, filter)        // kNN + metadata filter
+    hits, err = col.SearchInto(dst, query, 10, filter)       // allocation-light: reuses dst
+    docs, err := col.SearchDocs(query, 10, filter)           // hits + stored content + metadata
+    ```
+
+=== "Python"
+
+    ```python
+    from rostam import RostamClient, filters as f
+
+    c = RostamClient("http://localhost:8080")
+
+    hits = c.search("docs", query, k=10)                       # ids, distances, scores
+    hits = c.search("docs", query, k=10, filter=f.eq("tenant", "acme"))
+    docs = c.search_docs("docs", query, k=10)                  # + content and metadata
+    ```
+
+=== "curl"
+
+    ```sh
+    curl -s localhost:8080/v1/collections/docs/points/search \
+      -d '{"query":[0.1,0.2,0.3,0.4],"k":10}'
+
+    curl -s localhost:8080/v1/collections/docs/points/search/docs \
+      -d '{"query":[0.1,0.2,0.3,0.4],"k":10}'
+    ```
 
 `SearchDocs` returns `Document{ID, Distance, Score, Content, Metadata}` — the
 RAG-friendly shape. Filtering semantics and the filter-first planner are covered
@@ -25,7 +61,12 @@ effect, so exploring low-ef behaviour means lowering `k` too.
 ## MMR — diversified retrieval
 
 Maximal Marginal Relevance re-ranks a candidate pool to balance relevance
-against diversity — useful when the top-k would otherwise be near-duplicates:
+against diversity — useful when the top-k would otherwise be near-duplicates.
+
+!!! info "Go library only"
+
+    MMR has no HTTP route and no Python method. Over the wire, fetch a wider
+    `k` and re-rank client-side.
 
 ```go
 hits, err := col.SearchMMR(query, 10, vector.MMROpts{
@@ -67,22 +108,43 @@ hits, err := col.Discover(10, vector.DiscoverOpts{
 
 Collapse hits by a payload field (e.g. one best chunk per source document):
 
-```go
-groups, err := col.SearchGroups(query, 5, vector.GroupOpts{
-	GroupBy:   "doc_id", // required
-	GroupSize: 2,        // hits kept per group (default 1)
-})
-// Group{Key, Hits []Document}
-```
+=== "Go"
+
+    ```go
+    groups, err := col.SearchGroups(query, 5, vector.GroupOpts{
+    	GroupBy:   "doc_id", // required
+    	GroupSize: 2,        // hits kept per group (default 1)
+    })
+    // Group{Key, Hits []Document}
+    ```
+
+=== "Python"
+
+    ```python
+    groups = c.search_groups("docs", query, k=5,
+                             group_by="doc_id", group_size=2)
+    for g in groups:
+        print(g.key, [d.id for d in g.hits])
+    ```
 
 ## Scroll — filtered listing with pagination
 
 Deterministic id-ascending listing of live points, with cursor pagination:
 
-```go
-docs, err := col.ScrollDocs(filter, 100)                                  // first page
-docs, next, more, err := col.ScrollDocsPage(filter, afterID, true, 100)   // continue after id
-```
+=== "Go"
+
+    ```go
+    docs, err := col.ScrollDocs(filter, 100)                                  // first page
+    docs, next, more, err := col.ScrollDocsPage(filter, afterID, true, 100)   // continue after id
+    ```
+
+=== "Python"
+
+    ```python
+    page = c.scroll("docs", limit=100)                     # first page
+    while page.next_cursor:                                # pass the cursor back verbatim
+        page = c.scroll("docs", limit=100, cursor=page.next_cursor)
+    ```
 
 `ScrollDocsPageOrder` adds order-by on a payload key (numeric, datetime, or
 string; multi-key via `Tail`), ascending or descending, with resumable cursors.
