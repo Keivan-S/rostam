@@ -18,11 +18,40 @@ col, err := vector.NewCollection("docs", vector.Config{
 |---|---|---|
 | `Dim` | — (required) | vector dimensionality |
 | `Metric` | — | `Cosine`, `L2`, or `DotProduct` |
-| `M` | 16 | HNSW graph degree |
-| `EfConstruction` | 200 | build-time beam width |
-| `EfSearch` | 64 | query-time beam width (recall/latency dial) |
+| `M` | 16 † | HNSW graph degree |
+| `EfConstruction` | 200 † | build-time beam width |
+| `EfSearch` | 64 † | query-time beam width (recall/latency dial) |
 | `MaxEfSearch` | 1024 | cap on the automatic ef widening filtered search uses; unfiltered search ignores it |
 | `Seed` | 0 | RNG seed for deterministic builds |
+
+† **Defaulted over HTTP and from the Python client, but required in the Go
+library.** `vector.NewCollection` validates these and rejects zero with
+`vector: invalid M (must be > 0 and <= 128)`; only the Vamana path fills them
+in. Set them explicitly in Go:
+
+=== "Go"
+
+    ```go
+    col, err := vector.NewCollection("docs", vector.Config{
+    	Dim:    768,
+    	Metric: vector.Cosine,
+
+    	M:              16,   // required here — not defaulted
+    	EfConstruction: 200,
+    	EfSearch:       64,
+    })
+    ```
+
+=== "Python"
+
+    ```python
+    # The server fills in M / ef_construction / ef_search when omitted.
+    c.create_collection("docs", dim=768, metric="cosine")
+
+    # ...or set them explicitly.
+    c.create_collection("docs", dim=768, metric="cosine",
+                        m=16, ef_construction=200, ef_search=64)
+    ```
 
 Higher `M`/`EfConstruction` buys recall at build cost; `EfSearch` is the runtime
 knob you tune first.
