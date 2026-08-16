@@ -24,7 +24,7 @@ import sys
 import threading
 import urllib.parse
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 from ._values import decode_metadata, decode_value, encode_metadata
 
@@ -850,6 +850,117 @@ class RostamClient:
             key = decode_value(g["key"]) if isinstance(g.get("key"), dict) else g.get("key")
             groups.append(Group(key=key, hits=[_to_document(d) for d in (g.get("hits") or [])]))
         return groups
+
+    def query(
+        self,
+        collection: str,
+        prefetch: Sequence[Dict[str, Any]],
+        *,
+        root: Optional[Dict[str, Any]] = None,
+        mode: str = "fusion",
+        method: str = "",
+        alpha: float = 0.0,
+        rrf_k: int = 0,
+        k: int = 10,
+        group_by: str = "",
+        group_size: int = 0,
+    ) -> Any:
+        """The composable Query API: run one or more ``prefetch`` lanes and fuse or
+        rerank them in a single request. This is the only entry point that carries
+        recommend and discover over the wire (there are no standalone routes), and
+        the ``recommend()`` / ``discover()`` helpers below are thin wrappers over it.
+
+        Each ``prefetch`` entry is a leaf dict — a dense vector, a sparse lane, a
+        recommend spec, or a discover spec — optionally with its own ``k`` and a
+        ``filter``::
+
+            [{"dense": [0.1, 0.2, ...], "k": 50}]
+            [{"sparse": {"indices": [...], "values": [...]}}]
+            [{"recommend": {"positive": [12, 96], "negative": [40]}, "k": 50}]
+            [{"discover": {"target": 7, "context": [{"positive": 1, "negative": 2}]}}]
+
+        ``mode`` is "fusion" (combine the lanes, default) or "rerank" (``root``
+        re-scores the union of the prefetch candidates — pass a ``root`` leaf for
+        that). ``method`` picks the fusion: "rrf" | "weighted" | "dbsf".
+
+        Returns ``List[SearchResult]``; when ``group_by`` is set the response is
+        grouped and this returns ``List[Group]`` instead, with ``k`` counting groups.
+        """
+        if not prefetch:
+            raise ValueError("query requires at least one prefetch leaf")
+        body: Dict[str, Any] = {
+            "prefetch": list(prefetch),
+            "mode": mode, "method": method, "alpha": alpha, "rrf_k": rrf_k, "k": k,
+        }
+        if root is not None:
+            body["root"] = root
+        if group_by:
+            body["group_by"] = group_by
+            body["group_size"] = group_size or 1
+        res = self._request("POST", f"/v1/collections/{_seg(collection)}/query", body)
+        if group_by:
+            out = []
+            for g in (res.get("groups") or []):
+                key = decode_value(g["key"]) if isinstance(g.get("key"), dict) else g.get("key")
+                out.append(Group(key=key, hits=[_to_document(d) for d in (g.get("hits") or [])]))
+            return out
+        return [SearchResult(id=r["id"], distance=r.get("distance", 0.0), score=r.get("score", 0.0))
+                for r in (res.get("results") or [])]
+
+    def recommend(
+        self,
+        collection: str,
+        positive: Sequence[int],
+        k: int,
+        *,
+        negative: Optional[Sequence[int]] = None,
+        strategy: str = "",
+        filter: Optional[Dict[str, Any]] = None,
+    ) -> List[SearchResult]:
+        """Recommend by example: score toward the ``positive`` ids and away from the
+        ``negative`` ids, instead of from a raw query vector. ``strategy`` is
+        "average" (default, mean(pos) - mean(neg) → one dense query) or "best_score".
+
+        Carried over the wire by the Query API — there is no ``points/recommend``
+        route — so this works identically on HTTP, gRPC and the binary TCP protocol.
+        """
+        rec: Dict[str, Any] = {"positive": [int(i) for i in positive]}
+        if negative:
+            rec["negative"] = [int(i) for i in negative]
+        if strategy:
+            rec["strategy"] = strategy
+        leaf: Dict[str, Any] = {"recommend": rec, "k": k}
+        if filter:
+            leaf["filter"] = filter
+        return self.query(collection, [leaf], k=k)
+
+    def discover(
+        self,
+        collection: str,
+        context: Sequence[Tuple[int, int]],
+        k: int,
+        *,
+        target: Optional[int] = None,
+        target_vec: Optional[Vector] = None,
+        filter: Optional[Dict[str, Any]] = None,
+    ) -> List[SearchResult]:
+        """Guided "more like this, away from that" search. ``context`` is a list of
+        ``(positive_id, negative_id)`` pairs; ``target`` (a point id) or
+        ``target_vec`` (a raw vector) is an optional anchor to explore around.
+
+        Like ``recommend()``, this rides the Query API and so is available on every
+        transport.
+        """
+        pairs = [{"positive": int(p), "negative": int(n)} for (p, n) in context]
+        disc: Dict[str, Any] = {"context": pairs}
+        if target is not None:
+            disc["target"] = int(target)
+        if target_vec is not None:
+            disc["target_vec"] = list(target_vec)
+        leaf: Dict[str, Any] = {"discover": disc, "k": k}
+        if filter:
+            leaf["filter"] = filter
+        return self.query(collection, [leaf], k=k)
 
     def hybrid_search(
         self,
