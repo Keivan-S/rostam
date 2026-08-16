@@ -7,14 +7,32 @@ fusion-based searches also carry a `score`.
 **Not every mode is reachable from every entry point.** Check here before
 designing around one:
 
-| Mode | Go library | HTTP | Python client |
-|---|---|---|---|
-| [kNN](#k-nearest-neighbors) | ✅ | ✅ | ✅ |
-| [MMR](#mmr-diversified-retrieval) | ✅ | — | — |
-| [Recommend](#recommendation-positivenegative-examples) | ✅ | via [Query API](#unified-query-api-multi-stage-fusion-rerank) | — |
-| [Discover](#discovery-context-pairs) | ✅ | via [Query API](#unified-query-api-multi-stage-fusion-rerank) | — |
-| [Grouping](#grouping-top-k-per-group) | ✅ | ✅ | ✅ |
-| [Scroll](#scroll-filtered-listing-with-pagination) | ✅ | ✅ | ✅ |
+| Mode | Go library | HTTP | gRPC | Binary TCP | Python |
+|---|---|---|---|---|---|
+| [kNN](#k-nearest-neighbors) | `Search` | `points/search` | `Search` | `vector_search` | `search()` |
+| kNN + content | `SearchDocs` | `points/search/docs` | `SearchDocs` | `vector_search_docs` | `search_docs()` |
+| [Grouping](#grouping-top-k-per-group) | `SearchGroups` | `points/search/groups` | `SearchGroups` | `vector_search_groups` | `search_groups()` |
+| [Scroll](#scroll-filtered-listing-with-pagination) | `ScrollDocs` | `points/scroll` | `Scroll` | `vector_scroll` | `scroll()` |
+| [Recommend](#recommendation-positivenegative-examples) | `Recommend` | via Query API | via `VectorQuery` | via `vector_query` | — |
+| [Discover](#discovery-context-pairs) | `Discover` | via Query API | via `VectorQuery` | via `vector_query` | — |
+| [MMR](#mmr-diversified-retrieval) | `SearchMMR` | — | — | — | client-side † |
+
+Two different situations hide behind the gaps, and they are worth telling apart.
+
+**Recommend and Discover are not missing remotely** — they are leaves of the
+[unified Query API](#unified-query-api-multi-stage-fusion-rerank) rather than
+routes of their own. One composable endpoint carries them on all three
+transports, which is why there is no `points/recommend`.
+
+**MMR really is Go-only.** It appears in no transport layer at all, because it
+needs the candidate *vectors* to score pairwise diversity and the search wire
+returns ids and distances, not vectors. Nothing makes that impossible to add —
+it would need an op that returns vectors, or the diversity computed server-side
+— so treat it as a gap rather than a rule.
+
+† Over the wire, MMR is done by fetching candidates with their vectors and
+re-ranking locally. The Python LangChain integration already implements exactly
+that (`max_marginal_relevance_search`), so reach for it before writing your own.
 
 ## k-nearest neighbors
 
