@@ -36,6 +36,8 @@ type ragFlags struct {
 	embedDim     int
 	llmURL       string
 	llmModel     string
+	noHybrid     bool
+	alpha        float64
 }
 
 // runRagCmd implements `rostam-server rag`: an ingest/ask/query CLI over the
@@ -71,8 +73,13 @@ func runRagCmdE(args []string) error {
 	fs.IntVar(&fl.embedDim, "embed-dim", 0, "embedding vector dimension (overrides ROSTAM_EMBED_DIM)")
 	fs.StringVar(&fl.llmURL, "llm-url", "", "LLM chat-completions endpoint URL (overrides ROSTAM_LLM_URL)")
 	fs.StringVar(&fl.llmModel, "llm-model", "", "LLM model id (overrides ROSTAM_LLM_MODEL)")
+	fs.BoolVar(&fl.noHybrid, "no-hybrid", false, "disable dense+BM25 fusion; use pure dense KNN when an embedder is configured")
+	fs.Float64Var(&fl.alpha, "alpha", -1, "weighted-fusion dense weight in [0,1]; unset (<0) uses RRF")
 	if err := fs.Parse(rest); err != nil {
 		return err
+	}
+	if fl.alpha >= 0 && fl.alpha > 1 {
+		return errors.New("rag: -alpha must be in [0,1]")
 	}
 
 	resolveEnv(&fl, os.LookupEnv)
@@ -194,7 +201,7 @@ func runRagQuery(ctx context.Context, r rag.Retriever, emb semcache.Embedder, fl
 		return errors.New("usage: rostam-server rag query [flags] <text>")
 	}
 	query := args[0]
-	hits, err := rag.Retrieve(ctx, r, emb, fl.corpus, query, fl.k, false, -1)
+	hits, err := rag.Retrieve(ctx, r, emb, fl.corpus, query, fl.k, !fl.noHybrid, fl.alpha)
 	if err != nil {
 		return fmt.Errorf("query: %w", err)
 	}
@@ -213,7 +220,7 @@ func runRagAsk(ctx context.Context, r rag.Retriever, emb semcache.Embedder, fl r
 		Model:      fl.llmModel,
 		HTTPClient: &http.Client{Timeout: 5 * time.Minute},
 	}
-	res, err := rag.Ask(ctx, r, emb, llm, fl.corpus, question, fl.k, false, -1)
+	res, err := rag.Ask(ctx, r, emb, llm, fl.corpus, question, fl.k, !fl.noHybrid, fl.alpha)
 	if err != nil {
 		return fmt.Errorf("ask: %w", err)
 	}
