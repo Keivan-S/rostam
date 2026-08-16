@@ -1,3 +1,5 @@
+<img src="docs/assets/logo.svg" alt="" width="64" height="64">
+
 # Rostam
 
 [![CI](https://github.com/rostamlabs/rostam/actions/workflows/test.yml/badge.svg)](https://github.com/rostamlabs/rostam/actions/workflows/test.yml)

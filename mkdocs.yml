@@ -22,6 +22,11 @@ exclude_docs: |
 
 theme:
   name: material
+  # The mark the landing page and the repo use. Material falls back to its own
+  # generic icon when these are unset, which quietly puts a third identity in
+  # front of anyone reading the docs.
+  logo: assets/logo.svg
+  favicon: assets/favicon.svg
   # The landing page self-hosts its faces; the docs load the same files from
   # docs/assets/fonts via rostam.css. Leaving this unset would pull Roboto from
   # Google Fonts and quietly break the shared identity (and add a third-party
