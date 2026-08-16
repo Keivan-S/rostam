@@ -108,9 +108,12 @@ vectors behind.
 
 With an embedder configured, `rag query`/`rag ask` now default to
 **dense+BM25 fusion**: both lanes run, and their hits are combined by
-reciprocal-rank fusion (RRF) into a single ranked list. This is a strict
-upgrade over either lane alone — it catches both exact keyword matches and
-semantically related chunks that don't share vocabulary with the query.
+reciprocal-rank fusion (RRF) into a single ranked list. This typically
+improves recall over either lane alone — it catches both exact keyword
+matches and semantically related chunks that don't share vocabulary with the
+query. (It's a recall improvement, not a guarantee: at a fixed top-`k`,
+fusing can occasionally demote a result that a single lane would have
+surfaced — use `-no-hybrid` if you specifically want the pure-dense ranking.)
 
 - `-no-hybrid` disables fusion and falls back to pure dense kNN (the
   pre-fusion behavior) — useful when you want the embedder's ranking
