@@ -5,6 +5,7 @@ package rag
 import (
 	"context"
 	"fmt"
+	"math"
 
 	"github.com/rostamlabs/rostam/semcache"
 )
@@ -40,6 +41,13 @@ func Retrieve(ctx context.Context, r Retriever, emb semcache.Embedder, corpus, q
 	var o retrieveOptions
 	for _, opt := range opts {
 		opt(&o)
+	}
+	// Validate alpha in the library, not just the CLI: WithHybrid takes any
+	// float64, so a non-CLI caller could pass NaN (which poisons the weighted
+	// fusion scores) or a value > 1 (outside the documented weight range). A
+	// negative alpha is the RRF sentinel and always allowed.
+	if o.hybrid && (math.IsNaN(o.alpha) || o.alpha > 1) {
+		return nil, fmt.Errorf("rag: hybrid alpha must be <= 1 (got %v); use a negative alpha for RRF", o.alpha)
 	}
 	var qv []float32
 	if emb != nil {

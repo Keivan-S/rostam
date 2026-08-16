@@ -7,7 +7,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"math"
 	"net/http"
 	"os"
 	"strconv"
@@ -79,12 +78,9 @@ func runRagCmdE(args []string) error {
 	if err := fs.Parse(rest); err != nil {
 		return err
 	}
-	// NaN passes both `> 1` and the `< 0` RRF check (every NaN comparison is
-	// false), so it would slip into the weighted branch and poison the fused
-	// scores; reject it explicitly. A negative alpha is the RRF sentinel.
-	if math.IsNaN(fl.alpha) || fl.alpha > 1 {
-		return errors.New("rag: -alpha must be in [0,1]")
-	}
+	// Alpha validation lives in the rag package (Retrieve/Ask), so it covers
+	// both the CLI and any library caller of WithHybrid — no need to duplicate
+	// the NaN/>1 check here.
 
 	resolveEnv(&fl, os.LookupEnv)
 	embedKey, _ := os.LookupEnv("ROSTAM_EMBED_KEY")

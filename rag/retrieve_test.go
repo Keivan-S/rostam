@@ -2,10 +2,28 @@ package rag
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	"github.com/rostamlabs/rostam/semcache"
 )
+
+func TestRetrieveRejectsInvalidHybridAlpha(t *testing.T) {
+	rr := &recordingRetriever{}
+	ctx := context.Background()
+	// WithHybrid takes any float64; Retrieve must reject NaN and >1 (a library
+	// caller bypasses the CLI flag validation). Negative alpha = RRF sentinel.
+	for _, bad := range []float64{2, math.NaN()} {
+		if _, err := Retrieve(ctx, rr, nil, "docs", "q", 5, WithHybrid(bad)); err == nil {
+			t.Errorf("Retrieve WithHybrid(%v) should error", bad)
+		}
+	}
+	for _, ok := range []float64{-1, 0, 0.5, 1} {
+		if _, err := Retrieve(ctx, rr, nil, "docs", "q", 5, WithHybrid(ok)); err != nil {
+			t.Errorf("Retrieve WithHybrid(%v) should not error on alpha, got %v", ok, err)
+		}
+	}
+}
 
 func TestRetrieveBM25(t *testing.T) {
 	dir := t.TempDir()
