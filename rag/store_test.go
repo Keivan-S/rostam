@@ -110,7 +110,11 @@ func TestHTTPRetrieverImplementsInterface(t *testing.T) {
 	var _ Retriever = (*HTTPRetriever)(nil) // compile-time interface check
 }
 
-func TestEmbeddedHybridSearchReturnsContentAndFuses(t *testing.T) {
+// TestEmbeddedHybridFusionViaRetrieve mirrors the old direct HybridSearch
+// test but drives fusion through the public rag.Retrieve entry point now
+// that HybridSearch no longer exists on Retriever — fusion moved into
+// Retrieve (rag/retrieve.go), which fans out to two Search calls per lane.
+func TestEmbeddedHybridFusionViaRetrieve(t *testing.T) {
 	dir := t.TempDir()
 	r, err := NewEmbeddedRetriever(dir)
 	if err != nil {
@@ -128,8 +132,7 @@ func TestEmbeddedHybridSearchReturnsContentAndFuses(t *testing.T) {
 		{ID: 1, Content: texts[0], Vector: vecs[0], Source: "a.md", Index: 0},
 		{ID: 2, Content: texts[1], Vector: vecs[1], Source: "b.md", Index: 0},
 	})
-	qv, _ := emb.Embed(ctx, []string{"epoll transport"})
-	hits, err := r.HybridSearch(ctx, "docs", "epoll transport", qv[0], 5, -1)
+	hits, err := Retrieve(ctx, r, emb, "docs", "epoll transport", 5, WithHybrid(-1))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,11 +146,12 @@ func TestHTTPRetrieverStillImplementsRetriever(t *testing.T) {
 	var _ Retriever = (*EmbeddedRetriever)(nil)
 }
 
-// TestHTTPRetrieverHybridSearchRoundtrip mirrors
+// TestHTTPRetrieverHybridFusionViaRetrieve mirrors
 // TestHTTPRetrieverRoundtripBM25's in-process server harness but exercises
-// HybridSearch end to end (dense + BM25 lanes fused) over the wire, proving
-// behavioral parity with TestEmbeddedHybridSearchReturnsContentAndFuses.
-func TestHTTPRetrieverHybridSearchRoundtrip(t *testing.T) {
+// fusion end to end (dense + BM25 lanes) over the wire via rag.Retrieve now
+// that HybridSearch no longer exists on Retriever, proving behavioral parity
+// with TestEmbeddedHybridFusionViaRetrieve.
+func TestHTTPRetrieverHybridFusionViaRetrieve(t *testing.T) {
 	srv, addr := startRemoteServer(t)
 	defer func() { _ = srv.Close() }()
 
@@ -170,8 +174,7 @@ func TestHTTPRetrieverHybridSearchRoundtrip(t *testing.T) {
 	if err := r.Upsert(ctx, "docs", chunks); err != nil {
 		t.Fatal(err)
 	}
-	qv, _ := emb.Embed(ctx, []string{"epoll transport"})
-	hits, err := r.HybridSearch(ctx, "docs", "epoll transport", qv[0], 5, -1)
+	hits, err := Retrieve(ctx, r, emb, "docs", "epoll transport", 5, WithHybrid(-1))
 	if err != nil {
 		t.Fatal(err)
 	}

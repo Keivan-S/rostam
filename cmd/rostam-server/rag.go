@@ -170,6 +170,15 @@ func buildEmbedder(fl ragFlags, embedKey string) semcache.Embedder {
 	return oe
 }
 
+// ragOptions builds the []rag.Option for Retrieve/Ask from the parsed CLI
+// flags: hybrid fusion is on by default, unless -no-hybrid was passed.
+func ragOptions(fl ragFlags) []rag.Option {
+	if fl.noHybrid {
+		return nil
+	}
+	return []rag.Option{rag.WithHybrid(fl.alpha)}
+}
+
 func embedderDim(emb semcache.Embedder) int {
 	if emb == nil {
 		return 0
@@ -205,7 +214,7 @@ func runRagQuery(ctx context.Context, r rag.Retriever, emb semcache.Embedder, fl
 		return errors.New("usage: rostam-server rag query [flags] <text>")
 	}
 	query := args[0]
-	hits, err := rag.Retrieve(ctx, r, emb, fl.corpus, query, fl.k, !fl.noHybrid, fl.alpha)
+	hits, err := rag.Retrieve(ctx, r, emb, fl.corpus, query, fl.k, ragOptions(fl)...)
 	if err != nil {
 		return fmt.Errorf("query: %w", err)
 	}
@@ -224,7 +233,7 @@ func runRagAsk(ctx context.Context, r rag.Retriever, emb semcache.Embedder, fl r
 		Model:      fl.llmModel,
 		HTTPClient: &http.Client{Timeout: 5 * time.Minute},
 	}
-	res, err := rag.Ask(ctx, r, emb, llm, fl.corpus, question, fl.k, !fl.noHybrid, fl.alpha)
+	res, err := rag.Ask(ctx, r, emb, llm, fl.corpus, question, fl.k, ragOptions(fl)...)
 	if err != nil {
 		return fmt.Errorf("ask: %w", err)
 	}

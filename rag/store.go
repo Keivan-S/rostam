@@ -37,11 +37,6 @@ type Retriever interface {
 	Upsert(ctx context.Context, corpus string, chunks []StoredChunk) error
 	// Search runs a vector search when queryVec is non-nil, else BM25 full text.
 	Search(ctx context.Context, corpus, queryText string, queryVec []float32, k int) ([]Hit, error)
-	// HybridSearch fuses dense (queryVec) and BM25 (queryText) lanes into the
-	// top-k hits. alpha < 0 => RRF; 0..1 => weighted. Callers pass a non-nil
-	// queryVec (an embedder is configured); with a nil queryVec this degrades
-	// to BM25-only (dense lane empty).
-	HybridSearch(ctx context.Context, corpus, queryText string, queryVec []float32, k int, alpha float64) ([]Hit, error)
 	DeleteBySource(ctx context.Context, corpus, source string) (int, error)
 	Close() error
 }
@@ -126,26 +121,6 @@ func (e *EmbeddedRetriever) Search(_ context.Context, corpus, queryText string, 
 		return nil, err
 	}
 	return docsToHits(docs), nil
-}
-
-func (e *EmbeddedRetriever) HybridSearch(_ context.Context, corpus, queryText string, queryVec []float32, k int, alpha float64) ([]Hit, error) {
-	poolK := k
-	if poolK < 50 {
-		poolK = 50
-	}
-	var dense []Hit
-	if len(queryVec) > 0 {
-		d, err := e.store.SearchDocs(corpus, queryVec, poolK, vector.Filter{})
-		if err != nil {
-			return nil, err
-		}
-		dense = docsToHits(d)
-	}
-	tdocs, err := e.store.SearchText(corpus, queryText, poolK, vector.Filter{})
-	if err != nil {
-		return nil, err
-	}
-	return fuse(dense, docsToHits(tdocs), k, alpha), nil
 }
 
 func (e *EmbeddedRetriever) DeleteBySource(_ context.Context, corpus, source string) (int, error) {
@@ -250,26 +225,6 @@ func (h *HTTPRetriever) Search(ctx context.Context, corpus, queryText string, qu
 		return nil, err
 	}
 	return docsToHits(docs), nil
-}
-
-func (h *HTTPRetriever) HybridSearch(ctx context.Context, corpus, queryText string, queryVec []float32, k int, alpha float64) ([]Hit, error) {
-	poolK := k
-	if poolK < 50 {
-		poolK = 50
-	}
-	var dense []Hit
-	if len(queryVec) > 0 {
-		d, _, err := h.store.VectorSearchDocs(ctx, corpus, queryVec, poolK, rostam.VectorSearchOpts{})
-		if err != nil {
-			return nil, err
-		}
-		dense = docsToHits(d)
-	}
-	tdocs, _, err := h.store.VectorSearchText(ctx, corpus, queryText, poolK, rostam.VectorSearchOpts{})
-	if err != nil {
-		return nil, err
-	}
-	return fuse(dense, docsToHits(tdocs), k, alpha), nil
 }
 
 func (h *HTTPRetriever) DeleteBySource(ctx context.Context, corpus, source string) (int, error) {

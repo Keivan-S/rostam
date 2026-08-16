@@ -50,7 +50,7 @@ func TestAskCallsLLMWithContext(t *testing.T) {
 	_ = r.EnsureCorpus(ctx, "docs", 0)
 	_ = r.Upsert(ctx, "docs", []StoredChunk{{ID: 1, Content: "epoll loop count equals gomaxprocs", Source: "a.md", Index: 0}})
 
-	res, err := Ask(ctx, r, nil, LLMConfig{URL: srv.URL, Model: "test"}, "docs", "how many loops?", 5, false, -1)
+	res, err := Ask(ctx, r, nil, LLMConfig{URL: srv.URL, Model: "test"}, "docs", "how many loops?", 5)
 	if err != nil {
 		t.Fatal(err)
 	}
