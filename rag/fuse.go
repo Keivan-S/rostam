@@ -13,7 +13,8 @@ func fuseKey(h Hit) string { return h.Source + "#" + strconv.Itoa(h.Index) }
 // hits. alpha < 0 selects RRF (equal-weight 1/(60+rank+1) per lane); 0 <=
 // alpha <= 1 selects a weighted rank-blend (dense weight = alpha). Chunk
 // identity for dedup is source#index. Output order is deterministic: ties
-// break by first-seen order across dense then bm25.
+// break by first-seen order across dense then bm25. Each returned Hit's Score
+// is set to its fusion score (RRF or weighted), NOT the original lane score.
 func fuse(dense, bm25 []Hit, k int, alpha float64) []Hit {
 	type acc struct {
 		hit   Hit

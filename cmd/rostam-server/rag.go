@@ -78,7 +78,7 @@ func runRagCmdE(args []string) error {
 	if err := fs.Parse(rest); err != nil {
 		return err
 	}
-	if fl.alpha >= 0 && fl.alpha > 1 {
+	if fl.alpha > 1 {
 		return errors.New("rag: -alpha must be in [0,1]")
 	}
 
