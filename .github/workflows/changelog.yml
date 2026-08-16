@@ -1,0 +1,89 @@
+name: changelog
+
+# A user-visible change that never reaches docs/changelog.md is invisible to
+# everyone who was not in the PR. That has now happened twice: the MCP server
+# and the LLM proxy shipped unlisted and were caught only while cutting v0.2.0,
+# and the RAG CLI, hybrid fusion and the MCP doctrine repeated it before v0.3.0
+# — by which point README.md was telling people to run a subcommand the
+# released binary did not have.
+#
+# Both times the fix was a person noticing. This makes it the pipeline's job.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+jobs:
+  entry:
+    name: user-visible change has a changelog entry
+    runs-on: ubuntu-latest
+    # An escape hatch that is deliberately explicit: a PR that genuinely has no
+    # user-visible surface (a refactor, a test-only change) gets the label and
+    # says so in the open, rather than the check being silently weakened for
+    # everyone.
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-changelog') }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          # Paths whose contents a user can observe: the CLI surface, the
+          # documented subcommands, the wire, and the client libraries.
+          #
+          # README.md is deliberately NOT here. It gets touched for typos,
+          # badges and logos, and firing on those trains people to reach for
+          # the label — which would hollow out the check. Nothing is lost:
+          # a feature documented in the README always ships code alongside it,
+          # and the code paths below catch that.
+          WATCHED='^(cmd/|mcp/|rag/|llmproxy/|httpapi/|server/|clients/)'
+
+          changed=$(git diff --name-only "$BASE".."$HEAD")
+
+          # A PR that only touches tests is not a user-visible change, so strip
+          # test files before deciding. Without this the guard fires on
+          # test-only follow-ups and trains people to reach for the label.
+          user_visible=$(printf '%s\n' "$changed" \
+            | grep -E "$WATCHED" \
+            | grep -vE '(_test\.go$|/testdata/|^clients/python/tests/)' \
+            || true)
+
+          if [ -z "$user_visible" ]; then
+            echo "No user-visible paths touched — nothing to require."
+            exit 0
+          fi
+
+          echo "User-visible paths in this PR:"
+          printf %s\\n "$user_visible" | sed "s/^/  /"
+
+          if printf '%s\n' "$changed" | grep -qx 'docs/changelog.md'; then
+            echo
+            echo "docs/changelog.md is updated. OK."
+            exit 0
+          fi
+
+          cat >&2 <<'EOF'
+
+          This PR changes something a user can observe, but does not touch
+          docs/changelog.md.
+
+          Add an entry under the top heading describing the change from the
+          reader's side — what they can now do, and anything that will bite
+          them. If the change genuinely has no user-visible surface, apply the
+          `no-changelog` label to say so explicitly.
+
+          Why this check exists: the MCP server and the LLM proxy both shipped
+          with no changelog entry and were caught only while cutting a release.
+          The RAG CLI then did it again, and README.md spent that whole window
+          telling people to run a subcommand the released binary did not have.
+          EOF
+          exit 1
