@@ -34,11 +34,23 @@ func TestInitializeHandshake(t *testing.T) {
 		t.Fatalf("bad initialize result: %s", res)
 	}
 	// The instructions string is how the server teaches an agent WHEN to use
-	// the memory tools; clients inject it into the model's context. Assert it's
-	// present and carries the load-bearing doctrine, not just non-empty.
-	for _, want := range []string{"recall", "remember", "namespace", "secret"} {
-		if !strings.Contains(strings.ToLower(init.Instructions), want) {
-			t.Errorf("initialize instructions missing %q; got %q", want, init.Instructions)
+	// the memory tools; clients inject it into the model's context. Assert each
+	// load-bearing doctrine rule is present via a distinctive marker (not just
+	// non-empty, and not the full wording) so a regression that drops any single
+	// rule fails here rather than silently shipping.
+	got := strings.ToLower(init.Instructions)
+	for rule, marker := range map[string]string{
+		"recall-at-task-start":    "recall",
+		"before-re-reading":       "re-reading",
+		"remember-durable-facts":  "remember",
+		"one-self-contained-fact": "self-contained",
+		"namespace-per-project":   "namespace",
+		"never-store-secrets":     "secret",
+		"orient-list-namespaces":  "list_namespaces",
+		"orient-list-memories":    "list_memories",
+	} {
+		if !strings.Contains(got, marker) {
+			t.Errorf("initialize instructions missing the %s rule (marker %q); got %q", rule, marker, init.Instructions)
 		}
 	}
 	// The version used to be a literal "0.1.0" written once and never touched,
@@ -73,13 +85,18 @@ func TestMemoryToolDescriptionsCarryUsageNudges(t *testing.T) {
 	for _, tl := range out.Tools {
 		desc[tl.Name] = strings.ToLower(tl.Description)
 	}
-	// recall should nudge "call at task start / before re-reading"; remember
-	// should nudge "one self-contained fact / project namespace / no secrets".
-	if d, ok := desc["recall"]; !ok || !strings.Contains(d, "start") || !strings.Contains(d, "namespace") {
-		t.Errorf("recall description missing usage nudge: %q", desc["recall"])
+	// Each nudge must survive independently of the exact wording: recall nudges
+	// "at task start / before re-reading / project namespace"; remember nudges
+	// "one self-contained fact / not transient / project namespace / no secrets".
+	for _, marker := range []string{"start", "re-reading", "namespace"} {
+		if d := desc["recall"]; !strings.Contains(d, marker) {
+			t.Errorf("recall description missing %q nudge: %q", marker, d)
+		}
 	}
-	if d, ok := desc["remember"]; !ok || !strings.Contains(d, "namespace") || !strings.Contains(d, "secret") {
-		t.Errorf("remember description missing usage nudge: %q", desc["remember"])
+	for _, marker := range []string{"self-contained", "transient", "namespace", "secret"} {
+		if d := desc["remember"]; !strings.Contains(d, marker) {
+			t.Errorf("remember description missing %q nudge: %q", marker, d)
+		}
 	}
 }
 
