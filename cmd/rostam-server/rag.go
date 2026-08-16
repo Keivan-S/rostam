@@ -194,7 +194,7 @@ func runRagQuery(ctx context.Context, r rag.Retriever, emb semcache.Embedder, fl
 		return errors.New("usage: rostam-server rag query [flags] <text>")
 	}
 	query := args[0]
-	hits, err := rag.Retrieve(ctx, r, emb, fl.corpus, query, fl.k)
+	hits, err := rag.Retrieve(ctx, r, emb, fl.corpus, query, fl.k, false, -1)
 	if err != nil {
 		return fmt.Errorf("query: %w", err)
 	}
@@ -213,7 +213,7 @@ func runRagAsk(ctx context.Context, r rag.Retriever, emb semcache.Embedder, fl r
 		Model:      fl.llmModel,
 		HTTPClient: &http.Client{Timeout: 5 * time.Minute},
 	}
-	res, err := rag.Ask(ctx, r, emb, llm, fl.corpus, question, fl.k)
+	res, err := rag.Ask(ctx, r, emb, llm, fl.corpus, question, fl.k, false, -1)
 	if err != nil {
 		return fmt.Errorf("ask: %w", err)
 	}

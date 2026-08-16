@@ -46,11 +46,11 @@ type AskResult struct {
 }
 
 // Ask retrieves then synthesizes a cited answer.
-func Ask(ctx context.Context, r Retriever, emb semcache.Embedder, llm LLMConfig, corpus, question string, k int) (AskResult, error) {
+func Ask(ctx context.Context, r Retriever, emb semcache.Embedder, llm LLMConfig, corpus, question string, k int, hybrid bool, alpha float64) (AskResult, error) {
 	if llm.URL == "" || llm.Model == "" {
 		return AskResult{}, fmt.Errorf("rag: ask requires an LLM URL and model (set ROSTAM_LLM_URL/ROSTAM_LLM_MODEL); use `rag query` for retrieval only")
 	}
-	hits, err := Retrieve(ctx, r, emb, corpus, question, k)
+	hits, err := Retrieve(ctx, r, emb, corpus, question, k, hybrid, alpha)
 	if err != nil {
 		return AskResult{}, err
 	}

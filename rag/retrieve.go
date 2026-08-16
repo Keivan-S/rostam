@@ -9,7 +9,7 @@ import (
 	"github.com/rostamlabs/rostam/semcache"
 )
 
-func Retrieve(ctx context.Context, r Retriever, emb semcache.Embedder, corpus, query string, k int) ([]Hit, error) {
+func Retrieve(ctx context.Context, r Retriever, emb semcache.Embedder, corpus, query string, k int, hybrid bool, alpha float64) ([]Hit, error) {
 	if k <= 0 {
 		k = 5
 	}
@@ -23,6 +23,9 @@ func Retrieve(ctx context.Context, r Retriever, emb semcache.Embedder, corpus, q
 			return nil, fmt.Errorf("rag: embedder returned %d vectors for 1 query", len(vecs))
 		}
 		qv = vecs[0]
+	}
+	if emb != nil && hybrid {
+		return r.HybridSearch(ctx, corpus, query, qv, k, alpha)
 	}
 	return r.Search(ctx, corpus, query, qv, k)
 }
