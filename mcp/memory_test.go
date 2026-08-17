@@ -231,6 +231,26 @@ func TestRecallAndListSurfaceKeyAndFreshness(t *testing.T) {
 	assertKeyAndFreshness(t, "recall (BM25)", rec.Hits[0], "note1")
 }
 
+// TestRecallUnkeyedCarriesFreshness locks the contract that created/updated are
+// surfaced on EVERY hit, keyed or not — only `key` is omitted for an unkeyed
+// remember. (The docs previously claimed created/updated were also omitted for
+// unkeyed hits, which was wrong: both fields are always set at write time.)
+func TestRecallUnkeyedCarriesFreshness(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t)})
+	c.initialize()
+	c.callTool("remember", map[string]any{"content": "raft shards ~= cores", "namespace": "proj"}, nil, false)
+
+	var rec struct {
+		Hits []memoryHitOut `json:"hits"`
+	}
+	c.callTool("recall", map[string]any{"query": "raft shards", "namespace": "proj"}, &rec, false)
+	if len(rec.Hits) != 1 {
+		t.Fatalf("recall must return 1 hit: %+v", rec.Hits)
+	}
+	// wantKey "" — an unkeyed hit omits key but must still carry created/updated.
+	assertKeyAndFreshness(t, "recall (unkeyed)", rec.Hits[0], "")
+}
+
 // TestRecallHybridSurfacesKeyAndFreshness is
 // TestRecallAndListSurfaceKeyAndFreshness's counterpart for the hybrid
 // (dense+BM25 fusion) recall path: recallHybrid goes through the shared

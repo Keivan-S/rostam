@@ -226,9 +226,18 @@ func memoryID(ns, content string) uint64 {
 
 // memoryKeyID derives a memory's point id from (namespace, key) so
 // re-remembering the same key upserts the same point regardless of content.
-// Salted differently from memoryID (a distinct separator string, not just a
-// different field of the same namespaced hash) so a key can never collide
-// with a content hash in the same namespace.
+//
+// The preimage inserts a "__key\x00" marker after the namespace separator, so
+// in practice a keyed id and a content id never coincide. This is NOT a hard
+// domain separation: memoryID(ns, content) hashes ns+"\x00"+content, so a
+// crafted content of exactly "__key\x00"+key would reproduce this preimage and
+// collide. That requires an embedded NUL byte in content, the same namespace,
+// and the same (single-tenant) agent's own store — no trust boundary is
+// crossed, and normal facts never carry a "__key\x00" prefix. memoryID is left
+// unchanged deliberately: altering it would change every existing unkeyed
+// memory's id (breaking the store) and violate the no-key backward-compat
+// guarantee. If true domain separation is ever needed, tag BOTH functions with
+// a leading byte before the namespace — which is a store-migrating change.
 func memoryKeyID(ns, key string) uint64 {
 	return xxhash.Sum64String(ns+"\x00__key\x00"+key) & jsSafeIDMask
 }
