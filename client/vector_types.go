@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 package client
 
-import "errors"
+import (
+	"errors"
+	"strings"
+)
 
 // Consistency selects the read-consistency level for reads/searches. It is
 // passed through as the server's read_consistency byte; 0 is the default
@@ -19,3 +22,10 @@ var (
 	ErrCollectionExists   = errors.New("client: collection already exists")
 	ErrCollectionNotFound = errors.New("client: collection not found")
 )
+
+// isVersionConflict reports whether err's text looks like the server's
+// CAS-conflict error (expected_version mismatch).
+func isVersionConflict(err error) bool {
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "version") && (strings.Contains(s, "conflict") || strings.Contains(s, "mismatch"))
+}
