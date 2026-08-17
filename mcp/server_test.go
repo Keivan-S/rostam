@@ -48,6 +48,7 @@ func TestInitializeHandshake(t *testing.T) {
 		"never-store-secrets":     "secret",
 		"orient-list-namespaces":  "list_namespaces",
 		"orient-list-memories":    "list_memories",
+		"keyed-live-state":        "in-flight",
 	} {
 		if !strings.Contains(got, marker) {
 			t.Errorf("initialize instructions missing the %s rule (marker %q); got %q", rule, marker, init.Instructions)
@@ -87,13 +88,14 @@ func TestMemoryToolDescriptionsCarryUsageNudges(t *testing.T) {
 	}
 	// Each nudge must survive independently of the exact wording: recall nudges
 	// "at task start / before re-reading / project namespace"; remember nudges
-	// "one self-contained fact / not transient / project namespace / no secrets".
+	// "one self-contained fact / not transient / project namespace / no secrets /
+	// keyed live state replaces the prior entry".
 	for _, marker := range []string{"start", "re-reading", "namespace"} {
 		if d := desc["recall"]; !strings.Contains(d, marker) {
 			t.Errorf("recall description missing %q nudge: %q", marker, d)
 		}
 	}
-	for _, marker := range []string{"self-contained", "transient", "namespace", "secret"} {
+	for _, marker := range []string{"self-contained", "transient", "namespace", "secret", "key", "replace"} {
 		if d := desc["remember"]; !strings.Contains(d, marker) {
 			t.Errorf("remember description missing %q nudge: %q", marker, d)
 		}

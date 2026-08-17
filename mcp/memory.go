@@ -23,6 +23,8 @@ const (
 	memCollection = "mcp_memory"     // the vector collection backing remember/recall
 	nsField       = "__ns"           // metadata field: the memory's namespace
 	createdField  = "__created_unix" // metadata field: unix-seconds creation time
+	keyField      = "__key"          // metadata field: caller's stable key (keyed memories only)
+	updatedField  = "__updated_unix" // metadata field: unix-seconds last-write time
 	defaultNS     = "default"        // namespace used when the caller omits one
 	kvEmbedder    = "__mcp/embedder" // KV key: the embedIdentity this store was bootstrapped with
 )
@@ -222,6 +224,24 @@ func memoryID(ns, content string) uint64 {
 	return xxhash.Sum64String(ns+"\x00"+content) & jsSafeIDMask
 }
 
+// memoryKeyID derives a memory's point id from (namespace, key) so
+// re-remembering the same key upserts the same point regardless of content.
+//
+// The preimage inserts a "__key\x00" marker after the namespace separator, so
+// in practice a keyed id and a content id never coincide. This is NOT a hard
+// domain separation: memoryID(ns, content) hashes ns+"\x00"+content, so a
+// crafted content of exactly "__key\x00"+key would reproduce this preimage and
+// collide. That requires an embedded NUL byte in content, the same namespace,
+// and the same (single-tenant) agent's own store — no trust boundary is
+// crossed, and normal facts never carry a "__key\x00" prefix. memoryID is left
+// unchanged deliberately: altering it would change every existing unkeyed
+// memory's id (breaking the store) and violate the no-key backward-compat
+// guarantee. If true domain separation is ever needed, tag BOTH functions with
+// a leading byte before the namespace — which is a store-migrating change.
+func memoryKeyID(ns, key string) uint64 {
+	return xxhash.Sum64String(ns+"\x00__key\x00"+key) & jsSafeIDMask
+}
+
 // memoryHit is one recalled (or listed, Task 5) memory: its id, content,
 // relevance score, and user metadata with the reserved fields stripped. No
 // Distance field: it's meaningless for BM25-only recall and for a scroll
@@ -232,6 +252,9 @@ type memoryHit struct {
 	ID       uint64         `json:"id"`
 	Content  string         `json:"content"`
 	Score    float32        `json:"score"`
+	Key      string         `json:"key,omitempty"`
+	Created  int64          `json:"created,omitempty"`
+	Updated  int64          `json:"updated,omitempty"`
 	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
@@ -240,13 +263,14 @@ type memoryHit struct {
 func (s *Server) registerMemoryTools() {
 	s.register(toolDef{
 		Name:        "remember",
-		Description: `Store a fact in persistent memory for later recall. Store ONE self-contained, durable fact per call (a decision, gotcha, command, or finding), phrased so it stands alone when recalled later — not transient chatter, and never secrets. Pass namespace = the project directory name so facts stay project-scoped.`,
+		Description: `Store a fact in persistent memory for later recall. Store ONE self-contained, durable fact per call (a decision, gotcha, command, or finding), phrased so it stands alone when recalled later — not transient chatter, and never secrets. Pass namespace = the project directory name so facts stay project-scoped. Pass a stable key for live/in-flight state (e.g. a PR's status) so re-remembering the same key REPLACES the prior entry instead of piling up snapshots; omit key for durable one-off facts.`,
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"content":   map[string]any{"type": "string", "description": "the fact to store"},
 				"namespace": map[string]any{"type": "string", "description": `isolation namespace (default "default")`},
 				"metadata":  map[string]any{"type": "object", "description": "optional extra metadata to attach"},
+				"key":       map[string]any{"type": "string", "description": "optional stable key; re-remembering the same key REPLACES the prior content (one canonical entry). Use for live/in-flight state; omit for durable one-off facts."},
 			},
 			"required": []any{"content"},
 		},
@@ -269,7 +293,7 @@ func (s *Server) registerMemoryTools() {
 	})
 	s.register(toolDef{
 		Name:        "forget",
-		Description: `Delete stored memories by id. Returns {"deleted":[...],"missing":[...],"errors":[...]}; a per-id delete failure does not abort the rest of the batch.`,
+		Description: `Delete stored memories by id and/or by their stable key (namespace + key resolves to the memory a keyed remember landed on). ids and keys may be combined in one call. Returns {"deleted":[...],"missing":[...],"errors":[...]}; a per-id delete failure does not abort the rest of the batch.`,
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -278,8 +302,13 @@ func (s *Server) registerMemoryTools() {
 					"items":       map[string]any{"type": "integer"},
 					"description": "ids of the memories to delete",
 				},
+				"namespace": map[string]any{"type": "string", "description": `namespace the keys below belong to (default "default")`},
+				"keys": map[string]any{
+					"type":        "array",
+					"items":       map[string]any{"type": "string"},
+					"description": "stable keys of keyed memories to delete, resolved within namespace",
+				},
 			},
-			"required": []any{"ids"},
 		},
 		Handler: s.handleForget,
 	})
@@ -312,6 +341,7 @@ type rememberArgs struct {
 	Content   string                     `json:"content"`
 	Namespace string                     `json:"namespace"`
 	Metadata  map[string]json.RawMessage `json:"metadata"`
+	Key       string                     `json:"key"`
 }
 
 func (s *Server) handleRemember(ctx context.Context, raw json.RawMessage) (any, error) {
@@ -326,7 +356,7 @@ func (s *Server) handleRemember(ctx context.Context, raw json.RawMessage) (any, 
 	if ns == "" {
 		ns = defaultNS
 	}
-	for _, reserved := range [...]string{nsField, createdField, "$content"} {
+	for _, reserved := range [...]string{nsField, createdField, keyField, updatedField, "$content"} {
 		if _, ok := args.Metadata[reserved]; ok {
 			return nil, fmt.Errorf("mcp: remember: metadata key %q is reserved", reserved)
 		}
@@ -343,8 +373,33 @@ func (s *Server) handleRemember(ctx context.Context, raw json.RawMessage) (any, 
 	if md == nil {
 		md = make(rostam.VectorMetadata, 2)
 	}
+	now := time.Now().Unix()
 	md[nsField] = vector.NewString(ns)
-	md[createdField] = vector.NewInt(time.Now().Unix())
+	md[updatedField] = vector.NewInt(now)
+
+	// A keyed remember always lands on the same point (memoryKeyID ignores
+	// content), so a re-remember under the same key is an update to one
+	// canonical memory, not a new fact: its __created_unix should keep
+	// naming when that memory first came into being, not when it was last
+	// touched. The lookup is best-effort — a fresh key has no prior point,
+	// and that's not an error, just "created now".
+	var id uint64
+	if args.Key != "" {
+		id = memoryKeyID(ns, args.Key)
+		md[keyField] = vector.NewString(args.Key)
+		created := now
+		if found, _, existing, _, _, err := s.store.VectorGet(ctx, memCollection, id, false, true); err != nil {
+			return nil, fmt.Errorf("mcp: remember: checking existing keyed memory: %w", err)
+		} else if found {
+			if v, ok := existing[createdField]; ok && v.Kind == vector.ValueInt {
+				created = v.Int
+			}
+		}
+		md[createdField] = vector.NewInt(created)
+	} else {
+		id = memoryID(ns, args.Content)
+		md[createdField] = vector.NewInt(now)
+	}
 
 	vecs, err := s.emb.Embed(ctx, []string{args.Content})
 	if err != nil {
@@ -355,11 +410,14 @@ func (s *Server) handleRemember(ctx context.Context, raw json.RawMessage) (any, 
 		return nil, fmt.Errorf("mcp: embed content: %w", err)
 	}
 
-	id := memoryID(ns, args.Content)
 	if err := s.store.VectorUpsert(ctx, memCollection, id, vec, args.Content, rostam.VectorInsertOpts{Metadata: md}); err != nil {
 		return nil, fmt.Errorf("mcp: remember: %w", err)
 	}
-	return map[string]any{"id": id, "namespace": ns}, nil
+	result := map[string]any{"id": id, "namespace": ns}
+	if args.Key != "" {
+		result["key"] = args.Key
+	}
+	return result, nil
 }
 
 // recallArgs is the recall tool's decoded input.
@@ -419,7 +477,7 @@ func (s *Server) recallBM25(ctx context.Context, query string, k int, f rostam.V
 	}
 	hits := make([]memoryHit, len(docs))
 	for i, d := range docs {
-		hits[i] = memoryHit{ID: d.ID, Content: d.Content, Score: d.Score, Metadata: metadataToJSON(stripReservedMetadata(d.Metadata))}
+		hits[i] = toMemoryHit(d.ID, d.Content, d.Score, d.Metadata)
 	}
 	return map[string]any{"hits": hits}, nil
 }
@@ -445,23 +503,27 @@ func (s *Server) recallHybrid(ctx context.Context, query string, k int, f rostam
 	}
 	hits := make([]memoryHit, len(docs))
 	for i, d := range docs {
-		delete(d.Metadata, nsField)
-		delete(d.Metadata, createdField)
-		hits[i] = memoryHit{ID: d.ID, Content: d.Content, Score: d.Score, Metadata: d.Metadata}
+		hits[i] = toMemoryHitJSON(d.ID, d.Content, d.Score, d.Metadata)
 	}
 	return map[string]any{"hits": hits}, nil
 }
 
+// reservedMetadataFields lists every metadata field the memory subsystem
+// owns for its own bookkeeping. Callers of remember/recall never see these
+// directly; toMemoryHit/toMemoryHitJSON strip them from returned metadata
+// after lifting key/created/updated into memoryHit's typed columns.
+var reservedMetadataFields = [...]string{nsField, createdField, keyField, updatedField}
+
 // stripReservedMetadata removes the memory subsystem's own bookkeeping
-// fields (namespace, creation time) before metadata is handed back to a
-// tool caller. $content is stripped separately by metadataToJSON.
+// fields (namespace, key, creation/update time) before metadata is handed
+// back to a tool caller. $content is stripped separately by metadataToJSON.
 func stripReservedMetadata(md rostam.VectorMetadata) rostam.VectorMetadata {
 	if len(md) == 0 {
 		return md
 	}
 	out := make(rostam.VectorMetadata, len(md))
 	for k, v := range md {
-		if k == nsField || k == createdField {
+		if isReservedField(k) {
 			continue
 		}
 		out[k] = v
@@ -469,15 +531,74 @@ func stripReservedMetadata(md rostam.VectorMetadata) rostam.VectorMetadata {
 	return out
 }
 
-// forgetArgs is the forget tool's decoded input.
-type forgetArgs struct {
-	IDs []uint64 `json:"ids"`
+func isReservedField(k string) bool {
+	for _, r := range reservedMetadataFields {
+		if k == r {
+			return true
+		}
+	}
+	return false
 }
 
-// handleForget deletes memories by id. Ids not found in the collection are
-// reported back as "missing" rather than erroring, so a caller can forget a
-// batch without first checking which ids still exist; per-id failures land in
-// "errors" for the same reason (see forgetResult).
+// toMemoryHit builds a memoryHit from a raw doc, lifting the reserved key /
+// created / updated fields into typed columns and stripping ALL reserved
+// fields (__ns, __created_unix, __updated_unix, __key) from the returned
+// metadata. Used by recallBM25 and handleListMemories, whose docs carry
+// metadata as rostam.VectorMetadata straight from the engine.
+func toMemoryHit(id uint64, content string, score float32, md rostam.VectorMetadata) memoryHit {
+	hit := memoryHit{ID: id, Content: content, Score: score}
+	if v, ok := md[keyField]; ok && v.Kind == vector.ValueString {
+		hit.Key = v.Str
+	}
+	if v, ok := md[createdField]; ok && v.Kind == vector.ValueInt {
+		hit.Created = v.Int
+	}
+	if v, ok := md[updatedField]; ok && v.Kind == vector.ValueInt {
+		hit.Updated = v.Int
+	}
+	hit.Metadata = metadataToJSON(stripReservedMetadata(md))
+	return hit
+}
+
+// toMemoryHitJSON is toMemoryHit's counterpart for recallHybrid, whose docs
+// arrive through the shared hybridDocs helper (db.go) with metadata already
+// converted to JSON-friendly map[string]any (via metadataToJSON) rather than
+// rostam.VectorMetadata — hybridDocs is collection-agnostic and shared with
+// the generic search tool, which wants that shape. It applies the same
+// key/created/updated extraction and reserved-field strip to that shape.
+func toMemoryHitJSON(id uint64, content string, score float32, md map[string]any) memoryHit {
+	hit := memoryHit{ID: id, Content: content, Score: score}
+	if v, ok := md[keyField].(string); ok {
+		hit.Key = v
+	}
+	if v, ok := md[createdField].(int64); ok {
+		hit.Created = v
+	}
+	if v, ok := md[updatedField].(int64); ok {
+		hit.Updated = v
+	}
+	for _, r := range reservedMetadataFields {
+		delete(md, r)
+	}
+	hit.Metadata = md
+	return hit
+}
+
+// forgetArgs is the forget tool's decoded input.
+type forgetArgs struct {
+	IDs       []uint64 `json:"ids"`
+	Namespace string   `json:"namespace"`
+	Keys      []string `json:"keys"`
+}
+
+// handleForget deletes memories by id and/or by stable key. Each key in Keys
+// is resolved to the id a keyed remember would have landed on
+// (memoryKeyID(ns, key)) and folded into the same id set as IDs, so from here
+// on a key-derived id and a caller-supplied id are handled identically. Ids
+// not found in the collection are reported back as "missing" rather than
+// erroring, so a caller can forget a batch without first checking which ids
+// still exist; per-id failures land in "errors" for the same reason (see
+// forgetResult).
 //
 // There is no namespace bookkeeping to do afterwards: a namespace is defined
 // by the memories carrying it (see handleListNamespaces), so deleting the last
@@ -487,15 +608,28 @@ func (s *Server) handleForget(ctx context.Context, raw json.RawMessage) (any, er
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return nil, fmt.Errorf("mcp: bad forget args: %w", err)
 	}
-	if len(args.IDs) == 0 {
-		return nil, fmt.Errorf("mcp: forget: ids is required and must be non-empty")
+	if len(args.IDs) == 0 && len(args.Keys) == 0 {
+		return nil, fmt.Errorf("mcp: forget: ids or keys is required")
+	}
+
+	ids := args.IDs
+	if len(args.Keys) > 0 {
+		ns := args.Namespace
+		if ns == "" {
+			ns = defaultNS
+		}
+		ids = make([]uint64, 0, len(args.IDs)+len(args.Keys))
+		ids = append(ids, args.IDs...)
+		for _, key := range args.Keys {
+			ids = append(ids, memoryKeyID(ns, key))
+		}
 	}
 
 	if err := s.ensureMemory(ctx); err != nil {
 		return nil, err
 	}
 
-	points, missing, err := s.store.VectorGetBatch(ctx, memCollection, args.IDs, false, true)
+	points, missing, err := s.store.VectorGetBatch(ctx, memCollection, ids, false, true)
 	if err != nil {
 		return nil, fmt.Errorf("mcp: forget: %w", err)
 	}
@@ -571,7 +705,7 @@ func (s *Server) handleListMemories(ctx context.Context, raw json.RawMessage) (a
 	}
 	memories := make([]memoryHit, len(docs))
 	for i, d := range docs {
-		memories[i] = memoryHit{ID: d.ID, Content: d.Content, Metadata: metadataToJSON(stripReservedMetadata(d.Metadata))}
+		memories[i] = toMemoryHit(d.ID, d.Content, d.Score, d.Metadata)
 	}
 	return map[string]any{"memories": memories, "next_cursor": cursor}, nil
 }

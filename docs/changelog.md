@@ -47,6 +47,43 @@ the user to know which kind of question they are asking.
 `-no-hybrid` restores pure dense KNN. Note the returned `Score` is the fusion
 score, not the original per-lane score — they are not comparable across modes.
 
+### A native-protocol Python client for KV and the vector database
+
+Two things reachable from Go's remote client but not Python have both landed:
+the key-value store (never on REST — it lives only on the binary TCP protocol,
+built for sub-microsecond ops an HTTP round trip would defeat) and the same
+transport for vector operations. The new `Rostam` client speaks that protocol
+directly, standard library only:
+
+```python
+from rostam import Rostam, filters
+
+r = Rostam("127.0.0.1", 7000)          # the server's -tcp port
+
+# key-value
+r.put("user:42", b'{"coins":100}', ttl_ms=300_000)
+r.incr("views:42", 1)                  # atomic; missing key counts as 0
+
+# vector database, same connection
+r.vector.create_collection("docs", dim=768, metric="cosine")
+r.vector.upsert("docs", 1, embedding, content="hello", metadata={"tenant": "acme"})
+r.vector.search("docs", query, k=10, filter=filters.eq("tenant", "acme"))
+```
+
+KV covers `get`/`put`/`delete`/`incr`/`expire` (plus a `ping` heartbeat);
+`.vector` covers `create_collection`, `upsert`, `insert`, `search`, `get`,
+`delete` and `exists`. `auth_token=` rides the protocol-v2 frame when the server
+requires one.
+`RostamKV` remains as an alias for the KV-focused name.
+
+The vector arg layouts — including create_collection's fragile config trailer —
+are differential-tested byte-for-byte against the Go encoders (a Go oracle emits
+golden hex the Python encoders must reproduce); the JSON-carrying parts
+(metadata, filter, content) round-trip through a real server. Custom ops and
+WASM procedures stay Go-only (per-op encoders). Pairs with the container serving
+the TCP port by default.
+
+
 ### The container serves the Go client out of the box
 
 The published image bound only REST (`:8080`), but the Go remote client
@@ -94,6 +131,24 @@ and `recall` descriptions carry the same guidance at the point of use.
 The doctrine is short and deliberate: recall at the start of a task before
 re-exploring a codebase, namespace per project rather than `default`, one
 self-contained durable fact per `remember`, and never store secrets.
+
+### Memory keeps one entry per key for live state
+
+`remember` now takes an optional `key`. Without one, nothing changes — a memory
+is still identified by its `(namespace, content)`, so re-remembering an edited
+fact leaves the old version behind. With a `key`, the memory is identified by
+`(namespace, key)` instead, so re-remembering the same key **replaces** the
+prior entry in place. That makes it the right shape for live, in-flight state —
+a PR's status, what you're mid-task on — which otherwise piles up as stale
+snapshots that a later agent can't tell apart from the current one.
+
+`recall` and `list_memories` now surface each memory's `key` and its `created`
+and `updated` times, so a reader can spot a keyed live-state entry and judge its
+freshness at a glance; a keyed memory keeps its original `created` across
+updates while `updated` moves to now. `forget` can delete by `key` as well as by
+id (pass `namespace` + `keys`). The MCP `instructions` and the `remember`
+description now teach the pattern: use a key for live state, omit it for durable
+facts.
 
 ### Fixed: the MCP server reported the wrong version
 
