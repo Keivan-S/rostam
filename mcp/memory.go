@@ -23,6 +23,8 @@ const (
 	memCollection = "mcp_memory"     // the vector collection backing remember/recall
 	nsField       = "__ns"           // metadata field: the memory's namespace
 	createdField  = "__created_unix" // metadata field: unix-seconds creation time
+	keyField      = "__key"          // metadata field: caller's stable key (keyed memories only)
+	updatedField  = "__updated_unix" // metadata field: unix-seconds last-write time
 	defaultNS     = "default"        // namespace used when the caller omits one
 	kvEmbedder    = "__mcp/embedder" // KV key: the embedIdentity this store was bootstrapped with
 )
@@ -222,6 +224,15 @@ func memoryID(ns, content string) uint64 {
 	return xxhash.Sum64String(ns+"\x00"+content) & jsSafeIDMask
 }
 
+// memoryKeyID derives a memory's point id from (namespace, key) so
+// re-remembering the same key upserts the same point regardless of content.
+// Salted differently from memoryID (a distinct separator string, not just a
+// different field of the same namespaced hash) so a key can never collide
+// with a content hash in the same namespace.
+func memoryKeyID(ns, key string) uint64 {
+	return xxhash.Sum64String(ns+"\x00__key\x00"+key) & jsSafeIDMask
+}
+
 // memoryHit is one recalled (or listed, Task 5) memory: its id, content,
 // relevance score, and user metadata with the reserved fields stripped. No
 // Distance field: it's meaningless for BM25-only recall and for a scroll
@@ -247,6 +258,7 @@ func (s *Server) registerMemoryTools() {
 				"content":   map[string]any{"type": "string", "description": "the fact to store"},
 				"namespace": map[string]any{"type": "string", "description": `isolation namespace (default "default")`},
 				"metadata":  map[string]any{"type": "object", "description": "optional extra metadata to attach"},
+				"key":       map[string]any{"type": "string", "description": "optional stable key; re-remembering the same key REPLACES the prior content (one canonical entry). Use for live/in-flight state; omit for durable one-off facts."},
 			},
 			"required": []any{"content"},
 		},
@@ -312,6 +324,7 @@ type rememberArgs struct {
 	Content   string                     `json:"content"`
 	Namespace string                     `json:"namespace"`
 	Metadata  map[string]json.RawMessage `json:"metadata"`
+	Key       string                     `json:"key"`
 }
 
 func (s *Server) handleRemember(ctx context.Context, raw json.RawMessage) (any, error) {
@@ -326,7 +339,7 @@ func (s *Server) handleRemember(ctx context.Context, raw json.RawMessage) (any, 
 	if ns == "" {
 		ns = defaultNS
 	}
-	for _, reserved := range [...]string{nsField, createdField, "$content"} {
+	for _, reserved := range [...]string{nsField, createdField, keyField, updatedField, "$content"} {
 		if _, ok := args.Metadata[reserved]; ok {
 			return nil, fmt.Errorf("mcp: remember: metadata key %q is reserved", reserved)
 		}
@@ -343,8 +356,33 @@ func (s *Server) handleRemember(ctx context.Context, raw json.RawMessage) (any, 
 	if md == nil {
 		md = make(rostam.VectorMetadata, 2)
 	}
+	now := time.Now().Unix()
 	md[nsField] = vector.NewString(ns)
-	md[createdField] = vector.NewInt(time.Now().Unix())
+	md[updatedField] = vector.NewInt(now)
+
+	// A keyed remember always lands on the same point (memoryKeyID ignores
+	// content), so a re-remember under the same key is an update to one
+	// canonical memory, not a new fact: its __created_unix should keep
+	// naming when that memory first came into being, not when it was last
+	// touched. The lookup is best-effort — a fresh key has no prior point,
+	// and that's not an error, just "created now".
+	var id uint64
+	if args.Key != "" {
+		id = memoryKeyID(ns, args.Key)
+		md[keyField] = vector.NewString(args.Key)
+		created := now
+		if found, _, existing, _, _, err := s.store.VectorGet(ctx, memCollection, id, false, true); err != nil {
+			return nil, fmt.Errorf("mcp: remember: checking existing keyed memory: %w", err)
+		} else if found {
+			if v, ok := existing[createdField]; ok && v.Kind == vector.ValueInt {
+				created = v.Int
+			}
+		}
+		md[createdField] = vector.NewInt(created)
+	} else {
+		id = memoryID(ns, args.Content)
+		md[createdField] = vector.NewInt(now)
+	}
 
 	vecs, err := s.emb.Embed(ctx, []string{args.Content})
 	if err != nil {
@@ -355,11 +393,14 @@ func (s *Server) handleRemember(ctx context.Context, raw json.RawMessage) (any, 
 		return nil, fmt.Errorf("mcp: embed content: %w", err)
 	}
 
-	id := memoryID(ns, args.Content)
 	if err := s.store.VectorUpsert(ctx, memCollection, id, vec, args.Content, rostam.VectorInsertOpts{Metadata: md}); err != nil {
 		return nil, fmt.Errorf("mcp: remember: %w", err)
 	}
-	return map[string]any{"id": id, "namespace": ns}, nil
+	result := map[string]any{"id": id, "namespace": ns}
+	if args.Key != "" {
+		result["key"] = args.Key
+	}
+	return result, nil
 }
 
 // recallArgs is the recall tool's decoded input.

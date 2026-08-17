@@ -4,6 +4,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -664,6 +665,133 @@ func TestBootstrapReportsAbandonedCreator(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "embedder identity") {
 		t.Fatalf("error should name the missing identity, got %v", err)
+	}
+}
+
+// TestRememberKeyedUpsertReplacesContent: two remembers sharing a key land on
+// the same id and leave exactly one memory behind, carrying the latest
+// content — the whole point of a keyed remember over the content-hash id.
+func TestRememberKeyedUpsertReplacesContent(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t)})
+	c.initialize()
+	var first, second struct {
+		ID uint64 `json:"id"`
+	}
+	c.callTool("remember", map[string]any{"content": "state A", "namespace": "proj", "key": "pr-status"}, &first, false)
+	c.callTool("remember", map[string]any{"content": "state B", "namespace": "proj", "key": "pr-status"}, &second, false)
+	if first.ID != second.ID {
+		t.Fatalf("same key must yield same id: %d vs %d", first.ID, second.ID)
+	}
+
+	var page struct {
+		Memories []struct {
+			ID      uint64 `json:"id"`
+			Content string `json:"content"`
+		} `json:"memories"`
+	}
+	c.callTool("list_memories", map[string]any{"namespace": "proj"}, &page, false)
+	if len(page.Memories) != 1 {
+		t.Fatalf("keyed upsert must not accumulate: got %d memories: %+v", len(page.Memories), page.Memories)
+	}
+	if page.Memories[0].Content != "state B" {
+		t.Fatalf("content = %q, want latest %q", page.Memories[0].Content, "state B")
+	}
+}
+
+// TestRememberWithoutKeyUnchanged guards backward compat: remembers with no
+// key keep deriving their id from (namespace, content), so two different
+// facts stay two independent memories.
+func TestRememberWithoutKeyUnchanged(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t)})
+	c.initialize()
+	c.callTool("remember", map[string]any{"content": "fact one", "namespace": "proj"}, nil, false)
+	c.callTool("remember", map[string]any{"content": "fact two", "namespace": "proj"}, nil, false)
+
+	var page struct {
+		Memories []struct{ ID uint64 } `json:"memories"`
+	}
+	c.callTool("list_memories", map[string]any{"namespace": "proj"}, &page, false)
+	if len(page.Memories) != 2 {
+		t.Fatalf("non-keyed remembers should be independent: got %d", len(page.Memories))
+	}
+}
+
+// TestRememberRejectsReservedKeyAndUpdatedInMetadata extends the existing
+// reserved-metadata guard (TestRememberRejectsReservedMetadata) to the two
+// fields this feature adds: a caller cannot smuggle a fake __key or
+// __updated_unix into user metadata.
+func TestRememberRejectsReservedKeyAndUpdatedInMetadata(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t)})
+	c.initialize()
+	for _, bad := range []string{"__key", "__updated_unix"} {
+		msg := c.callTool("remember", map[string]any{"content": "x", "metadata": map[string]any{bad: "nope"}}, nil, true)
+		if !strings.Contains(msg, bad) {
+			t.Fatalf("error should name the reserved key %q, got %q", bad, msg)
+		}
+	}
+}
+
+// TestRememberKeyedPreservesCreatedTimestamp: a keyed re-remember must keep
+// the ORIGINAL __created_unix (this is still the same logical memory, first
+// created earlier) while __updated_unix moves to reflect the new write. The
+// existing point is planted directly via VectorUpsert with a deliberately
+// old created timestamp so the test doesn't depend on wall-clock timing.
+func TestRememberKeyedPreservesCreatedTimestamp(t *testing.T) {
+	s, err := NewServer(context.Background(), Config{Store: newHeapStore(t)})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	ctx := context.Background()
+	if err := s.ensureMemory(ctx); err != nil {
+		t.Fatalf("ensureMemory: %v", err)
+	}
+
+	const ns, key = "proj", "pr-status"
+	id := memoryKeyID(ns, key)
+	const oldCreated = int64(1000)
+
+	vecs, err := s.emb.Embed(ctx, []string{"state A"})
+	if err != nil {
+		t.Fatalf("embed: %v", err)
+	}
+	seedMD := rostam.VectorMetadata{
+		nsField:      vector.NewString(ns),
+		keyField:     vector.NewString(key),
+		createdField: vector.NewInt(oldCreated),
+		updatedField: vector.NewInt(oldCreated),
+	}
+	if err := s.store.VectorUpsert(ctx, memCollection, id, vecs[0], "state A", rostam.VectorInsertOpts{Metadata: seedMD}); err != nil {
+		t.Fatalf("seed VectorUpsert: %v", err)
+	}
+
+	raw, err := json.Marshal(map[string]any{"content": "state B", "namespace": ns, "key": key})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if _, err := s.handleRemember(ctx, raw); err != nil {
+		t.Fatalf("handleRemember: %v", err)
+	}
+
+	found, _, md, _, _, err := s.store.VectorGet(ctx, memCollection, id, false, true)
+	if err != nil {
+		t.Fatalf("VectorGet: %v", err)
+	}
+	if !found {
+		t.Fatalf("expected point %d to exist after keyed remember", id)
+	}
+	created, ok := md[createdField]
+	if !ok || created.Kind != vector.ValueInt {
+		t.Fatalf("expected an int __created_unix field, got %+v", md[createdField])
+	}
+	if created.Int != oldCreated {
+		t.Fatalf("created should be preserved across a keyed re-remember: got %d, want %d", created.Int, oldCreated)
+	}
+	updated, ok := md[updatedField]
+	if !ok || updated.Kind != vector.ValueInt {
+		t.Fatalf("expected an int __updated_unix field, got %+v", md[updatedField])
+	}
+	if updated.Int == oldCreated {
+		t.Fatalf("updated should have moved past the seeded old timestamp, still %d", updated.Int)
 	}
 }
 
