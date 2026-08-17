@@ -18,6 +18,17 @@ from rostam import RostamKV, RostamError
 from rostam.kv import _MAX_FRAME
 
 
+def _recv_all(conn, n):
+    """Read exactly n bytes, or None if the peer closes first."""
+    buf = b""
+    while len(buf) < n:
+        chunk = conn.recv(n - len(buf))
+        if not chunk:
+            return None
+        buf += chunk
+    return buf
+
+
 class _FakeServer:
     """Accepts one connection and replies to each request with `responder()`."""
 
@@ -41,16 +52,12 @@ class _FakeServer:
         try:
             with conn:
                 while True:
-                    hdr = conn.recv(4)
-                    if len(hdr) < 4:
+                    hdr = _recv_all(conn, 4)   # TCP may split even a 4-byte header
+                    if hdr is None:
                         return
                     n = struct.unpack(">I", hdr)[0]
-                    remaining = n
-                    while remaining > 0:
-                        chunk = conn.recv(remaining)
-                        if not chunk:
-                            return
-                        remaining -= len(chunk)
+                    if _recv_all(conn, n) is None:
+                        return
                     reply = self._responder()
                     if reply is None:
                         return
