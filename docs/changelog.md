@@ -47,6 +47,17 @@ the user to know which kind of question they are asking.
 `-no-hybrid` restores pure dense KNN. Note the returned `Score` is the fusion
 score, not the original per-lane score — they are not comparable across modes.
 
+### The Python client reaches the Query API
+
+`rostam-client` gains `query()`, `recommend()` and `discover()`. Recommend and
+discover have no standalone route on any transport — they are leaves of the
+composable Query API — so they were previously unreachable from Python without
+hand-building the request. `recommend(collection, positive=[...], k=...)` scores
+toward example ids (and away from `negative` ones); `discover(...)` guides a
+search with `(positive, negative)` context pairs and an optional anchor; both
+take an optional metadata `filter`. `query()` is the general form for
+multi-lane fusion or rerank.
+
 ### The MCP server explains itself to the agent
 
 Tool schemas say what a tool does; they do not say *when* to reach for it. So an
