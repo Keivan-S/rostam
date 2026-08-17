@@ -34,6 +34,7 @@ import struct
 import threading
 from typing import List, Optional, Union
 
+from . import _vecwire
 from .client import RostamError
 
 Key = Union[str, bytes]
@@ -135,8 +136,12 @@ def _recv_exactly(s: socket.socket, n: int) -> bytes:
     return b"".join(chunks)
 
 
-class RostamKV:
-    """Native-protocol client for Rostam's key-value operations.
+class Rostam:
+    """Native-protocol client for Rostam over the binary TCP protocol.
+
+    Key-value operations are methods on this object (get/put/delete/incr/expire);
+    vector-database operations live under ``.vector`` (create_collection, upsert,
+    search, get, delete, exists), sharing one connection pool and auth token.
 
     Talks to the server's binary TCP port (``-tcp``), which the container serves
     by default on ``7000``. Set ``auth_token`` when the server requires one; it
@@ -156,6 +161,8 @@ class RostamKV:
         if len(self._token.encode("utf-8")) > 255:
             raise ValueError("auth_token is longer than 255 bytes")
         self._pool = _SocketPool(host, port, timeout, pool_maxsize)
+        #: Vector-database operations over the same connection. See _VectorAPI.
+        self.vector = _VectorAPI(self)
 
     # ---- framing -----------------------------------------------------------
 
@@ -260,7 +267,7 @@ class RostamKV:
     def close(self) -> None:
         self._pool.close()
 
-    def __enter__(self) -> "RostamKV":
+    def __enter__(self) -> "Rostam":
         return self
 
     def __exit__(self, *exc) -> None:
@@ -275,3 +282,76 @@ def _status_message(status: int, payload: bytes) -> str:
         _STATUS_UNAUTHORIZED: "unauthorized (auth token missing or invalid)",
     }.get(status, f"status {status}")
     return f"{name}: {detail}" if detail else name
+
+
+class _VectorAPI:
+    """Vector-database operations, reached as ``client.vector.*``.
+
+    Shares the parent client's socket pool and auth. The binary arg layouts are
+    in rostam._vecwire and are differential-tested byte-for-byte against the Go
+    encoders; the JSON-carrying parts (metadata, filter, content) round-trip
+    through a real server.
+    """
+
+    def __init__(self, client: "Rostam"):
+        self._c = client
+
+    def create_collection(self, name: str, dim: int, *, metric: str = "cosine", **cfg: Any) -> None:
+        """Create a vector collection. Keyword config mirrors the HTTP client:
+        m, ef_construction, ef_search, seed, quant, persistent, index_type,
+        ivf_nlist, ivf_nprobe, vamana_r/l/alpha, full_text, ..."""
+        conf = dict(cfg); conf["dim"] = dim; conf["metric"] = metric
+        self._c._call("vector_create_collection", _vecwire.encode_create_collection_args(name, conf))
+
+    def upsert(self, collection: str, id: int, vector: Sequence[float], *, content: str = "",
+               metadata: Optional[Dict[str, Any]] = None, ttl_ms: int = 0,
+               sparse: Optional[Dict[str, Sequence]] = None) -> None:
+        """Insert or replace a point, optionally with stored content for RAG."""
+        self._c._call("vector_upsert", _vecwire.encode_upsert_args(
+            collection, int(id), vector, content=content, ttl_ms=ttl_ms,
+            metadata=metadata, sparse=sparse))
+
+    def insert(self, collection: str, id: int, vector: Sequence[float], *,
+               metadata: Optional[Dict[str, Any]] = None, ttl_ms: int = 0,
+               sparse: Optional[Dict[str, Sequence]] = None) -> None:
+        """Create-only insert (errors if the id is live)."""
+        self._c._call("vector_insert", _vecwire.encode_insert_args(
+            collection, int(id), vector, ttl_ms=ttl_ms, metadata=metadata, sparse=sparse))
+
+    def search(self, collection: str, query: Sequence[float], k: int, *,
+               filter: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        """k-nearest-neighbour search. Returns [{id, distance}, ...]."""
+        payload = self._c._call("vector_search", _vecwire.encode_search_args(collection, k, query, filter))
+        return _vecwire.decode_search_results(payload or b"\x00\x00\x00\x00")
+
+    def get(self, collection: str, id: int, *, with_vector: bool = True,
+            with_payload: bool = True) -> Optional[Dict[str, Any]]:
+        """Fetch a point by id, or None if absent. Returns {vector, metadata,
+        ttl_ms, sparse} — fields not requested come back empty."""
+        flags = (0x01 if with_vector else 0) | (0x02 if with_payload else 0)
+        payload = self._c._call("vector_get", _vecwire.encode_get_args(collection, int(id), flags))
+        if payload is None:
+            return None
+        got = _vecwire.decode_get_result(payload)
+        if got is None:
+            # A miss comes back as StatusOK with a found=0 body (not StatusNotFound),
+            # so the payload is non-None but decodes to None. Absent is absent.
+            return None
+        # Lift stored content out of the reserved $content key, mirroring the
+        # HTTP client's Point shape.
+        meta = got.get("metadata") or {}
+        got["content"] = meta.pop("$content", "")
+        return got
+
+    def delete(self, collection: str, id: int) -> bool:
+        """Delete a point. Returns whether it existed."""
+        payload = self._c._call("vector_delete", _vecwire.encode_delete_args(collection, int(id)))
+        return bool(payload and payload[0])
+
+    def exists(self, collection: str, id: int) -> bool:
+        payload = self._c._call("vector_exists", _vecwire.encode_exists_args(collection, int(id)))
+        return _vecwire.decode_exists_result(payload or b"\x00")
+
+
+# Backwards-compatible alias: the client began life as a KV-only RostamKV.
+RostamKV = Rostam

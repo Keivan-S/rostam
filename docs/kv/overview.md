@@ -24,9 +24,9 @@ is the native `RostamKV` client, which speaks the same protocol over a socket.
 === "Python"
 
     ```python
-    from rostam import RostamKV
+    from rostam import Rostam
 
-    kv = RostamKV("127.0.0.1", 7000)             # the server's -tcp port
+    kv = Rostam("127.0.0.1", 7000)             # the server's -tcp port
     kv.put("user:42", b'{"coins":100}', ttl_ms=300_000)   # ttl_ms 0 = no expiry
     kv.get("user:42")                            # bytes, or None on miss/expiry
     kv.delete("user:42")                         # -> bool (existed)
@@ -35,6 +35,10 @@ is the native `RostamKV` client, which speaks the same protocol over a socket.
     Keys and values may be `str` (encoded UTF-8) or `bytes`; reads always return
     `bytes` (or `None`). Pass `auth_token=` when the server requires one — it
     rides the protocol-v2 frame on every request.
+
+    The same client speaks the vector database over the same connection —
+    `Rostam(...).vector.create_collection / upsert / search / get / delete` — see
+    [the vector docs](../vector/collections-and-indexes.md).
 
 Beyond get/put/del, two built-in atomic ops run server-side — no
 read-modify-write race, no extra round trips:
