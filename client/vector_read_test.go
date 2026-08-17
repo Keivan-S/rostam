@@ -29,6 +29,24 @@ func TestGetOnMissingCollection(t *testing.T) {
 	}
 }
 
+// TestGetBatchOnMissingCollection confirms GetBatch maps the server's
+// missing-collection error onto ErrCollectionNotFound, same as Get.
+func TestGetBatchOnMissingCollection(t *testing.T) {
+	addr, stop := startTestStack(t)
+	defer stop()
+	c, err := New(Config{Servers: []string{addr}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Close() }()
+
+	col := c.Collection("never-created")
+	_, err = col.GetBatch(context.Background(), GetBatchRequest{IDs: []uint64{1, 2}})
+	if !errors.Is(err, ErrCollectionNotFound) {
+		t.Fatalf("GetBatch on never-created collection = %v, want ErrCollectionNotFound", err)
+	}
+}
+
 func TestGetAndGetBatch(t *testing.T) {
 	col, cleanup := mustCollection(t)
 	defer cleanup()

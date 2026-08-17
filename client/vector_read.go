@@ -49,10 +49,7 @@ func (col *Collection) Get(ctx context.Context, req GetRequest) (Point, error) {
 	body, err := col.c.Call(ctx, "vector_get",
 		ops.EncodeVectorGetArgs(col.name, req.ID, getFlags(req.WithVector, req.WithPayload)))
 	if err != nil {
-		if isCollectionNotFound(err) {
-			return Point{}, ErrCollectionNotFound
-		}
-		return Point{}, err
+		return Point{}, mapCollErr(err)
 	}
 	found, vec, meta, ttl, _, version, err := ops.DecodeVectorGetResultV(body)
 	if err != nil {
@@ -79,12 +76,13 @@ type GetBatchResponse struct {
 }
 
 // GetBatch fetches multiple points in a single round trip. Requested ids that
-// do not exist are reported in Missing rather than causing an error.
+// do not exist are reported in Missing rather than causing an error. Returns
+// ErrCollectionNotFound when the collection itself does not exist.
 func (col *Collection) GetBatch(ctx context.Context, req GetBatchRequest) (GetBatchResponse, error) {
 	body, err := col.c.Call(ctx, "vector_get_batch",
 		ops.EncodeVectorGetBatchArgs(col.name, req.IDs, getFlags(req.WithVector, req.WithPayload)))
 	if err != nil {
-		return GetBatchResponse{}, err
+		return GetBatchResponse{}, mapCollErr(err)
 	}
 	rows, err := ops.DecodeVectorGetBatchResult(body)
 	if err != nil {
@@ -134,6 +132,7 @@ type ScrollResponse struct {
 
 // Scroll returns a page of points matching req.Filter, ordered by id. Pass
 // the previous response's NextCursor as req.Cursor to fetch the next page.
+// Returns ErrCollectionNotFound when the collection itself does not exist.
 func (col *Collection) Scroll(ctx context.Context, req ScrollRequest) (ScrollResponse, error) {
 	dec, err := ops.DecodeScrollCursorTyped(req.Cursor)
 	if err != nil {
@@ -144,7 +143,7 @@ func (col *Collection) Scroll(ctx context.Context, req ScrollRequest) (ScrollRes
 	body, err := col.c.Call(ctx, "vector_scroll",
 		ops.EncodeScrollArgsOrderBounded(col.name, req.Filter, req.Limit, 0, 0, afterID, hasAfter, nil, 0))
 	if err != nil {
-		return ScrollResponse{}, err
+		return ScrollResponse{}, mapCollErr(err)
 	}
 	docs, _, _, nextCursor, err := ops.DecodeScrollResultRaw(body)
 	if err != nil {

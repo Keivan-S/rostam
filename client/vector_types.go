@@ -46,3 +46,15 @@ func isCollectionNotFound(err error) bool {
 	s := strings.ToLower(err.Error())
 	return strings.Contains(s, "no collection") || strings.Contains(s, "unknown collection")
 }
+
+// mapCollErr normalizes a missing-collection server error to the exported
+// ErrCollectionNotFound sentinel, leaving every other error (including a
+// missing-point ErrNotFound) unchanged. Call it on the error returned from
+// col.c.Call in every method that talks to the server, so
+// errors.Is(err, ErrCollectionNotFound) is consistent across the client.
+func mapCollErr(err error) error {
+	if isCollectionNotFound(err) {
+		return ErrCollectionNotFound
+	}
+	return err
+}

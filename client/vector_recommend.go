@@ -73,6 +73,9 @@ type QueryRequest struct {
 // (coordinator) deployment fuses and re-tags them into the flat result this
 // method decodes. Against a single coordinator-less node, a ModeFusion spec's
 // result cannot be decoded.
+//
+// Returns ErrCollectionNotFound when the collection itself does not exist
+// (this also covers Recommend, which delegates to Query).
 func (col *Collection) Query(ctx context.Context, req QueryRequest) (SearchResponse, error) {
 	specBytes, err := ops.MarshalEngineQuerySpec(req.Spec)
 	if err != nil {
@@ -81,7 +84,7 @@ func (col *Collection) Query(ctx context.Context, req QueryRequest) (SearchRespo
 	body, err := col.c.Call(ctx, "vector_query",
 		ops.EncodeQueryArgs(col.name, specBytes, uint8(req.Consistency), 0, 0))
 	if err != nil {
-		return SearchResponse{}, err
+		return SearchResponse{}, mapCollErr(err)
 	}
 	results, degraded, missing, err := ops.DecodeQueryResultDegraded(body)
 	if err != nil {

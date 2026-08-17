@@ -33,10 +33,7 @@ func (col *Collection) Search(ctx context.Context, req SearchRequest) (SearchRes
 	body, err := col.c.Call(ctx, "vector_search",
 		ops.EncodeVectorSearchArgsOpts(col.name, req.K, req.Query, req.Filter, uint8(req.Consistency), 0, 0))
 	if err != nil {
-		if isCollectionNotFound(err) {
-			return SearchResponse{}, ErrCollectionNotFound
-		}
-		return SearchResponse{}, err
+		return SearchResponse{}, mapCollErr(err)
 	}
 	results, degraded, missing, err := ops.DecodeVectorSearchResultsDegraded(body)
 	if err != nil {
@@ -62,6 +59,7 @@ type HybridTextRequest struct {
 }
 
 // HybridText runs a dense+BM25 hybrid search, fusing both lanes server-side.
+// Returns ErrCollectionNotFound when the collection itself does not exist.
 func (col *Collection) HybridText(ctx context.Context, req HybridTextRequest) (SearchResponse, error) {
 	opts := vector.HybridOpts{
 		Filter: req.Filter, Method: req.Method, Alpha: req.Alpha,
@@ -71,7 +69,7 @@ func (col *Collection) HybridText(ctx context.Context, req HybridTextRequest) (S
 		ops.EncodeHybridTextArgsGlobal(col.name, req.Dense, req.Text, req.K, opts,
 			uint8(req.Consistency), 0, 0, req.GlobalIDF, nil))
 	if err != nil {
-		return SearchResponse{}, err
+		return SearchResponse{}, mapCollErr(err)
 	}
 	results, degraded, missing, err := ops.DecodeHybridResultsDegraded(body)
 	if err != nil {
@@ -96,7 +94,8 @@ type HybridSearchRequest struct {
 }
 
 // HybridSearch runs a dense+sparse hybrid search, fusing both lanes
-// server-side.
+// server-side. Returns ErrCollectionNotFound when the collection itself does
+// not exist.
 func (col *Collection) HybridSearch(ctx context.Context, req HybridSearchRequest) (SearchResponse, error) {
 	opts := vector.HybridOpts{
 		Filter: req.Filter, Method: req.Method, Alpha: req.Alpha,
@@ -106,7 +105,7 @@ func (col *Collection) HybridSearch(ctx context.Context, req HybridSearchRequest
 		ops.EncodeHybridSearchArgsOpts(col.name, req.Dense, req.K, req.Sparse, opts,
 			uint8(req.Consistency), 0, 0))
 	if err != nil {
-		return SearchResponse{}, err
+		return SearchResponse{}, mapCollErr(err)
 	}
 	results, degraded, missing, err := ops.DecodeHybridResultsDegraded(body)
 	if err != nil {
@@ -133,11 +132,12 @@ type DocsResponse struct {
 
 // SearchDocs runs a dense-vector KNN search, returning the top-k points as
 // content-bearing Documents (reusing the Document type from Scroll/reads).
+// Returns ErrCollectionNotFound when the collection itself does not exist.
 func (col *Collection) SearchDocs(ctx context.Context, req SearchDocsRequest) (DocsResponse, error) {
 	body, err := col.c.Call(ctx, "vector_search_docs",
 		ops.EncodeVectorSearchArgsOpts(col.name, req.K, req.Query, req.Filter, uint8(req.Consistency), 0, 0))
 	if err != nil {
-		return DocsResponse{}, err
+		return DocsResponse{}, mapCollErr(err)
 	}
 	docs, degraded, missing, err := ops.DecodeVectorDocsDegradedRaw(body)
 	if err != nil {
@@ -181,13 +181,14 @@ type GroupResponse struct {
 }
 
 // SearchGroups runs a group-by-document search, returning the top-k groups
-// (ranked by best member) each with up to GroupSize best hits.
+// (ranked by best member) each with up to GroupSize best hits. Returns
+// ErrCollectionNotFound when the collection itself does not exist.
 func (col *Collection) SearchGroups(ctx context.Context, req GroupSearchRequest) (GroupResponse, error) {
 	opts := vector.GroupOpts{GroupBy: req.GroupBy, GroupSize: req.GroupSize, FetchK: req.FetchK, Filter: req.Filter}
 	body, err := col.c.Call(ctx, "vector_search_groups",
 		ops.EncodeGroupSearchArgsOpts(col.name, req.K, req.Query, opts, uint8(req.Consistency), 0, 0))
 	if err != nil {
-		return GroupResponse{}, err
+		return GroupResponse{}, mapCollErr(err)
 	}
 	groups, degraded, missing, err := ops.DecodeGroupsDegradedRaw(body)
 	if err != nil {

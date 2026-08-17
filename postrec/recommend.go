@@ -89,6 +89,9 @@ func (r *Recommender) Ingest(ctx context.Context, posts ...Post) error {
 	if err != nil {
 		return fmt.Errorf("embed posts: %w", err)
 	}
+	if len(vecs) != len(posts) {
+		return fmt.Errorf("embedder returned %d vectors for %d posts", len(vecs), len(posts))
+	}
 	for i, p := range posts {
 		meta := vector.Metadata{
 			"post_id":      vector.NewInt(int64(p.ID)),
@@ -115,12 +118,14 @@ func publishedFilter() vector.Filter {
 // query and its title/body as the BM25 query, then drops the post itself.
 func (r *Recommender) Related(ctx context.Context, current Post, k int) ([]Recommendation, error) {
 	var vec []float32
-	if got, err := r.Store.GetVectors(ctx, []uint64{current.ID}); err == nil {
-		if row, ok := got[current.ID]; ok {
-			vec = row.Vector
-		}
+	got, err := r.Store.GetVectors(ctx, []uint64{current.ID})
+	if err != nil {
+		return nil, err
 	}
-	if vec == nil { // not stored yet — embed on the fly
+	if row, ok := got[current.ID]; ok {
+		vec = row.Vector
+	}
+	if vec == nil { // GetVectors succeeded but this id wasn't present — embed on the fly
 		vecs, err := r.Embedder.Embed(ctx, []string{current.Title + "\n\n" + current.Body})
 		if err != nil {
 			return nil, err
@@ -181,6 +186,9 @@ func (r *Recommender) ForUserServerSide(ctx context.Context, readIDs []uint64, k
 // ---- helpers ----
 
 func toRecs(hits []vector.Result, exclude map[uint64]bool, k int) []Recommendation {
+	if k <= 0 {
+		return nil
+	}
 	out := make([]Recommendation, 0, k)
 	for _, h := range hits {
 		if exclude[h.ID] {

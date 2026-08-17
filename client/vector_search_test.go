@@ -28,6 +28,24 @@ func TestSearchOnMissingCollection(t *testing.T) {
 	}
 }
 
+// TestSearchDocsOnMissingCollection confirms SearchDocs maps the server's
+// missing-collection error onto ErrCollectionNotFound, same as Search.
+func TestSearchDocsOnMissingCollection(t *testing.T) {
+	addr, stop := startTestStack(t)
+	defer stop()
+	c, err := New(Config{Servers: []string{addr}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Close() }()
+
+	col := c.Collection("never-created")
+	_, err = col.SearchDocs(context.Background(), SearchDocsRequest{Query: []float32{1, 0, 0, 0}, K: 5})
+	if !errors.Is(err, ErrCollectionNotFound) {
+		t.Fatalf("SearchDocs on never-created collection = %v, want ErrCollectionNotFound", err)
+	}
+}
+
 func seedSearchable(t *testing.T) (*Collection, func()) {
 	t.Helper()
 	addr, stop := startTestStack(t)

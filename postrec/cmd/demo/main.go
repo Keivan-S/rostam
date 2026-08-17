@@ -9,12 +9,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/rostamlabs/rostam/client"
 	"github.com/rostamlabs/rostam/postrec"
 )
 
@@ -38,8 +40,8 @@ func main() {
 
 	rec := postrec.NewRecommender(store, embedder)
 
-	if err := rec.EnsureCollection(ctx); err != nil {
-		log.Printf("create collection (ok if it already exists): %v", err)
+	if err := rec.EnsureCollection(ctx); err != nil && !errors.Is(err, client.ErrCollectionExists) {
+		log.Fatalf("ensure collection: %v", err)
 	}
 
 	posts := []postrec.Post{
