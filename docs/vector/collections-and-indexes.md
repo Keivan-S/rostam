@@ -1,16 +1,37 @@
 # Collections & indexes
 
-A collection is created with `vector.NewCollection(name, cfg)` (library) or
-`POST /v1/collections` (server). The `Config` struct controls everything: index
-type, graph parameters, quantization, quotas, durability, and filtering
-behavior.
+A collection is created with `vector.NewCollection(name, cfg)` (library),
+`POST /v1/collections` (server), or `create_collection` (Python). The same set
+of parameters — index type, graph parameters, quantization, quotas, durability,
+filtering behaviour — is available on each; the Go `Config` struct is the
+canonical list and the JSON/Python names mirror its fields.
 
-```go
-col, err := vector.NewCollection("docs", vector.Config{
-	Dim:    768,
-	Metric: vector.Cosine,
-})
-```
+=== "Go"
+
+    ```go
+    col, err := vector.NewCollection("docs", vector.Config{
+    	Dim:    768,
+    	Metric: vector.Cosine,
+    })
+    ```
+
+=== "Python"
+
+    ```python
+    c.create_collection("docs", dim=768, metric="cosine")
+    ```
+
+=== "curl"
+
+    ```sh
+    curl -s localhost:8080/v1/collections \
+      -d '{"name":"docs","config":{"dim":768,"metric":"cosine"}}'
+    ```
+
+!!! note "The Go snippets on this page are fragments"
+    They show the call shape, not a runnable program — imports and the
+    `if err != nil` check are omitted for brevity. See the
+    [quickstart](../quickstart.md#your-first-search) for a complete one.
 
 ## Core parameters
 
@@ -68,7 +89,42 @@ knob you tune first.
 
 ## Index types
 
-Set `Config.IndexType`; the search API is the same for all of them.
+Set the index type at creation; the search API is the same for all of them.
+
+=== "Go"
+
+    ```go
+    col, err := vector.NewCollection("docs", vector.Config{
+    	Dim: 768, Metric: vector.Cosine,
+    	IndexType: vector.IndexVamana, VamanaR: 64, VamanaL: 100,
+    })
+    ```
+
+=== "Python"
+
+    ```python
+    c.create_collection("docs", dim=768, metric="cosine",
+                        index_type="vamana", vamana_r=64, vamana_l=100)
+    ```
+
+=== "curl"
+
+    ```sh
+    curl -s localhost:8080/v1/collections -d '{"name":"docs","config":{
+      "dim":768,"metric":"cosine",
+      "index_type":"vamana","vamana_r":64,"vamana_l":100}}'
+    ```
+
+`index_type` is `"hnsw"` (default), `"ivf"`, `"vamana"`, or `"gpu"`. The
+per-index tuning fields below are set the same way — as `Config` fields (Go),
+JSON config keys (HTTP), or, where the client exposes them, keyword arguments
+(Python; see the note below for the one exception).
+
+!!! note "IVF tuning is HTTP/Go only from the client"
+    The Python client selects `index_type="ivf"` but does not expose
+    `ivf_nlist` / `ivf_nprobe`; set those over HTTP (`ivf_nlist`, `ivf_nprobe`
+    in the config) or from the Go library. HNSW, Vamana and GPU are fully
+    configurable from Python.
 
 ### HNSW (default)
 
@@ -138,38 +194,72 @@ with `ErrGPUNotCompiled`.
 For large initial loads, stage vectors and build the graph on all cores instead
 of inserting one by one:
 
-```go
-col.StageBulk(ids, vecs)              // stage raw data
-err := col.BuildStaged(runtime.NumCPU()) // multi-core graph construction
-```
+=== "Go"
 
-Use `StageBulkPayloads(ids, vecs, metas)` instead when the points carry metadata,
-so a filtered workload gets the same multi-core build rather than falling back to
-one indexed insert per point. Content and sparse vectors have no bulk form.
+    ```go
+    col.StageBulk(ids, vecs)                 // stage raw data
+    err := col.BuildStaged(runtime.NumCPU()) // multi-core graph construction
+    ```
 
-Over HTTP: `POST .../points/bulk` to stage, then `POST .../points/bulk/build`
-with `{"workers": 0}` (0 = all cores).
+    Use `StageBulkPayloads(ids, vecs, metas)` when the points carry metadata, so a
+    filtered workload gets the same multi-core build rather than one indexed
+    insert per point. Content and sparse vectors have no bulk form.
+
+=== "Python"
+
+    ```python
+    c.bulk_stage("docs", ids, vectors)   # stage over the binary wire
+    c.bulk_build("docs")                 # multi-core build (workers=0 = all cores)
+    ```
+
+    Pass `metadatas=[...]` to `bulk_stage` for a filterable load.
+
+=== "curl"
+
+    ```sh
+    # stage, then build
+    curl -s localhost:8080/v1/collections/docs/points/bulk -d '{"ids":[...],"vectors":[[...]]}'
+    curl -s localhost:8080/v1/collections/docs/points/bulk/build -d '{"workers":0}'
+    ```
 
 ## Writes, reads, and versions
 
-```go
-// Create-only — ErrDuplicateID if the id is live:
-err := col.Insert(id, vec, ttl, meta, sparse)
+=== "Go"
 
-// Insert-or-replace, with stored content for RAG:
-err = col.Upsert(id, vec, "document text", ttl, meta, sparse)
+    ```go
+    // Create-only — ErrDuplicateID if the id is live:
+    err := col.Insert(id, vec, ttl, meta, sparse)
 
-// Atomic create-if-missing:
-inserted, err := col.InsertIfAbsent(id, vec, ttl, meta, sparse)
+    // Insert-or-replace, with stored content for RAG:
+    err = col.Upsert(id, vec, "document text", ttl, meta, sparse)
 
-// Optimistic concurrency — fails with ErrVersionConflict on version mismatch:
-version, err := col.InsertCAS(id, vec, ttl, meta, sparse, vector.CASCond{Expected: v, Has: true})
+    // Atomic create-if-missing:
+    inserted, err := col.InsertIfAbsent(id, vec, ttl, meta, sparse)
 
-// Reads (zero-copy; GetInto reuses a caller buffer):
-vec, meta, ttl, sparse, version, ok := col.Get(id)
-deleted := col.Delete(id)
-count, err := col.DeleteByFilter(filter)
-```
+    // Optimistic concurrency — fails with ErrVersionConflict on version mismatch:
+    version, err := col.InsertCAS(id, vec, ttl, meta, sparse, vector.CASCond{Expected: v, Has: true})
+
+    // Reads (zero-copy; GetInto reuses a caller buffer):
+    vec, meta, ttl, sparse, version, ok := col.Get(id)
+    deleted := col.Delete(id)
+    count, err := col.DeleteByFilter(filter)
+    ```
+
+=== "Python"
+
+    ```python
+    # Create-only (RostamError if the id is live) vs insert-or-replace:
+    c.insert("docs", id, vec, content="document text", metadata=meta)
+    c.upsert("docs", id, vec, content="document text", metadata=meta)
+
+    # Reads and deletes:
+    points = c.get_batch("docs", [id])           # -> [Point(id, vector, content, metadata)]
+    c.delete("docs", id)
+    c.delete_by_filter("docs", f.eq("tenant", "acme"))
+    ```
+
+    `InsertIfAbsent` and the `InsertCAS` optimistic-concurrency path are
+    Go-library only; the client exposes `insert` (create-only) and `upsert`.
 
 Per-point TTL is set at write time; per-key payload TTLs go through
 `InsertKeyTTL`/`UpsertKeyTTL` (`key_ttl_ms` over HTTP).
