@@ -72,3 +72,37 @@ func mapWriteErr(err error) error {
 	}
 	return err
 }
+
+// PointInput is one point in an UpsertBatch.
+type PointInput struct {
+	ID       uint64
+	Vector   []float32
+	Content  string
+	Metadata vector.Metadata
+	Sparse   vector.SparseVector
+	TTL      time.Duration
+}
+
+// BatchError reports a failure for a specific point id.
+type BatchError struct {
+	ID  uint64
+	Err error
+}
+
+// UpsertBatch upserts each point. There is no single batch op on the wire, so
+// this issues one upsert per point over the (optionally pipelined) connection
+// and returns the failures, if any, keyed by id. A nil/empty return means all
+// succeeded.
+func (col *Collection) UpsertBatch(ctx context.Context, pts []PointInput) []BatchError {
+	var errs []BatchError
+	for _, p := range pts {
+		err := col.Upsert(ctx, WriteRequest{
+			ID: p.ID, Vector: p.Vector, Content: p.Content,
+			Metadata: p.Metadata, Sparse: p.Sparse, TTL: p.TTL,
+		})
+		if err != nil {
+			errs = append(errs, BatchError{ID: p.ID, Err: err})
+		}
+	}
+	return errs
+}

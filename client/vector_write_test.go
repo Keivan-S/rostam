@@ -61,3 +61,18 @@ func TestUpsertVersionConflict(t *testing.T) {
 		t.Fatalf("Upsert with stale version = %v, want ErrVersionConflict", err)
 	}
 }
+
+func TestUpsertBatch(t *testing.T) {
+	col, cleanup := mustCollection(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	pts := []PointInput{
+		{ID: 1, Vector: []float32{1, 0, 0, 0}, Content: "a"},
+		{ID: 2, Vector: []float32{0, 1, 0, 0}, Content: "b"},
+		{ID: 3, Vector: []float32{0, 0, 1, 0}, Content: "c"},
+	}
+	if errs := col.UpsertBatch(ctx, pts); len(errs) != 0 {
+		t.Fatalf("UpsertBatch errors: %+v", errs)
+	}
+}
