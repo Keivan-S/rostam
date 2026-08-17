@@ -33,6 +33,12 @@ type RecommendRequest struct {
 // (resolveRecommendLeaves) resolves the example ids and rewrites the leaf to
 // a derived dense query before it runs, excluding the examples from the
 // results.
+//
+// This sends a ModeFusion vector_query, whose single-node reply carries the
+// UNFUSED lane(s) (EncodeQueryResult's FUSION tag); only a routed/multi-node
+// (coordinator) deployment fuses those lanes and re-tags the reply as the flat
+// RERANK result DecodeQueryResultDegraded expects. Against a single
+// coordinator-less node, the fused result cannot be decoded.
 func (col *Collection) Recommend(ctx context.Context, req RecommendRequest) (SearchResponse, error) {
 	leaf := vector.QueryLeaf{
 		Kind:      vector.LeafRecommend,
@@ -60,6 +66,12 @@ type QueryRequest struct {
 
 // Query runs a raw vector.QuerySpec against the collection, decoding the
 // result into the same SearchResponse shape as Search/Recommend.
+//
+// If req.Spec.Mode is ModeFusion, this has the same single-node limitation as
+// Recommend: the reply carries unfused lanes, and only a routed/multi-node
+// (coordinator) deployment fuses and re-tags them into the flat result this
+// method decodes. Against a single coordinator-less node, a ModeFusion spec's
+// result cannot be decoded.
 func (col *Collection) Query(ctx context.Context, req QueryRequest) (SearchResponse, error) {
 	specBytes, err := ops.MarshalEngineQuerySpec(req.Spec)
 	if err != nil {

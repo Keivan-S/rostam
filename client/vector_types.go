@@ -29,3 +29,19 @@ func isVersionConflict(err error) bool {
 	s := strings.ToLower(err.Error())
 	return strings.Contains(s, "version") && (strings.Contains(s, "conflict") || strings.Contains(s, "mismatch"))
 }
+
+// isCollectionNotFound reports whether err's text looks like the server's
+// missing-collection error. Two spellings reach the client depending on which
+// code path acquires the collection: vector.CollectionStore's
+// "vector: no collection %q" (e.g. Get, via GetPointVersionInto) and
+// ops/builtin.go's "ops: unknown collection %q" (e.g. Search, via
+// handleVectorSearch's own Acquire). Both substrings are on
+// server/handlers.go's clientFacingErr allowlist, so they cross the wire
+// verbatim instead of being redacted to "internal error".
+func isCollectionNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "no collection") || strings.Contains(s, "unknown collection")
+}

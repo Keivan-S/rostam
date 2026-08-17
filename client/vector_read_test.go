@@ -3,10 +3,31 @@ package client
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/rostamlabs/rostam/vector"
 )
+
+// TestGetOnMissingCollection confirms Get surfaces the server's distinguishable
+// missing-collection error ("vector: no collection %q", from
+// CollectionStore.GetPointVersionInto) as ErrCollectionNotFound rather than a
+// raw, unmapped error string.
+func TestGetOnMissingCollection(t *testing.T) {
+	addr, stop := startTestStack(t)
+	defer stop()
+	c, err := New(Config{Servers: []string{addr}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Close() }()
+
+	col := c.Collection("never-created")
+	_, err = col.Get(context.Background(), GetRequest{ID: 1})
+	if !errors.Is(err, ErrCollectionNotFound) {
+		t.Fatalf("Get on never-created collection = %v, want ErrCollectionNotFound", err)
+	}
+}
 
 func TestGetAndGetBatch(t *testing.T) {
 	col, cleanup := mustCollection(t)

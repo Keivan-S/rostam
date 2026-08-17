@@ -3,10 +3,30 @@ package client
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/rostamlabs/rostam/vector"
 )
+
+// TestSearchOnMissingCollection confirms Search surfaces the server's
+// distinguishable missing-collection error ("ops: unknown collection %q", from
+// handleVectorSearch's Acquire) as ErrCollectionNotFound.
+func TestSearchOnMissingCollection(t *testing.T) {
+	addr, stop := startTestStack(t)
+	defer stop()
+	c, err := New(Config{Servers: []string{addr}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Close() }()
+
+	col := c.Collection("never-created")
+	_, err = col.Search(context.Background(), SearchRequest{Query: []float32{1, 0, 0, 0}, K: 5})
+	if !errors.Is(err, ErrCollectionNotFound) {
+		t.Fatalf("Search on never-created collection = %v, want ErrCollectionNotFound", err)
+	}
+}
 
 func seedSearchable(t *testing.T) (*Collection, func()) {
 	t.Helper()

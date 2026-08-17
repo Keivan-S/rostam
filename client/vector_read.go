@@ -43,11 +43,14 @@ func getFlags(withVec, withPayload bool) uint8 {
 }
 
 // Get fetches the point at req.ID. It returns ErrNotFound when no such point
-// exists.
+// exists, or ErrCollectionNotFound when the collection itself does not exist.
 func (col *Collection) Get(ctx context.Context, req GetRequest) (Point, error) {
 	body, err := col.c.Call(ctx, "vector_get",
 		ops.EncodeVectorGetArgs(col.name, req.ID, getFlags(req.WithVector, req.WithPayload)))
 	if err != nil {
+		if isCollectionNotFound(err) {
+			return Point{}, ErrCollectionNotFound
+		}
 		return Point{}, err
 	}
 	found, vec, meta, ttl, _, version, err := ops.DecodeVectorGetResultV(body)

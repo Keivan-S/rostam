@@ -26,11 +26,15 @@ type SearchRequest struct {
 }
 
 // Search runs a dense-vector KNN search, returning the top-k results ranked
-// by distance/score.
+// by distance/score. Returns ErrCollectionNotFound when the collection does
+// not exist.
 func (col *Collection) Search(ctx context.Context, req SearchRequest) (SearchResponse, error) {
 	body, err := col.c.Call(ctx, "vector_search",
 		ops.EncodeVectorSearchArgsOpts(col.name, req.K, req.Query, req.Filter, uint8(req.Consistency), 0, 0))
 	if err != nil {
+		if isCollectionNotFound(err) {
+			return SearchResponse{}, ErrCollectionNotFound
+		}
 		return SearchResponse{}, err
 	}
 	results, degraded, missing, err := ops.DecodeVectorSearchResultsDegraded(body)
