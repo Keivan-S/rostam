@@ -25,30 +25,27 @@ type RecommendRequest struct {
 // Recommend runs a RECOMMEND query, returning points similar to the positive
 // examples (and dissimilar to any negative examples), ranked by score/distance.
 //
-// The recommend leaf rides as BOTH the ModeRerank Root and the sole Prefetch
-// lane. Two engine constraints force this shape (verified against
-// vector/query.go's runQuerySpecAt): every QuerySpec — FUSION or RERANK —
-// rejects an empty Prefetch (ErrQueryNoPrefetch), and this package's Query
-// decodes the op result via ops.DecodeQueryResultDegraded, which only accepts
-// the flat RERANK-tagged wire (a ModeFusion result carries UNFUSED per-lane
-// data meant for a cross-partition coordinator to merge, which this direct
-// single-shard op path never does). So a plain "just recommend" call must be
-// ModeRerank: the Root leaf (rewritten by the engine's recommend pre-pass into
-// a derived dense query) supplies the ranking, and the identical leaf
-// duplicated into Prefetch supplies the rerank's candidate pool.
+// The recommend leaf rides as the sole ModeFusion Prefetch lane (no Root) —
+// the canonical shape the HTTP /query handler builds for a recommend request
+// (httpapi/vector.go's (queryLeafReq).toLeaf, appended via
+// vector.LeafSource(leaf) into spec.Prefetch). With one prefetch lane, the
+// fused result is that lane unchanged; the engine's recommend pre-pass
+// (resolveRecommendLeaves) resolves the example ids and rewrites the leaf to
+// a derived dense query before it runs, excluding the examples from the
+// results.
 func (col *Collection) Recommend(ctx context.Context, req RecommendRequest) (SearchResponse, error) {
 	leaf := vector.QueryLeaf{
-		Kind:     vector.LeafRecommend,
-		Positive: req.Positive,
-		Negative: req.Negative,
-		Strategy: req.Strategy,
-		K:        req.K,
-		Filter:   req.Filter,
+		Kind:      vector.LeafRecommend,
+		Positive:  req.Positive,
+		Negative:  req.Negative,
+		Strategy:  req.Strategy,
+		ScoreDesc: req.Strategy == vector.RecommendBestScore,
+		K:         req.K,
+		Filter:    req.Filter,
 	}
 	spec := vector.QuerySpec{
-		Mode:     vector.ModeRerank,
+		Mode:     vector.ModeFusion,
 		K:        req.K,
-		Root:     leaf,
 		Prefetch: []vector.QuerySource{vector.LeafSource(leaf)},
 	}
 	return col.Query(ctx, QueryRequest{Spec: spec, Consistency: req.Consistency})
