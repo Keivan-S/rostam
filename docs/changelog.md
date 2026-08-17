@@ -54,9 +54,9 @@ The published image bound only REST (`:8080`), but the Go remote client
 service could not reach the container without overriding its command. The
 default now binds REST **and** TCP (`:7000`) and documents both with `EXPOSE`.
 
-Nothing new is reachable by default: a bound port is not a *published* one, so
-`docker run -p 8080:8080` still exposes only REST, and a Go deployment adds
-`-p 7000:7000`. The token guards every transport identically — the startup
+Nothing new is published to the host by default: a bound port is not a
+*published* one, so `docker run -p 8080:8080` still maps only REST to the host,
+and a Go deployment adds `-p 7000:7000`. The token guards every transport identically — the startup
 gate refuses an unauthenticated non-loopback bind on any of them — so
 publishing `7000` is no less safe than `8080`. gRPC stays opt-in
 (`-grpc 0.0.0.0:9090`).

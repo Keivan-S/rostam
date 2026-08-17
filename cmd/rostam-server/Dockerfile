@@ -34,8 +34,10 @@ EXPOSE 8080 7000
 #     docker run -p 8080:8080 -p 7000:7000 -e ROSTAM_API_KEY=<token> ...        # + Go/TCP clients
 #
 # The token guards every transport identically, so publishing 7000 is no less
-# safe than 8080. Publish only the ports you use: the unpublished listener is
-# unreachable from outside the container.
+# safe than 8080. Publish only the ports you use: an unpublished listener is not
+# reachable from the host, though other containers on the same Docker network
+# can still reach it on the container's port (and host networking publishes
+# everything) — which is why the auth gate, not port publication, is the control.
 #
 # ROSTAM_API_KEY is read instead of -api-key so the secret never appears in the
 # process table or in `docker inspect`'s Cmd. For a deliberately open dev

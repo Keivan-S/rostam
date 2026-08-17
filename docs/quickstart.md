@@ -49,9 +49,11 @@ runtime dependencies.
       ghcr.io/rostamlabs/rostam
     ```
 
-    An unpublished listener is unreachable from outside the container, and the
-    token guards every transport identically — so publishing `7000` is no less
-    safe than `8080`. For gRPC, add `-grpc 0.0.0.0:9090` and `-p 9090:9090`.
+    An unpublished listener is not reachable from the host (though other
+    containers on the same network still can reach it, and host networking
+    publishes everything). Either way the token guards every transport
+    identically — so exposing `7000` is no less safe than `8080`. For gRPC, add
+    `-grpc 0.0.0.0:9090` and `-p 9090:9090`.
 
 === "Go"
 
@@ -165,10 +167,12 @@ Against the container, authenticate every call: add
     	ctx := context.Background()
 
     	// The -tcp port, not -http: the Go remote client speaks the binary
-    	// protocol only. The Docker image serves this port too — publish it with
-    	// -p 7000:7000 (see the Docker tab in Install).
+    	// protocol only. This targets the loopback server from "Run it" (no
+    	// token). Against the container, publish the port (-p 7000:7000) and set
+    	// AuthToken to the same value as ROSTAM_API_KEY.
     	store, err := rostam.NewClient(rostam.ClientConfig{
     		Servers: []string{"127.0.0.1:7000"},
+    		// AuthToken: "secret",   // required when the server has -api-key set
     	})
     	if err != nil {
     		log.Fatal(err)
