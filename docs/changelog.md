@@ -54,9 +54,9 @@ or `EfSearch` at zero, even though `Config.M` documents "default 16" and the
 HTTP and Python layers fill exactly those. The same create therefore succeeded
 over the wire and failed from the Go library — including the quickstart's
 embedded example. The engine now fills the standard 16 / 200 / 64 when they are
-left zero (or any non-positive value), matching the other entry points. Only the HNSW (default) index type
-is affected; IVF still requires and validates its parameters, and
-`Config.Validate()` is unchanged.
+left zero (or any non-positive value), matching the other entry points. Only
+the HNSW (default) index type is affected; IVF still requires and validates its
+parameters, and `Config.Validate()` is unchanged.
 
 ### The MCP server explains itself to the agent
 
