@@ -32,7 +32,7 @@ from __future__ import annotations
 import socket
 import struct
 import threading
-from typing import List, Optional, Union
+from typing import Any, Dict, List, Optional, Sequence, Union
 
 from . import _vecwire
 from .client import RostamError

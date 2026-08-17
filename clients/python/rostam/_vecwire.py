@@ -76,9 +76,11 @@ def _encode_insert_like(op_flag_prefix: bool, collection: str, id: int, vec: Vec
     if ttl_ms > 0:
         flags |= _F_TTL
     # upsert folds content into the metadata JSON under $content
+    if metadata and "$content" in metadata:
+        raise ValueError("metadata key '$content' is reserved")
     meta_obj = dict(encode_metadata(metadata or {})) if metadata else {}
     if content is not None:
-        meta_obj = {"$content": {"kind": "string", "str": content}, **meta_obj}
+        meta_obj["$content"] = {"kind": "string", "str": content}
     has_meta = bool(meta_obj)
     if has_meta:
         flags |= _F_META
@@ -97,8 +99,10 @@ def _encode_insert_like(op_flag_prefix: bool, collection: str, id: int, vec: Vec
     if sparse:
         idx = list(sparse["indices"])
         val = list(sparse["values"])
+        if len(idx) != len(val):
+            raise ValueError("sparse indices and values must have the same length")
         out += struct.pack(">I", len(idx))
-        for i, v in zip(idx, val):
+        for i, v in zip(idx, val, strict=True):
             out += struct.pack(">I", i) + struct.pack(">f", v)
     return bytes(out)
 

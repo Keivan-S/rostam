@@ -56,7 +56,7 @@ transport for vector operations. The new `Rostam` client speaks that protocol
 directly, standard library only:
 
 ```python
-from rostam import Rostam
+from rostam import Rostam, filters
 
 r = Rostam("127.0.0.1", 7000)          # the server's -tcp port
 

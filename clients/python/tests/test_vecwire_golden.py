@@ -104,5 +104,23 @@ class VecwireGoldenTest(unittest.TestCase):
                          "metadata JSON is not equivalent to Go's")
 
 
+class VecwireGuardTest(unittest.TestCase):
+    def test_reserved_content_key_rejected(self):
+        # $content is how upsert folds the content string into the metadata JSON;
+        # letting a caller set it would silently override (or forge) content.
+        with self.assertRaises(ValueError):
+            w.encode_upsert_args("docs", 1, _VEC, content="hi",
+                                 metadata={"$content": "sneaky"})
+        with self.assertRaises(ValueError):
+            w.encode_insert_args("docs", 1, _VEC, metadata={"$content": "sneaky"})
+
+    def test_sparse_length_mismatch_rejected(self):
+        # Unequal indices/values would write a count for the longer list but
+        # zip only the shorter — a malformed, truncated binary payload.
+        with self.assertRaises(ValueError):
+            w.encode_insert_args("docs", 1, _VEC,
+                                 sparse={"indices": [1, 2, 3], "values": [0.5, 0.5]})
+
+
 if __name__ == "__main__":
     unittest.main()
