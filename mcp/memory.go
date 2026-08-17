@@ -254,7 +254,7 @@ type memoryHit struct {
 func (s *Server) registerMemoryTools() {
 	s.register(toolDef{
 		Name:        "remember",
-		Description: `Store a fact in persistent memory for later recall. Store ONE self-contained, durable fact per call (a decision, gotcha, command, or finding), phrased so it stands alone when recalled later — not transient chatter, and never secrets. Pass namespace = the project directory name so facts stay project-scoped.`,
+		Description: `Store a fact in persistent memory for later recall. Store ONE self-contained, durable fact per call (a decision, gotcha, command, or finding), phrased so it stands alone when recalled later — not transient chatter, and never secrets. Pass namespace = the project directory name so facts stay project-scoped. Pass a stable key for live/in-flight state (e.g. a PR's status) so re-remembering the same key REPLACES the prior entry instead of piling up snapshots; omit key for durable one-off facts.`,
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
