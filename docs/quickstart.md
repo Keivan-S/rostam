@@ -40,14 +40,18 @@ runtime dependencies.
     For anything beyond local use, mount a secret or use your orchestrator's
     secret store.
 
-    The image serves **HTTP only** — its default command is
-    `-http 0.0.0.0:8080` and only 8080 is exposed. To also speak the binary TCP
-    protocol, override the command and publish the port:
+    The default command serves **both** REST (`8080`) and the binary TCP
+    protocol (`7000`) — publish only the ports you use. The command above maps
+    REST; add TCP for the Go client, which speaks only the binary protocol:
 
     ```sh
-    docker run -p 8080:8080 -p 8081:8081 -e ROSTAM_API_KEY=secret \
-      ghcr.io/rostamlabs/rostam -http 0.0.0.0:8080 -tcp 0.0.0.0:8081
+    docker run -p 8080:8080 -p 7000:7000 -e ROSTAM_API_KEY=secret \
+      ghcr.io/rostamlabs/rostam
     ```
+
+    An unpublished listener is unreachable from outside the container, and the
+    token guards every transport identically — so publishing `7000` is no less
+    safe than `8080`. For gRPC, add `-grpc 0.0.0.0:9090` and `-p 9090:9090`.
 
 === "Go"
 
@@ -70,7 +74,7 @@ gRPC (`-grpc`), and a compact binary TCP protocol (`-tcp`). Start it with REST
 and TCP on loopback, persisting to `./data`:
 
 ```sh
-rostam-server -http 127.0.0.1:8080 -tcp 127.0.0.1:8081 -data ./data
+rostam-server -http 127.0.0.1:8080 -tcp 127.0.0.1:7000 -data ./data
 ```
 
 !!! note "Non-loopback binds require authentication"
@@ -160,10 +164,11 @@ Against the container, authenticate every call: add
     func main() {
     	ctx := context.Background()
 
-    	// The -tcp port from "Run it" above, not -http. The container does not
-    	// serve TCP unless you override its command as shown in Install.
+    	// The -tcp port, not -http: the Go remote client speaks the binary
+    	// protocol only. The Docker image serves this port too — publish it with
+    	// -p 7000:7000 (see the Docker tab in Install).
     	store, err := rostam.NewClient(rostam.ClientConfig{
-    		Servers: []string{"127.0.0.1:8081"},
+    		Servers: []string{"127.0.0.1:7000"},
     	})
     	if err != nil {
     		log.Fatal(err)

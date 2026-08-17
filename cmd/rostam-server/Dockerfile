@@ -18,18 +18,27 @@ USER rostam
 # the data dir (empty data dir → relative to CWD), so CWD must be writable by
 # the rostam user even in the in-memory default.
 WORKDIR /data
-EXPOSE 8080
+# 8080 = REST, 7000 = binary TCP. Both are only DOCUMENTED here; neither is
+# reachable until you publish it with -p. TCP is bound by default because the Go
+# remote client (rostam.NewClient) speaks only the binary protocol — without it,
+# a Go service could not reach the container without overriding the command.
+EXPOSE 8080 7000
 # Single-node, in-memory by default (fast HNSW, no disk). Override the flags to
-# enable persistence / mmap (-persistent-vectors -cluster ... -data /data) or
-# other transports (-grpc :9090 -tcp :7000).
+# enable persistence / mmap (-persistent-vectors -cluster ... -data /data) or to
+# add gRPC (-grpc :9090).
 #
 # AUTHENTICATION IS REQUIRED. The default CMD binds 0.0.0.0, which the server
 # refuses to serve unauthenticated, so pass a key:
 #
-#     docker run -p 8080:8080 -e ROSTAM_API_KEY=<token> rostam-server:latest
+#     docker run -p 8080:8080 -e ROSTAM_API_KEY=<token> rostam-server:latest   # REST only
+#     docker run -p 8080:8080 -p 7000:7000 -e ROSTAM_API_KEY=<token> ...        # + Go/TCP clients
+#
+# The token guards every transport identically, so publishing 7000 is no less
+# safe than 8080. Publish only the ports you use: the unpublished listener is
+# unreachable from outside the container.
 #
 # ROSTAM_API_KEY is read instead of -api-key so the secret never appears in the
 # process table or in `docker inspect`'s Cmd. For a deliberately open dev
 # container, append -insecure to the command instead.
 ENTRYPOINT ["rostam-server"]
-CMD ["-http", "0.0.0.0:8080"]
+CMD ["-http", "0.0.0.0:8080", "-tcp", "0.0.0.0:7000"]
