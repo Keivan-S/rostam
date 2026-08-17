@@ -243,6 +243,9 @@ type memoryHit struct {
 	ID       uint64         `json:"id"`
 	Content  string         `json:"content"`
 	Score    float32        `json:"score"`
+	Key      string         `json:"key,omitempty"`
+	Created  int64          `json:"created,omitempty"`
+	Updated  int64          `json:"updated,omitempty"`
 	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
@@ -460,7 +463,7 @@ func (s *Server) recallBM25(ctx context.Context, query string, k int, f rostam.V
 	}
 	hits := make([]memoryHit, len(docs))
 	for i, d := range docs {
-		hits[i] = memoryHit{ID: d.ID, Content: d.Content, Score: d.Score, Metadata: metadataToJSON(stripReservedMetadata(d.Metadata))}
+		hits[i] = toMemoryHit(d.ID, d.Content, d.Score, d.Metadata)
 	}
 	return map[string]any{"hits": hits}, nil
 }
@@ -486,28 +489,85 @@ func (s *Server) recallHybrid(ctx context.Context, query string, k int, f rostam
 	}
 	hits := make([]memoryHit, len(docs))
 	for i, d := range docs {
-		delete(d.Metadata, nsField)
-		delete(d.Metadata, createdField)
-		hits[i] = memoryHit{ID: d.ID, Content: d.Content, Score: d.Score, Metadata: d.Metadata}
+		hits[i] = toMemoryHitJSON(d.ID, d.Content, d.Score, d.Metadata)
 	}
 	return map[string]any{"hits": hits}, nil
 }
 
+// reservedMetadataFields lists every metadata field the memory subsystem
+// owns for its own bookkeeping. Callers of remember/recall never see these
+// directly; toMemoryHit/toMemoryHitJSON strip them from returned metadata
+// after lifting key/created/updated into memoryHit's typed columns.
+var reservedMetadataFields = [...]string{nsField, createdField, keyField, updatedField}
+
 // stripReservedMetadata removes the memory subsystem's own bookkeeping
-// fields (namespace, creation time) before metadata is handed back to a
-// tool caller. $content is stripped separately by metadataToJSON.
+// fields (namespace, key, creation/update time) before metadata is handed
+// back to a tool caller. $content is stripped separately by metadataToJSON.
 func stripReservedMetadata(md rostam.VectorMetadata) rostam.VectorMetadata {
 	if len(md) == 0 {
 		return md
 	}
 	out := make(rostam.VectorMetadata, len(md))
 	for k, v := range md {
-		if k == nsField || k == createdField {
+		if isReservedField(k) {
 			continue
 		}
 		out[k] = v
 	}
 	return out
+}
+
+func isReservedField(k string) bool {
+	for _, r := range reservedMetadataFields {
+		if k == r {
+			return true
+		}
+	}
+	return false
+}
+
+// toMemoryHit builds a memoryHit from a raw doc, lifting the reserved key /
+// created / updated fields into typed columns and stripping ALL reserved
+// fields (__ns, __created_unix, __updated_unix, __key) from the returned
+// metadata. Used by recallBM25 and handleListMemories, whose docs carry
+// metadata as rostam.VectorMetadata straight from the engine.
+func toMemoryHit(id uint64, content string, score float32, md rostam.VectorMetadata) memoryHit {
+	hit := memoryHit{ID: id, Content: content, Score: score}
+	if v, ok := md[keyField]; ok && v.Kind == vector.ValueString {
+		hit.Key = v.Str
+	}
+	if v, ok := md[createdField]; ok && v.Kind == vector.ValueInt {
+		hit.Created = v.Int
+	}
+	if v, ok := md[updatedField]; ok && v.Kind == vector.ValueInt {
+		hit.Updated = v.Int
+	}
+	hit.Metadata = metadataToJSON(stripReservedMetadata(md))
+	return hit
+}
+
+// toMemoryHitJSON is toMemoryHit's counterpart for recallHybrid, whose docs
+// arrive through the shared hybridDocs helper (db.go) with metadata already
+// converted to JSON-friendly map[string]any (via metadataToJSON) rather than
+// rostam.VectorMetadata — hybridDocs is collection-agnostic and shared with
+// the generic search tool, which wants that shape. It applies the same
+// key/created/updated extraction and reserved-field strip to that shape.
+func toMemoryHitJSON(id uint64, content string, score float32, md map[string]any) memoryHit {
+	hit := memoryHit{ID: id, Content: content, Score: score}
+	if v, ok := md[keyField].(string); ok {
+		hit.Key = v
+	}
+	if v, ok := md[createdField].(int64); ok {
+		hit.Created = v
+	}
+	if v, ok := md[updatedField].(int64); ok {
+		hit.Updated = v
+	}
+	for _, r := range reservedMetadataFields {
+		delete(md, r)
+	}
+	hit.Metadata = md
+	return hit
 }
 
 // forgetArgs is the forget tool's decoded input.
@@ -612,7 +672,7 @@ func (s *Server) handleListMemories(ctx context.Context, raw json.RawMessage) (a
 	}
 	memories := make([]memoryHit, len(docs))
 	for i, d := range docs {
-		memories[i] = memoryHit{ID: d.ID, Content: d.Content, Metadata: metadataToJSON(stripReservedMetadata(d.Metadata))}
+		memories[i] = toMemoryHit(d.ID, d.Content, d.Score, d.Metadata)
 	}
 	return map[string]any{"memories": memories, "next_cursor": cursor}, nil
 }

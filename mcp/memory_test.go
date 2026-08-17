@@ -170,6 +170,88 @@ func TestListMemoriesResponseHasNoDistanceKey(t *testing.T) {
 	}
 }
 
+// memoryHitOut mirrors memoryHit's wire shape for decoding recall/list
+// responses in tests.
+type memoryHitOut struct {
+	ID       uint64         `json:"id"`
+	Content  string         `json:"content"`
+	Score    float32        `json:"score"`
+	Key      string         `json:"key"`
+	Created  int64          `json:"created"`
+	Updated  int64          `json:"updated"`
+	Metadata map[string]any `json:"metadata"`
+}
+
+// assertKeyAndFreshness checks the surfaced Key/Created/Updated columns and
+// that none of the reserved metadata fields leaked into Metadata.
+func assertKeyAndFreshness(t *testing.T, label string, h memoryHitOut, wantKey string) {
+	t.Helper()
+	if h.Key != wantKey {
+		t.Fatalf("%s: Key = %q, want %q: %+v", label, h.Key, wantKey, h)
+	}
+	if h.Created == 0 {
+		t.Fatalf("%s: Created not surfaced: %+v", label, h)
+	}
+	if h.Updated == 0 {
+		t.Fatalf("%s: Updated not surfaced: %+v", label, h)
+	}
+	for _, reserved := range []string{nsField, createdField, updatedField, keyField} {
+		if _, ok := h.Metadata[reserved]; ok {
+			t.Fatalf("%s: reserved field %q leaked into metadata: %+v", label, reserved, h.Metadata)
+		}
+	}
+}
+
+// TestRecallAndListSurfaceKeyAndFreshness covers list_memories and recall's
+// BM25 path (no embedder configured). See
+// TestRecallHybridSurfacesKeyAndFreshness for the dense+BM25 fusion path,
+// which goes through a separate code path (recallHybrid/hybridDocs) with a
+// different metadata shape at the call site.
+func TestRecallAndListSurfaceKeyAndFreshness(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t)})
+	c.initialize()
+	c.callTool("remember", map[string]any{"content": "epoll loop count", "namespace": "proj", "key": "note1"}, nil, false)
+
+	var page struct {
+		Memories []memoryHitOut `json:"memories"`
+	}
+	c.callTool("list_memories", map[string]any{"namespace": "proj"}, &page, false)
+	if len(page.Memories) != 1 {
+		t.Fatalf("list must return 1 memory: %+v", page.Memories)
+	}
+	assertKeyAndFreshness(t, "list_memories", page.Memories[0], "note1")
+
+	var rec struct {
+		Hits []memoryHitOut `json:"hits"`
+	}
+	c.callTool("recall", map[string]any{"query": "epoll", "namespace": "proj"}, &rec, false)
+	if len(rec.Hits) != 1 {
+		t.Fatalf("recall must return 1 hit: %+v", rec.Hits)
+	}
+	assertKeyAndFreshness(t, "recall (BM25)", rec.Hits[0], "note1")
+}
+
+// TestRecallHybridSurfacesKeyAndFreshness is
+// TestRecallAndListSurfaceKeyAndFreshness's counterpart for the hybrid
+// (dense+BM25 fusion) recall path: recallHybrid goes through the shared
+// hybridDocs helper (db.go), whose docs already carry JSON-converted
+// metadata (map[string]any) rather than rostam.VectorMetadata, so it is
+// exercised separately from the BM25 path above.
+func TestRecallHybridSurfacesKeyAndFreshness(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t), Embedder: fakeEmbedder{}})
+	c.initialize()
+	c.callTool("remember", map[string]any{"content": "a: epoll loop count", "namespace": "proj", "key": "note1"}, nil, false)
+
+	var rec struct {
+		Hits []memoryHitOut `json:"hits"`
+	}
+	c.callTool("recall", map[string]any{"query": "a unrelated words", "namespace": "proj", "k": 1}, &rec, false)
+	if len(rec.Hits) != 1 {
+		t.Fatalf("hybrid recall must return 1 hit: %+v", rec.Hits)
+	}
+	assertKeyAndFreshness(t, "recall (hybrid)", rec.Hits[0], "note1")
+}
+
 // TestForgetDeletesAndEmptiedNamespaceDisappears: list_namespaces reports the
 // namespaces the live memories carry, so deleting a namespace's last memory is
 // the whole of "removing" it. There is no registry to fall out of step.
