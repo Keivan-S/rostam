@@ -47,6 +47,20 @@ the user to know which kind of question they are asking.
 `-no-hybrid` restores pure dense KNN. Note the returned `Score` is the fusion
 score, not the original per-lane score — they are not comparable across modes.
 
+### The container serves the Go client out of the box
+
+The published image bound only REST (`:8080`), but the Go remote client
+(`rostam.NewClient`) speaks the binary TCP protocol and nothing else — so a Go
+service could not reach the container without overriding its command. The
+default now binds REST **and** TCP (`:7000`) and documents both with `EXPOSE`.
+
+Nothing new is published to the host by default: a bound port is not a
+*published* one, so `docker run -p 8080:8080` still maps only REST to the host,
+and a Go deployment adds `-p 7000:7000`. The token guards every transport identically — the startup
+gate refuses an unauthenticated non-loopback bind on any of them — so
+publishing `7000` is no less safe than `8080`. gRPC stays opt-in
+(`-grpc 0.0.0.0:9090`).
+
 ### The Python client reaches the Query API
 
 `rostam-client` gains `query()`, `recommend()` and `discover()`. Recommend and
