@@ -95,6 +95,24 @@ The doctrine is short and deliberate: recall at the start of a task before
 re-exploring a codebase, namespace per project rather than `default`, one
 self-contained durable fact per `remember`, and never store secrets.
 
+### Memory keeps one entry per key for live state
+
+`remember` now takes an optional `key`. Without one, nothing changes — a memory
+is still identified by its `(namespace, content)`, so re-remembering an edited
+fact leaves the old version behind. With a `key`, the memory is identified by
+`(namespace, key)` instead, so re-remembering the same key **replaces** the
+prior entry in place. That makes it the right shape for live, in-flight state —
+a PR's status, what you're mid-task on — which otherwise piles up as stale
+snapshots that a later agent can't tell apart from the current one.
+
+`recall` and `list_memories` now surface each memory's `key` and its `created`
+and `updated` times, so a reader can spot a keyed live-state entry and judge its
+freshness at a glance; a keyed memory keeps its original `created` across
+updates while `updated` moves to now. `forget` can delete by `key` as well as by
+id (pass `namespace` + `keys`). The MCP `instructions` and the `remember`
+description now teach the pattern: use a key for live state, omit it for durable
+facts.
+
 ### Fixed: the MCP server reported the wrong version
 
 `initialize` answered with a hardcoded `0.1.0`, so a v0.2.0 binary introduced

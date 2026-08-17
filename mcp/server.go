@@ -28,7 +28,8 @@ const instructions = `Rostam is persistent, namespaced memory for carrying facts
 - When you learn a durable fact (a decision, a gotcha, a build/test command, an investigation result), call remember — one self-contained fact per call, phrased so it still makes sense when recalled later.
 - Prefer recall over re-reading a large file to answer "what did we already establish about X".
 - Never store secrets or credentials.
-- Use list_namespaces and list_memories to orient when unsure what's stored.`
+- Use list_namespaces and list_memories to orient when unsure what's stored.
+- For live/in-flight state (a PR's status, what you're mid-task on), pass a stable "key" to remember (e.g. "pr-status:<branch>") so each update REPLACES the prior entry instead of piling up stale snapshots; recall and list show each memory's key and its updated time. Omit key for durable one-off facts.`
 
 // Config configures a Server.
 type Config struct {
