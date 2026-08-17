@@ -34,7 +34,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("connect: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	rec := postrec.NewRecommender(store, embedder)
 

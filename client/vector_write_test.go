@@ -76,3 +76,19 @@ func TestUpsertBatch(t *testing.T) {
 		t.Fatalf("UpsertBatch errors: %+v", errs)
 	}
 }
+
+func TestInsertRejectsContent(t *testing.T) {
+	col, cleanup := mustCollection(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// The insert wire op carries no content field, so Insert must refuse it
+	// rather than silently drop it.
+	if err := col.Insert(ctx, WriteRequest{ID: 1, Vector: []float32{1, 0, 0, 0}, Content: "x"}); err == nil {
+		t.Fatal("Insert with Content = nil error, want rejection")
+	}
+	// A plain Insert (no content) still works.
+	if err := col.Insert(ctx, WriteRequest{ID: 2, Vector: []float32{0, 1, 0, 0}}); err != nil {
+		t.Fatalf("Insert without content: %v", err)
+	}
+}

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+
 package postrec
 
 import (
@@ -47,7 +48,7 @@ func (e *OpenAIEmbedder) Embed(ctx context.Context, texts []string) ([][]float32
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("openai embeddings: status %d: %s", resp.StatusCode, raw)

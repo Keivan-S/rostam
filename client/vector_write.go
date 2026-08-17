@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
+
 package client
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/rostamlabs/rostam/ops"
@@ -39,6 +41,11 @@ func (col *Collection) Upsert(ctx context.Context, req WriteRequest) error {
 // Insert writes req only if no point exists at req.ID (subject to the same
 // CAS semantics as Upsert when req.HasExpectedVersion is set).
 func (col *Collection) Insert(ctx context.Context, req WriteRequest) error {
+	// The insert wire op carries no content field; refuse rather than silently
+	// drop it. Callers needing the BM25 content lane must use Upsert.
+	if req.Content != "" {
+		return errors.New("client: Insert does not support Content; use Upsert to store content")
+	}
 	args := ops.EncodeVectorInsertArgsCASKeyTTL(
 		col.name, req.ID, req.Vector, req.TTL, req.Metadata,
 		req.Sparse, req.ExpectedVersion, req.HasExpectedVersion, req.KeyTTLMs)
