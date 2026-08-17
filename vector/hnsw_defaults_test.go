@@ -36,6 +36,35 @@ func TestNewCollectionDefaultsHNSWParams(t *testing.T) {
 	}
 }
 
+func TestNewCollectionDefaultsNegativeHNSWParams(t *testing.T) {
+	// applyHNSWDefaults treats non-positive as unset, matching the HTTP layer, so
+	// a negative value becomes the default rather than reaching Validate as
+	// ErrInvalidM. Each field is exercised on its own so a check that defaults
+	// only one of the three cannot pass.
+	cases := []struct {
+		name string
+		cfg  Config
+	}{
+		{"all negative", Config{Dim: 8, Metric: Cosine, M: -1, EfConstruction: -1, EfSearch: -1}},
+		{"only M negative", Config{Dim: 8, Metric: Cosine, M: -5, EfConstruction: 200, EfSearch: 64}},
+		{"only EfConstruction negative", Config{Dim: 8, Metric: Cosine, M: 16, EfConstruction: -5, EfSearch: 64}},
+		{"only EfSearch negative", Config{Dim: 8, Metric: Cosine, M: 16, EfConstruction: 200, EfSearch: -5}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			col, err := NewCollection("docs", tc.cfg)
+			if err != nil {
+				t.Fatalf("NewCollection with a negative param: %v", err)
+			}
+			defer col.Close()
+			if col.cfg.M != 16 || col.cfg.EfConstruction != 200 || col.cfg.EfSearch != 64 {
+				t.Errorf("negative not defaulted: got M=%d efc=%d efs=%d, want 16/200/64",
+					col.cfg.M, col.cfg.EfConstruction, col.cfg.EfSearch)
+			}
+		})
+	}
+}
+
 func TestNewCollectionKeepsExplicitHNSWParams(t *testing.T) {
 	// Explicit values must survive untouched — defaulting only fills zeros.
 	col, err := NewCollection("docs", Config{
