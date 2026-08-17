@@ -58,6 +58,17 @@ search with `(positive, negative)` context pairs and an optional anchor; both
 take an optional metadata `filter`. `query()` is the general form for
 multi-lane fusion or rerank.
 
+### The Go library defaults HNSW parameters
+
+`vector.NewCollection` used to reject a config that left `M`, `EfConstruction`
+or `EfSearch` at zero, even though `Config.M` documents "default 16" and the
+HTTP and Python layers fill exactly those. The same create therefore succeeded
+over the wire and failed from the Go library — including the quickstart's
+embedded example. The engine now fills the standard 16 / 200 / 64 when they are
+left zero (or any non-positive value), matching the other entry points. Only
+the HNSW (default) index type is affected; IVF still requires and validates its
+parameters, and `Config.Validate()` is unchanged.
+
 ### The MCP server explains itself to the agent
 
 Tool schemas say what a tool does; they do not say *when* to reach for it. So an
