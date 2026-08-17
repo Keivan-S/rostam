@@ -877,6 +877,62 @@ func TestRememberKeyedPreservesCreatedTimestamp(t *testing.T) {
 	}
 }
 
+// TestForgetByKeyDeletesKeyedMemory: forget accepts keys as an alternative to
+// ids, resolving each (namespace, key) pair to the point the keyed remember
+// landed on (memoryKeyID) and deleting it — a caller holding a stable key
+// doesn't have to remember or look up its numeric id first.
+func TestForgetByKeyDeletesKeyedMemory(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t)})
+	c.initialize()
+	c.callTool("remember", map[string]any{"content": "state", "namespace": "proj", "key": "pr-status"}, nil, false)
+
+	var fg struct {
+		Deleted []uint64 `json:"deleted"`
+	}
+	c.callTool("forget", map[string]any{"namespace": "proj", "keys": []string{"pr-status"}}, &fg, false)
+	if len(fg.Deleted) != 1 {
+		t.Fatalf("forget by key should delete 1, got %+v", fg.Deleted)
+	}
+
+	var page struct {
+		Memories []struct{ ID uint64 } `json:"memories"`
+	}
+	c.callTool("list_memories", map[string]any{"namespace": "proj"}, &page, false)
+	if len(page.Memories) != 0 {
+		t.Fatalf("memory not gone after forget-by-key: %d remain", len(page.Memories))
+	}
+}
+
+// TestForgetByIDStillWorks guards that adding key-based forgetting didn't
+// disturb the existing id-only path.
+func TestForgetByIDStillWorks(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t)})
+	c.initialize()
+	var r struct {
+		ID uint64 `json:"id"`
+	}
+	c.callTool("remember", map[string]any{"content": "a fact", "namespace": "proj"}, &r, false)
+
+	var fg struct {
+		Deleted []uint64 `json:"deleted"`
+	}
+	c.callTool("forget", map[string]any{"ids": []uint64{r.ID}}, &fg, false)
+	if len(fg.Deleted) != 1 || fg.Deleted[0] != r.ID {
+		t.Fatalf("expected deleted=[%d], got %+v", r.ID, fg.Deleted)
+	}
+}
+
+// TestForgetRequiresIdsOrKeys: the old "ids is required" check must now allow
+// keys alone, but still reject a call carrying neither.
+func TestForgetRequiresIdsOrKeys(t *testing.T) {
+	c := startServer(t, Config{Store: newHeapStore(t)})
+	c.initialize()
+	msg := c.callTool("forget", map[string]any{}, nil, true)
+	if !strings.Contains(msg, "ids") || !strings.Contains(msg, "keys") {
+		t.Fatalf("error should mention both ids and keys, got %q", msg)
+	}
+}
+
 func TestEmbedderIdentityMismatchFailsStartup(t *testing.T) {
 	st := newHeapStore(t)
 	c := startServer(t, Config{Store: st}) // BM25-only creates the collection

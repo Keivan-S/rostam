@@ -284,7 +284,7 @@ func (s *Server) registerMemoryTools() {
 	})
 	s.register(toolDef{
 		Name:        "forget",
-		Description: `Delete stored memories by id. Returns {"deleted":[...],"missing":[...],"errors":[...]}; a per-id delete failure does not abort the rest of the batch.`,
+		Description: `Delete stored memories by id and/or by their stable key (namespace + key resolves to the memory a keyed remember landed on). ids and keys may be combined in one call. Returns {"deleted":[...],"missing":[...],"errors":[...]}; a per-id delete failure does not abort the rest of the batch.`,
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -293,8 +293,13 @@ func (s *Server) registerMemoryTools() {
 					"items":       map[string]any{"type": "integer"},
 					"description": "ids of the memories to delete",
 				},
+				"namespace": map[string]any{"type": "string", "description": `namespace the keys below belong to (default "default")`},
+				"keys": map[string]any{
+					"type":        "array",
+					"items":       map[string]any{"type": "string"},
+					"description": "stable keys of keyed memories to delete, resolved within namespace",
+				},
 			},
-			"required": []any{"ids"},
 		},
 		Handler: s.handleForget,
 	})
@@ -572,13 +577,19 @@ func toMemoryHitJSON(id uint64, content string, score float32, md map[string]any
 
 // forgetArgs is the forget tool's decoded input.
 type forgetArgs struct {
-	IDs []uint64 `json:"ids"`
+	IDs       []uint64 `json:"ids"`
+	Namespace string   `json:"namespace"`
+	Keys      []string `json:"keys"`
 }
 
-// handleForget deletes memories by id. Ids not found in the collection are
-// reported back as "missing" rather than erroring, so a caller can forget a
-// batch without first checking which ids still exist; per-id failures land in
-// "errors" for the same reason (see forgetResult).
+// handleForget deletes memories by id and/or by stable key. Each key in Keys
+// is resolved to the id a keyed remember would have landed on
+// (memoryKeyID(ns, key)) and folded into the same id set as IDs, so from here
+// on a key-derived id and a caller-supplied id are handled identically. Ids
+// not found in the collection are reported back as "missing" rather than
+// erroring, so a caller can forget a batch without first checking which ids
+// still exist; per-id failures land in "errors" for the same reason (see
+// forgetResult).
 //
 // There is no namespace bookkeeping to do afterwards: a namespace is defined
 // by the memories carrying it (see handleListNamespaces), so deleting the last
@@ -588,15 +599,28 @@ func (s *Server) handleForget(ctx context.Context, raw json.RawMessage) (any, er
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return nil, fmt.Errorf("mcp: bad forget args: %w", err)
 	}
-	if len(args.IDs) == 0 {
-		return nil, fmt.Errorf("mcp: forget: ids is required and must be non-empty")
+	if len(args.IDs) == 0 && len(args.Keys) == 0 {
+		return nil, fmt.Errorf("mcp: forget: ids or keys is required")
+	}
+
+	ids := args.IDs
+	if len(args.Keys) > 0 {
+		ns := args.Namespace
+		if ns == "" {
+			ns = defaultNS
+		}
+		ids = make([]uint64, 0, len(args.IDs)+len(args.Keys))
+		ids = append(ids, args.IDs...)
+		for _, key := range args.Keys {
+			ids = append(ids, memoryKeyID(ns, key))
+		}
 	}
 
 	if err := s.ensureMemory(ctx); err != nil {
 		return nil, err
 	}
 
-	points, missing, err := s.store.VectorGetBatch(ctx, memCollection, args.IDs, false, true)
+	points, missing, err := s.store.VectorGetBatch(ctx, memCollection, ids, false, true)
 	if err != nil {
 		return nil, fmt.Errorf("mcp: forget: %w", err)
 	}
