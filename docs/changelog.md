@@ -47,6 +47,28 @@ the user to know which kind of question they are asking.
 `-no-hybrid` restores pure dense KNN. Note the returned `Score` is the fusion
 score, not the original per-lane score — they are not comparable across modes.
 
+### KV from Python, over the native protocol
+
+The key-value store is not on the REST API — it lives only on the binary TCP
+protocol — so it had been unreachable from Python entirely. The new `RostamKV`
+client speaks that protocol directly (standard library only) and covers the five
+built-in ops (`get`, `put`, `delete`, `incr`, `expire`), plus a `ping` heartbeat:
+
+```python
+from rostam import RostamKV
+
+kv = RostamKV("127.0.0.1", 7000)   # the server's -tcp port
+kv.put("user:42", b'{"coins":100}', ttl_ms=300_000)
+kv.get("user:42")                  # bytes, or None on miss
+kv.incr("views:42", 1)             # atomic; missing key counts as 0
+```
+
+Keys and values are `str` or `bytes`; `auth_token=` rides the protocol-v2 frame
+on every request when the server requires one. Custom ops and WASM procedures
+stay Go-only (they need per-op argument encoders). This pairs with the container
+now serving the TCP port by default.
+
+
 ### The container serves the Go client out of the box
 
 The published image bound only REST (`:8080`), but the Go remote client

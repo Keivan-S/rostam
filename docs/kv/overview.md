@@ -5,25 +5,62 @@ TTL, optional mmap persistence, and optional per-shard Raft replication. You use
 it through the `rostam.Store` facade (any backend) or, for a standalone
 in-process cache, through `cache.Cache` directly.
 
+Unlike the vector API, KV is **not on the REST endpoint** — it lives only on the
+binary TCP protocol, because it is built for sub-microsecond operations an HTTP
+round trip would defeat. In Go that is the `Store` facade below; from Python it
+is the native `RostamKV` client, which speaks the same protocol over a socket.
+
 ## Core operations
 
-```go
-_ = store.Put(ctx, []byte("user:42"), payload, 5*time.Minute) // ttl 0 = no expiry
-v, err := store.Get(ctx, []byte("user:42"))                   // rostam.ErrNotFound on miss/expiry
-existed, err := store.Del(ctx, []byte("user:42"))
-```
+=== "Go"
 
-Beyond get/put/del, two built-in atomic ops run server-side through
-`Call` — no read-modify-write race, no extra round trips:
+    ```go
+    payload := []byte(`{"coins":100}`)
+    _ = store.Put(ctx, []byte("user:42"), payload, 5*time.Minute) // ttl 0 = no expiry
+    v, err := store.Get(ctx, []byte("user:42"))                   // rostam.ErrNotFound on miss/expiry
+    existed, err := store.Del(ctx, []byte("user:42"))
+    ```
 
-```go
-// counter += 1, returns the new value as big-endian int64
-res, err := store.Call(ctx, "incr", ops.EncodeIncrArgs([]byte("views:42"), 1))
-n, _ := ops.DecodeIncrResult(res)
+=== "Python"
 
-// refresh a TTL without rewriting the value
-_, err = store.Call(ctx, "expire", ops.EncodeExpireArgs([]byte("user:42"), time.Hour))
-```
+    ```python
+    from rostam import RostamKV
+
+    kv = RostamKV("127.0.0.1", 7000)             # the server's -tcp port
+    kv.put("user:42", b'{"coins":100}', ttl_ms=300_000)   # ttl_ms 0 = no expiry
+    kv.get("user:42")                            # bytes, or None on miss/expiry
+    kv.delete("user:42")                         # -> bool (existed)
+    ```
+
+    Keys and values may be `str` (encoded UTF-8) or `bytes`; reads always return
+    `bytes` (or `None`). Pass `auth_token=` when the server requires one — it
+    rides the protocol-v2 frame on every request.
+
+Beyond get/put/del, two built-in atomic ops run server-side — no
+read-modify-write race, no extra round trips:
+
+=== "Go"
+
+    ```go
+    // counter += 1, returns the new value as big-endian int64
+    res, err := store.Call(ctx, "incr", ops.EncodeIncrArgs([]byte("views:42"), 1))
+    n, _ := ops.DecodeIncrResult(res)
+
+    // refresh a TTL without rewriting the value
+    _, err = store.Call(ctx, "expire", ops.EncodeExpireArgs([]byte("user:42"), time.Hour))
+    ```
+
+=== "Python"
+
+    ```python
+    kv.incr("views:42", 1)          # atomic add, returns the new int (missing = 0)
+    kv.expire("user:42", 3_600_000) # refresh the TTL without rewriting the value
+    ```
+
+The Python client covers the five built-in ops (`get`, `put`, `delete`, `incr`,
+`expire`). [Custom ops](custom-ops.md) and [WASM procedures](wasm.md) are
+dispatched through Go's `Call(ctx, name, args)` with op-specific argument
+encoders, and are Go-only for now.
 
 `Call(ctx, name, args)` dispatches any registered op by name. Read-only ops
 execute locally on the routed shard; read-write ops serialize through the

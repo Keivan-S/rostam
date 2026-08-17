@@ -8,9 +8,11 @@ extra.
 from . import filters
 from .client import Document, Group, MultiResult, Point, RostamClient, RostamError, ScrollPage, SearchResult
 from .embeddings import Embedder, FunctionEmbedder, OpenAIEmbedder, TextStore
+from .kv import RostamKV
 
 __all__ = [
     "RostamClient",
+    "RostamKV",
     "RostamError",
     "SearchResult",
     "Document",
