@@ -47,26 +47,41 @@ the user to know which kind of question they are asking.
 `-no-hybrid` restores pure dense KNN. Note the returned `Score` is the fusion
 score, not the original per-lane score — they are not comparable across modes.
 
-### KV from Python, over the native protocol
+### A native-protocol Python client for KV and the vector database
 
-The key-value store is not on the REST API — it lives only on the binary TCP
-protocol — so it had been unreachable from Python entirely. The new `RostamKV`
-client speaks that protocol directly (standard library only) and covers the five
-built-in ops (`get`, `put`, `delete`, `incr`, `expire`), plus a `ping` heartbeat:
+Two things reachable from Go's remote client but not Python have both landed:
+the key-value store (never on REST — it lives only on the binary TCP protocol,
+built for sub-microsecond ops an HTTP round trip would defeat) and the same
+transport for vector operations. The new `Rostam` client speaks that protocol
+directly, standard library only:
 
 ```python
-from rostam import RostamKV
+from rostam import Rostam, filters
 
-kv = RostamKV("127.0.0.1", 7000)   # the server's -tcp port
-kv.put("user:42", b'{"coins":100}', ttl_ms=300_000)
-kv.get("user:42")                  # bytes, or None on miss
-kv.incr("views:42", 1)             # atomic; missing key counts as 0
+r = Rostam("127.0.0.1", 7000)          # the server's -tcp port
+
+# key-value
+r.put("user:42", b'{"coins":100}', ttl_ms=300_000)
+r.incr("views:42", 1)                  # atomic; missing key counts as 0
+
+# vector database, same connection
+r.vector.create_collection("docs", dim=768, metric="cosine")
+r.vector.upsert("docs", 1, embedding, content="hello", metadata={"tenant": "acme"})
+r.vector.search("docs", query, k=10, filter=filters.eq("tenant", "acme"))
 ```
 
-Keys and values are `str` or `bytes`; `auth_token=` rides the protocol-v2 frame
-on every request when the server requires one. Custom ops and WASM procedures
-stay Go-only (they need per-op argument encoders). This pairs with the container
-now serving the TCP port by default.
+KV covers `get`/`put`/`delete`/`incr`/`expire` (plus a `ping` heartbeat);
+`.vector` covers `create_collection`, `upsert`, `insert`, `search`, `get`,
+`delete` and `exists`. `auth_token=` rides the protocol-v2 frame when the server
+requires one.
+`RostamKV` remains as an alias for the KV-focused name.
+
+The vector arg layouts — including create_collection's fragile config trailer —
+are differential-tested byte-for-byte against the Go encoders (a Go oracle emits
+golden hex the Python encoders must reproduce); the JSON-carrying parts
+(metadata, filter, content) round-trip through a real server. Custom ops and
+WASM procedures stay Go-only (per-op encoders). Pairs with the container serving
+the TCP port by default.
 
 
 ### The container serves the Go client out of the box
