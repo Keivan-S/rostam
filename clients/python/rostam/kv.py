@@ -181,23 +181,39 @@ class RostamKV:
             raise RostamError("request frame exceeds the server's frame limit")
         frame = struct.pack(">I", len(body)) + body
 
-        s = self._pool.acquire()
+        # Acquire may connect, and a failed connect raises OSError — convert it to
+        # the client's RostamError contract like every other transport failure.
+        try:
+            s = self._pool.acquire()
+        except OSError as e:
+            raise RostamError(f"connect failed: {e}") from e
+
+        # Send, read, AND fully parse inside the try: a socket is returned to the
+        # pool only after a well-formed response, so a truncated or malformed
+        # frame discards the connection instead of poisoning the next caller.
         try:
             s.sendall(frame)
             body_len = struct.unpack(">I", _recv_exactly(s, 4))[0]
+            # A response body is at least [status u8][payloadLen u32] = 5 bytes and
+            # never larger than a frame. Reject a bogus length before reading it, so
+            # a broken or hostile peer cannot make _recv_exactly buffer unboundedly.
+            if body_len < 5 or body_len > _MAX_FRAME:
+                raise RostamError(f"invalid response frame length {body_len}")
             resp = _recv_exactly(s, body_len)
-        except (OSError, RostamError) as e:
+            status = resp[0]
+            payload_len = struct.unpack(">I", resp[1:5])[0]
+            if 5 + payload_len != body_len:
+                raise RostamError("response payload length does not match frame")
+            payload = resp[5:5 + payload_len]
+        except (OSError, RostamError, struct.error) as e:
             self._pool.discard(s)
             if isinstance(e, RostamError):
                 raise
             raise RostamError(f"transport error: {e}") from e
-        else:
-            self._pool.release(s)
+        # Well-formed response: the connection is healthy even if the op failed
+        # at the application level (StatusError etc.), so keep it pooled.
+        self._pool.release(s)
 
-        # resp = [status u8][payloadLen u32][payload]
-        status = resp[0]
-        payload_len = struct.unpack(">I", resp[1:5])[0]
-        payload = resp[5:5 + payload_len]
         if status == _STATUS_OK:
             return payload
         if status == _STATUS_NOT_FOUND:

@@ -52,13 +52,13 @@ score, not the original per-lane score — they are not comparable across modes.
 The key-value store is not on the REST API — it lives only on the binary TCP
 protocol — so it had been unreachable from Python entirely. The new `RostamKV`
 client speaks that protocol directly (standard library only) and covers the five
-built-in ops:
+built-in ops (`get`, `put`, `delete`, `incr`, `expire`), plus a `ping` heartbeat:
 
 ```python
 from rostam import RostamKV
 
 kv = RostamKV("127.0.0.1", 7000)   # the server's -tcp port
-kv.put("user:42", payload, ttl_ms=300_000)
+kv.put("user:42", b'{"coins":100}', ttl_ms=300_000)
 kv.get("user:42")                  # bytes, or None on miss
 kv.incr("views:42", 1)             # atomic; missing key counts as 0
 ```

@@ -15,6 +15,7 @@ is the native `RostamKV` client, which speaks the same protocol over a socket.
 === "Go"
 
     ```go
+    payload := []byte(`{"coins":100}`)
     _ = store.Put(ctx, []byte("user:42"), payload, 5*time.Minute) // ttl 0 = no expiry
     v, err := store.Get(ctx, []byte("user:42"))                   // rostam.ErrNotFound on miss/expiry
     existed, err := store.Del(ctx, []byte("user:42"))
@@ -26,7 +27,7 @@ is the native `RostamKV` client, which speaks the same protocol over a socket.
     from rostam import RostamKV
 
     kv = RostamKV("127.0.0.1", 7000)             # the server's -tcp port
-    kv.put("user:42", payload, ttl_ms=300_000)   # ttl_ms 0 = no expiry
+    kv.put("user:42", b'{"coins":100}', ttl_ms=300_000)   # ttl_ms 0 = no expiry
     kv.get("user:42")                            # bytes, or None on miss/expiry
     kv.delete("user:42")                         # -> bool (existed)
     ```
