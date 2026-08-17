@@ -28,6 +28,11 @@ canonical list and the JSON/Python names mirror its fields.
       -d '{"name":"docs","config":{"dim":768,"metric":"cosine"}}'
     ```
 
+!!! note "The Go snippets on this page are fragments"
+    They show the call shape, not a runnable program — imports and the
+    `if err != nil` check are omitted for brevity. See the
+    [quickstart](../quickstart.md#your-first-search) for a complete one.
+
 ## Core parameters
 
 | Field | Default | Meaning |
@@ -112,7 +117,8 @@ Set the index type at creation; the search API is the same for all of them.
 
 `index_type` is `"hnsw"` (default), `"ivf"`, `"vamana"`, or `"gpu"`. The
 per-index tuning fields below are set the same way — as `Config` fields (Go),
-JSON config keys (HTTP), or keyword arguments (Python).
+JSON config keys (HTTP), or, where the client exposes them, keyword arguments
+(Python; see the note below for the one exception).
 
 !!! note "IVF tuning is HTTP/Go only from the client"
     The Python client selects `index_type="ivf"` but does not expose
