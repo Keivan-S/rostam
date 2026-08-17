@@ -100,6 +100,43 @@ an ordering, and inventing one leaves `x >= 3 AND x <= 2` matching a NaN row.
     both paths answer the same question. To keep such points matchable, write a
     real sentinel value instead of NaN.
 
+## Building filters from Python
+
+`rostam.filters` has helpers for the operators you reach for most:
+
+```python
+from rostam import RostamClient, filters as f
+
+c = RostamClient("http://localhost:8080")
+query = [0.1, 0.2, 0.3, 0.4]   # your embedding model's output
+
+c.search_docs("docs", query, k=5, filter=f.eq("tenant", "acme"))
+c.search_docs("docs", query, k=5, filter=f.in_("tenant", ["acme", "beta"]))
+c.search_docs("docs", query, k=5,
+              filter=f.and_(f.gte("year", 2021), f.eq("tenant", "beta")))
+```
+
+Helpers exist for `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in_`, `contains`,
+`and_`, `or_` and `not_` — note the trailing underscore on the three that would
+otherwise collide with Python keywords.
+
+**The rest of the operator table has no helper**, including `match`, `regex`,
+`is_empty`, `is_null`, the datetime bounds and the geo predicates. They are not
+out of reach: a filter is just a dict, so spell out the JSON form and pass it
+directly.
+
+```python
+# Continues from the client and `query` above.
+# Full-text match — no helper, so write the wire form.
+c.search_docs("docs", query, k=5, filter={
+    "op": "match", "field": "$content",
+    "value": {"kind": "string", "str": "gamma"},
+})
+```
+
+Note that raw dicts take the **tagged** value encoding shown above; only the
+helpers accept plain Python values.
+
 ## The filter-first planner (why filtered recall doesn't collapse)
 
 Filtered ANN has a classic failure mode: **post-filtering** (search the graph,

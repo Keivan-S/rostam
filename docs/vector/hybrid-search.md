@@ -9,12 +9,27 @@ A sparse vector is `{Indices []uint32, Values []float32}` with strictly
 ascending indices — typically SPLADE/BM25-style term weights. Attach one to a
 point at write time (the `sparse` parameter on insert/upsert), then:
 
-```go
-hits, err := col.HybridSearch(denseQuery, sparseQuery, 10, vector.HybridOpts{
-	Method: vector.FusionRRF, // RRF | Weighted | DBSF
-	Filter: filter,
-})
-```
+=== "Go"
+
+    ```go
+    hits, err := col.HybridSearch(denseQuery, sparseQuery, 10, vector.HybridOpts{
+    	Method: vector.FusionRRF, // RRF | Weighted | DBSF
+    	Filter: filter,
+    })
+    ```
+
+=== "Python"
+
+    ```python
+    # Attach the sparse lane at write time...
+    c.upsert("docs", 1, dense_vec, content="how do i rotate api keys",
+             sparse={"indices": [3, 17], "values": [0.8, 0.4]})
+
+    # ...then query both lanes and fuse.
+    hits = c.hybrid_search("docs", dense_query, k=10,
+                           sparse={"indices": [3, 17], "values": [0.8, 0.4]},
+                           method="rrf")   # "rrf" | "weighted" | "dbsf"
+    ```
 
 Malformed sparse data fails fast: `ErrSparseMismatch` (length mismatch),
 `ErrSparseUnsorted` (indices not strictly ascending).
@@ -47,9 +62,25 @@ the Python client for defaults.)
 The server tokenizes stored content and queries — no sparse encoder needed on
 the client:
 
-```go
-docs, err := col.SearchText("how do i rotate api keys", 10, filter) // BM25 top-k
-```
+=== "Go"
+
+    ```go
+    docs, err := col.SearchText("how do i rotate api keys", 10, filter) // BM25 top-k
+    ```
+
+=== "Python"
+
+    ```python
+    # Pure BM25 — no embedding needed on the client at all.
+    docs = c.search_text("docs", "how do i rotate api keys", k=10)
+
+    # BM25 fused with a dense lane.
+    docs = c.hybrid_text("docs", dense_query, "how do i rotate api keys",
+                         k=10, method="rrf")
+    ```
+
+    Enable the index at creation with `full_text=True`; calling text search
+    without it raises the client's error for `ErrFullTextDisabled`.
 
 Through the store facade / HTTP, `search/text` runs pure BM25 and
 `search/hybrid-text` (Go: `VectorHybridText`) fuses BM25 with a dense lane

@@ -6,6 +6,19 @@ Multi-vector collections take a WAL **or** mmap `Persistent` (mutually
 exclusive; `Persistent` requires a quantization mode); named-vector collections
 take a WAL. Both snapshot like dense collections.
 
+!!! info "Go library and server configuration only"
+
+    Nothing on this page is reachable from the Python client: it has no
+    snapshot, flush, or cold-tier methods.
+
+    Two different things are described below. **Durable storage** is chosen at
+    creation — `-data` on `rostam-server`, `DataDir` on the store, or the
+    persistence fields on `vector.Config` — and then keeps itself up to date
+    with no further calls. **Snapshots, flush and the cold tier are explicit
+    operations**: `Snapshot`, `Restore`, `Flush`, `EvictCollection` and
+    `SweepCold` are calls you make from Go or drive from the server.
+
+
 ## Snapshots
 
 Point-in-time serialization of a collection to any `io.Writer`:
