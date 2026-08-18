@@ -168,7 +168,9 @@ rebalance completes; size the context deadline to your data volume.
 This redistributes the fixed `-shards` groups (key-value **and** vector shards
 alike) across the new membership — a shard gains the new node as a Raft voter,
 waits for it to catch up, then drops departing owners, so a caught-up owner is
-retained at every step and reads and writes never pause. It does **not** change
+retained at every step. Reconfiguration requires no planned downtime, though a
+write can still hit a transient retryable error if a departing owner was the
+shard leader (see [Failure behavior](#failure-behavior)). It does **not** change
 the shard count: `-shards` is fixed for the life of the cluster, so choose it
 with headroom (shards ≫ nodes) if you expect to grow. Changing the *partition
 count* is a per-collection operation (below) and applies to vector collections
