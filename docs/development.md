@@ -24,9 +24,12 @@ CGO_ENABLED=1 go build -tags cuda ./...
 CGO_ENABLED=1 go build -tags localembed ./cmd/rostam-server
 ```
 
-The `localembed` build enables in-process semantic-cache embeddings; see the
-local embeddings section of [`server/mcp.md`](server/mcp.md) for model catalog,
-`ROSTAM_ONNXRUNTIME_LIB`, and first-run download details.
+The `localembed` build enables in-process embeddings: semantic-cache
+embeddings, and — once a model is configured — the generic vector-DB tools
+too (`upsert` auto-embeds `content`; `search` embeds `query_text` in
+`text`/`dense`/`hybrid` mode). See the local embeddings section of
+[`server/mcp.md`](server/mcp.md) for the model catalog, `ROSTAM_ONNXRUNTIME_LIB`,
+and first-run download details.
 
 Without cgo, WASM stored procedures are stubbed: registration/invocation
 returns `wasm.ErrNoCGO`, everything else works.
