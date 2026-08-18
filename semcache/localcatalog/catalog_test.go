@@ -4,11 +4,15 @@ package localcatalog
 
 import (
 	"regexp"
-	"strings"
 	"testing"
 )
 
 var hex64 = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// resolveRev matches a Hugging Face resolve URL pinned to an immutable 40-hex
+// commit SHA (e.g. .../resolve/<sha>/...). Mutable refs like "resolve/main" or
+// "resolve/HEAD" do not match.
+var resolveRev = regexp.MustCompile(`/resolve/[0-9a-f]{40}/`)
 
 func TestCatalogIntegrity(t *testing.T) {
 	names := Names()
@@ -51,8 +55,8 @@ func TestNoMutableRevisionURLs(t *testing.T) {
 			t.Fatalf("Names() listed %q but Lookup failed", n)
 		}
 		for _, u := range []string{m.OnnxURL, m.VocabURL} {
-			if strings.Contains(u, "resolve/main") {
-				t.Errorf("%s: URL pinned to mutable revision: %s", m.Name, u)
+			if !resolveRev.MatchString(u) {
+				t.Errorf("%s: URL not pinned to an immutable 40-hex commit SHA revision: %s", m.Name, u)
 			}
 		}
 	}
