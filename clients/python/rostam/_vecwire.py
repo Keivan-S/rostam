@@ -835,15 +835,14 @@ def decode_search_results_degraded(body: bytes) -> Tuple[List[Dict[str, Any]], b
     appended after the base [count:u32]{[id:u64][distance:f32]} block. Mirrors
     ops.DecodeVectorSearchResultsDegraded: the base block is read exactly
     (count*12 bytes after the count u32), then any remaining bytes are the
-    degraded trailer (absent → degraded=False, missing=[])."""
-    (count,) = struct.unpack(">I", body[:4])
+    degraded trailer (absent → degraded=False, missing=[]). Bounds-checked:
+    a truncated body raises ValueError rather than over-reading."""
+    count, off = _read_u32(body, 0, "search results count")
     out = []
-    off = 4
     for _ in range(count):
-        rid = struct.unpack(">Q", body[off:off + 8])[0]
-        dist = struct.unpack(">f", body[off + 8:off + 12])[0]
+        rid, off = _read_u64(body, off, "search result id")
+        dist, off = _read_f32(body, off, "search result distance")
         out.append({"id": rid, "distance": dist})
-        off += 12
     degraded, missing, _ = _read_degraded_trailer(body, off)
     return out, degraded, missing
 

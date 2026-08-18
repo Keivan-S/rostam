@@ -25,11 +25,18 @@ class VecwireDecodeTruncatedTest(unittest.TestCase):
             ("decode_hybrid_results_degraded", w.decode_hybrid_results_degraded),
             ("decode_query_result_degraded", w.decode_query_result_degraded),
             ("decode_get_batch_result", w.decode_get_batch_result),
+            ("decode_search_results_degraded", w.decode_search_results_degraded),
         ]
         for name, fn in decoders:
             with self.subTest(name=name):
                 with self.assertRaises(ValueError):
                     fn(b"")
+
+    def test_search_results_count_overclaims_raises(self):
+        # count=2 but only one 12-byte [id:u64][distance:f32] row present.
+        body = struct.pack(">I", 2) + struct.pack(">Q", 1) + struct.pack(">f", 0.5)
+        with self.assertRaises(ValueError):
+            w.decode_search_results_degraded(body)
 
     def test_docs_count_with_no_row_data_raises(self):
         # A well-formed count=1, but no bytes for the row that count promises.
