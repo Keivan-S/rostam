@@ -75,6 +75,9 @@ class CrossStackVectorNativeTest(unittest.TestCase):
 
         hits = r.vector.search("c", [0.9, 0.1, 0, 0], k=2)
         self.assertEqual(hits[0]["id"], 1)  # nearest to cluster A is id 1
+        # Single-node server never emits a degraded trailer.
+        self.assertIs(hits.degraded, False)
+        self.assertEqual(hits.missing, [])
 
         got = r.vector.get("c", 1)
         self.assertIsNotNone(got)
@@ -202,6 +205,9 @@ class CrossStackVectorNativeTest(unittest.TestCase):
         self.assertEqual(docs[0]["id"], 1)
         self.assertEqual(docs[0]["content"], "alpha")
         self.assertEqual(docs[0]["metadata"], {"tenant": "acme"})
+        # Single-node server never emits a degraded trailer.
+        self.assertIs(docs.degraded, False)
+        self.assertEqual(docs.missing, [])
 
     def test_search_docs_filter(self):
         r = self.r
@@ -236,6 +242,9 @@ class CrossStackVectorNativeTest(unittest.TestCase):
         self.assertEqual(len(hits), 2)
         self.assertEqual(hits[0]["id"], 1)                 # dense+sparse both favor id 1
         self.assertGreater(hits[0]["score"], 0)
+        # Single-node server never emits a degraded trailer.
+        self.assertIs(hits.degraded, False)
+        self.assertEqual(hits.missing, [])
 
     def test_hybrid_search_filter_and_weighted(self):
         r = self.r
@@ -266,6 +275,9 @@ class CrossStackVectorNativeTest(unittest.TestCase):
         rec_ids = [x["id"] for x in recs]
         self.assertNotIn(1, rec_ids)                       # the positive seed itself is excluded
         self.assertEqual(rec_ids[0], 2)                    # nearest neighbour of the seed ranks first
+        # Single-node server never emits a degraded trailer.
+        self.assertIs(recs.degraded, False)
+        self.assertEqual(recs.missing, [])
 
     def test_recommend_negative_and_filter(self):
         r = self.r

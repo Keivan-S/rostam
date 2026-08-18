@@ -830,6 +830,24 @@ def decode_search_results(body: bytes) -> List[Dict[str, Any]]:
     return out
 
 
+def decode_search_results_degraded(body: bytes) -> Tuple[List[Dict[str, Any]], bool, List[int]]:
+    """Like decode_search_results, but also reads the optional degraded trailer
+    appended after the base [count:u32]{[id:u64][distance:f32]} block. Mirrors
+    ops.DecodeVectorSearchResultsDegraded: the base block is read exactly
+    (count*12 bytes after the count u32), then any remaining bytes are the
+    degraded trailer (absent → degraded=False, missing=[])."""
+    (count,) = struct.unpack(">I", body[:4])
+    out = []
+    off = 4
+    for _ in range(count):
+        rid = struct.unpack(">Q", body[off:off + 8])[0]
+        dist = struct.unpack(">f", body[off + 8:off + 12])[0]
+        out.append({"id": rid, "distance": dist})
+        off += 12
+    degraded, missing, _ = _read_degraded_trailer(body, off)
+    return out, degraded, missing
+
+
 def decode_exists_result(body: bytes) -> bool:
     return bool(body and body[0])
 

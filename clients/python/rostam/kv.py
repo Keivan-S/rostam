@@ -284,6 +284,36 @@ def _status_message(status: int, payload: bytes) -> str:
     return f"{name}: {detail}" if detail else name
 
 
+class SearchResults(list):
+    """A list of search-family results that also carries partial-read status.
+
+    ``degraded`` is True if any partition was unavailable when the server
+    answered the read; ``missing`` lists the unavailable partition indices. On
+    a healthy single-node server these are always ``(False, [])``. Being a
+    plain ``list`` subclass, iteration, indexing, ``len()``, and ``==``
+    comparisons against a bare list all keep working exactly as before —
+    ``degraded``/``missing`` are just extra attributes riding along.
+
+    Mirrors the Go typed client's ``SearchResponse{Results, Degraded,
+    Missing}`` semantics while staying ergonomic in Python.
+    """
+
+    def __init__(self, items, *, degraded: bool = False, missing: Sequence[int] = ()):
+        super().__init__(items)
+        self.degraded = bool(degraded)
+        self.missing = list(missing)
+
+
+class GroupResults(list):
+    """Like SearchResults, but for search_groups()'s list of {key, hits}
+    groups: a plain list of groups that also carries partial-read status."""
+
+    def __init__(self, items, *, degraded: bool = False, missing: Sequence[int] = ()):
+        super().__init__(items)
+        self.degraded = bool(degraded)
+        self.missing = list(missing)
+
+
 class _VectorAPI:
     """Vector-database operations, reached as ``client.vector.*``.
 
@@ -319,10 +349,13 @@ class _VectorAPI:
             collection, int(id), vector, ttl_ms=ttl_ms, metadata=metadata, sparse=sparse))
 
     def search(self, collection: str, query: Sequence[float], k: int, *,
-               filter: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-        """k-nearest-neighbour search. Returns [{id, distance}, ...]."""
+               filter: Optional[Dict[str, Any]] = None) -> "SearchResults":
+        """k-nearest-neighbour search. Returns a SearchResults list of
+        {id, distance} dicts; SearchResults.degraded/.missing report whether
+        the read was partial (e.g. during a cluster outage)."""
         payload = self._c._call("vector_search", _vecwire.encode_search_args(collection, k, query, filter))
-        return _vecwire.decode_search_results(payload or b"\x00\x00\x00\x00")
+        results, degraded, missing = _vecwire.decode_search_results_degraded(payload or b"\x00\x00\x00\x00")
+        return SearchResults(results, degraded=degraded, missing=missing)
 
     def get(self, collection: str, id: int, *, with_vector: bool = True,
             with_payload: bool = True) -> Optional[Dict[str, Any]]:
@@ -354,9 +387,12 @@ class _VectorAPI:
 
     # ---- Phase C: batch / scroll / RAG-shaped search / hybrid / recommend ---
     #
-    # Below, `_degraded`/`_missing` from the decoders are intentionally not
-    # surfaced to the caller yet (same as search()'s single-node-only reads) —
-    # a clustered-deployment follow-up.
+    # search-family reads (search, search_docs, search_groups, hybrid_search,
+    # hybrid_text, recommend, query) surface each decoder's degraded/missing
+    # trailer via a SearchResults/GroupResults return value (see above) so a
+    # caller can tell a result set was partial during a cluster outage. scroll()
+    # and get_batch() carry their own status shapes (next_cursor / per-row
+    # `found`) and are left as plain tuples/lists.
 
     def get_batch(self, collection: str, ids: Sequence[int], *, with_vector: bool = True,
                   with_payload: bool = True) -> List[Dict[str, Any]]:
@@ -393,74 +429,80 @@ class _VectorAPI:
         return docs, next_cursor
 
     def search_docs(self, collection: str, query: Sequence[float], k: int, *,
-                    filter: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+                    filter: Optional[Dict[str, Any]] = None) -> "SearchResults":
         """k-nearest-neighbour search returning documents (content + metadata)
-        instead of bare ids/distances — the RAG-shaped counterpart of search()."""
+        instead of bare ids/distances — the RAG-shaped counterpart of search().
+        Returns a SearchResults list; see search() for .degraded/.missing."""
         args = _vecwire.encode_search_docs_args_opts(collection, k, query, filter)
         payload = self._c._call("vector_search_docs", args)
-        docs, _degraded, _missing = _vecwire.decode_docs_degraded_raw(payload or b"\x00\x00\x00\x00")
-        return docs
+        docs, degraded, missing = _vecwire.decode_docs_degraded_raw(payload or b"\x00\x00\x00\x00")
+        return SearchResults(docs, degraded=degraded, missing=missing)
 
     def search_groups(self, collection: str, query: Sequence[float], k: int, group_by: str, *,
                       group_size: int = 1, fetch_k: int = 0,
-                      filter: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-        """k-nearest-neighbour search grouped by a payload field. Returns a list
-        of {key, hits} groups, where each hit has the same document shape
-        search_docs() returns."""
+                      filter: Optional[Dict[str, Any]] = None) -> "GroupResults":
+        """k-nearest-neighbour search grouped by a payload field. Returns a
+        GroupResults list of {key, hits} groups, where each hit has the same
+        document shape search_docs() returns; see search() for
+        .degraded/.missing."""
         opts = {"group_by": group_by, "group_size": group_size, "fetch_k": fetch_k, "filter": filter}
         args = _vecwire.encode_group_search_args_opts(collection, k, query, opts)
         payload = self._c._call("vector_search_groups", args)
-        groups, _degraded, _missing = _vecwire.decode_groups_degraded_raw(payload or b"\x00\x00\x00\x00")
-        return groups
+        groups, degraded, missing = _vecwire.decode_groups_degraded_raw(payload or b"\x00\x00\x00\x00")
+        return GroupResults(groups, degraded=degraded, missing=missing)
 
     def hybrid_search(self, collection: str, dense: Sequence[float], k: int, *,
                       sparse: Optional[Dict[str, Sequence]] = None,
                       filter: Optional[Dict[str, Any]] = None, method: str = "rrf",
                       alpha: float = 0.0, rrf_k: int = 0, dense_k: int = 0,
-                      sparse_k: int = 0) -> List[Dict[str, Any]]:
-        """Fuse a dense-KNN lane with an optional sparse lane. Returns
-        [{id, distance, score}, ...] fused by `method` ("rrf"/"weighted"/"dbsf")."""
+                      sparse_k: int = 0) -> "SearchResults":
+        """Fuse a dense-KNN lane with an optional sparse lane. Returns a
+        SearchResults list of {id, distance, score} fused by `method`
+        ("rrf"/"weighted"/"dbsf"); see search() for .degraded/.missing."""
         opts = {"filter": filter, "method": method, "alpha": alpha, "rrf_k": rrf_k,
                 "dense_k": dense_k, "sparse_k": sparse_k}
         args = _vecwire.encode_hybrid_search_args_opts(collection, dense, k, sparse, opts)
         payload = self._c._call("vector_hybrid_search", args)
-        results, _degraded, _missing = _vecwire.decode_hybrid_results_degraded(payload or b"\x00\x00\x00\x00")
-        return results
+        results, degraded, missing = _vecwire.decode_hybrid_results_degraded(payload or b"\x00\x00\x00\x00")
+        return SearchResults(results, degraded=degraded, missing=missing)
 
     def hybrid_text(self, collection: str, dense: Sequence[float], text: str, k: int, *,
                     filter: Optional[Dict[str, Any]] = None, method: str = "rrf",
                     alpha: float = 0.0, rrf_k: int = 0, dense_k: int = 0,
-                    sparse_k: int = 0) -> List[Dict[str, Any]]:
+                    sparse_k: int = 0) -> "SearchResults":
         """Fuse a dense-KNN lane with a server-side BM25 full-text lane (the
         collection must have been created with full_text=... for a full-text
-        analyzer to exist). Returns fused [{id, distance, score}, ...]."""
+        analyzer to exist). Returns a SearchResults list of fused
+        {id, distance, score}; see search() for .degraded/.missing."""
         opts = {"filter": filter, "method": method, "alpha": alpha, "rrf_k": rrf_k,
                 "dense_k": dense_k, "sparse_k": sparse_k}
         args = _vecwire.encode_hybrid_text_args_global(collection, dense, text, k, opts)
         payload = self._c._call("vector_hybrid_text", args)
-        results, _degraded, _missing = _vecwire.decode_hybrid_results_degraded(payload or b"\x00\x00\x00\x00")
-        return results
+        results, degraded, missing = _vecwire.decode_hybrid_results_degraded(payload or b"\x00\x00\x00\x00")
+        return SearchResults(results, degraded=degraded, missing=missing)
 
     def recommend(self, collection: str, positive: Sequence[int], *,
                   negative: Optional[Sequence[int]] = None, k: int = 10,
                   filter: Optional[Dict[str, Any]] = None,
-                  strategy: str = "average_vector") -> List[Dict[str, Any]]:
+                  strategy: str = "average_vector") -> "SearchResults":
         """Recommend points similar to the `positive` example ids and dissimilar
         to the `negative` ones. `strategy`: "average_vector" (default, average
         the example vectors then kNN) or "best_score" (score by best per-example
         similarity). Rides the vector_query op with a RECOMMEND-shaped QuerySpec
-        (see `query` for why a general QuerySpec is out of scope for this client)."""
+        (see `query` for why a general QuerySpec is out of scope for this
+        client). Returns a SearchResults list; see search() for
+        .degraded/.missing."""
         strat = _vecwire.RECOMMEND_STRATEGY[strategy]
         args = _vecwire.encode_recommend_query(collection, positive=positive, negative=negative,
                                                k=k, filter=filter, strategy=strat)
         payload = self._c._call("vector_query", args)
-        results, _degraded, _missing = _vecwire.decode_query_result_degraded(payload or b"\x01\x00\x00\x00\x00")
-        return results
+        results, degraded, missing = _vecwire.decode_query_result_degraded(payload or b"\x01\x00\x00\x00\x00")
+        return SearchResults(results, degraded=degraded, missing=missing)
 
     def query(self, collection: str, positive: Sequence[int], *,
              negative: Optional[Sequence[int]] = None, k: int = 10,
              filter: Optional[Dict[str, Any]] = None,
-             strategy: str = "average_vector") -> List[Dict[str, Any]]:
+             strategy: str = "average_vector") -> "SearchResults":
         """The unified Query API — RECOMMEND-shaped ONLY. Phase B's stdlib-only
         protobuf QuerySpec encoder (_vecwire.marshal_recommend_query_spec) builds
         a single-leaf RECOMMEND spec; it does not build the general
