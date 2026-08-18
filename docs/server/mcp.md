@@ -158,6 +158,27 @@ Runtime shared library installed on the host — Rostam does not vendor it.
 Point `ROSTAM_ONNXRUNTIME_LIB` at the library file, or leave it unset and let
 the conventional install locations be searched.
 
+### Docker
+
+The default image (`cmd/rostam-server/Dockerfile`) is deliberately lean and has
+no ONNX Runtime. A separate, opt-in image bundles it:
+
+```sh
+docker build -f cmd/rostam-server/Dockerfile.localembed -t rostam-server:localembed .
+docker run --rm rostam-server:localembed mcp -list-embed-models
+```
+
+That image builds with `-tags localembed`, bundles ONNX Runtime (≥ 1.29.0), and
+sets `ROSTAM_ONNXRUNTIME_LIB` for you. Models still download on first use — mount
+a named volume at `/models` (the image's `ROSTAM_EMBED_MODELS_DIR`) to persist
+them across restarts:
+
+```sh
+docker run -p 8080:8080 -e ROSTAM_API_KEY=<token> \
+  -e ROSTAM_EMBED_LOCAL=minilm-l6-v2 -v rostam-models:/models \
+  rostam-server:localembed
+```
+
 !!! warning "ONNX Runtime version floor"
 
     This build's binding (`github.com/yalue/onnxruntime_go` v1.34.0) requires
