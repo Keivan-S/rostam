@@ -10,11 +10,12 @@ decodes the same.
 
 from __future__ import annotations
 
+import base64
 import json
 import struct
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from ._values import decode_metadata, encode_metadata
+from ._values import decode_metadata, decode_value, encode_metadata
 
 Vector = Sequence[float]
 
@@ -132,6 +133,34 @@ def encode_vector_get_batch_args(collection: str, ids: Sequence[int], flags: int
     for i in ids:
         out += struct.pack(">Q", i)
     return bytes(out)
+
+
+def encode_scroll_cursor(last_id: int) -> str:
+    """Mirrors ops.EncodeScrollCursor: base64.RawURLEncoding of
+    [ver:u8=1][lastID:u64 BE]. Used CLIENT-SIDE to derive the next-page cursor
+    when the server's vector_scroll response carries no wire cursor (the
+    unpartitioned/single-node dispatch path — see the rostam.scrollNextCursor
+    rule kv.py's scroll() replicates: a FULL page may have more)."""
+    raw = bytes([1]) + struct.pack(">Q", last_id)
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+def decode_scroll_cursor(token: str) -> Tuple[Optional[int], bool]:
+    """Mirrors ops.DecodeScrollCursor (v1, id-only cursor): a scroll cursor is
+    base64.RawURLEncoding of [ver:u8=1][lastID:u64 BE]. An empty token is the
+    first page (returns (None, False)); the caller resumes at ids strictly
+    greater than the decoded lastID. Raises ValueError on a malformed token,
+    mirroring ops.ErrBadScrollCursor."""
+    if not token:
+        return None, False
+    pad = "=" * (-len(token) % 4)
+    try:
+        raw = base64.urlsafe_b64decode(token + pad)
+    except Exception as e:
+        raise ValueError("malformed scroll cursor") from e
+    if len(raw) != 9 or raw[0] != 1:
+        raise ValueError("malformed scroll cursor")
+    return struct.unpack(">Q", raw[1:9])[0], True
 
 
 def _scroll_base(collection: str, limit: int, filter: Optional[Dict[str, Any]]) -> bytes:
@@ -635,6 +664,9 @@ def encode_create_collection_args(name: str, cfg: Dict[str, Any]) -> bytes:
 
 _QUERY_MODE = {"fusion": 0, "rerank": 1}
 _RECOMMEND_STRATEGY = {"average": 0, "average_vector": 0, "best": 1, "best_score": 1}
+# Public alias: kv.py's recommend()/query() map a strategy NAME to the
+# RecommendStrategy enum code through this table (0=average-vector, 1=best-score).
+RECOMMEND_STRATEGY = _RECOMMEND_STRATEGY
 
 # QueryLeaf oneof field numbers
 _LEAF_RECOMMEND = 6
@@ -838,3 +870,194 @@ def decode_get_result(body: bytes) -> Optional[Dict[str, Any]]:
             off += 8
         sparse = {"indices": idx, "values": val}
     return {"vector": vec, "metadata": meta or {}, "ttl_ms": ttl_ms, "sparse": sparse}
+
+
+# ---- Phase C: batch/scroll/docs/groups/hybrid/query result decoders --------
+#
+# These mirror the Go decoders in ops/vector.go and ops/query.go: read_only the
+# same layout, degraded-trailer-tolerant where the Go decoder is (a missing
+# trailer decodes as degraded=False, missing=[]).
+
+def _read_degraded_trailer(body: bytes, off: int) -> Tuple[bool, List[int], int]:
+    """Mirrors ops.readDegradedTrailerN: [degraded:u8][missingCount:u16]{partID:u16}
+    at body[off:]. Tolerant of absence/truncation (legacy/no-trailer body) —
+    returns (False, [], off) unchanged, exactly like the Go reader."""
+    if len(body) < off + 3:
+        return False, [], off
+    degraded = bool(body[off])
+    (missing_count,) = struct.unpack(">H", body[off + 1:off + 3])
+    trailer_end = off + 3 + 2 * missing_count
+    if len(body) < trailer_end:
+        return degraded, [], off
+    missing = []
+    p = off + 3
+    for _ in range(missing_count):
+        missing.append(struct.unpack(">H", body[p:p + 2])[0])
+        p += 2
+    return degraded, missing, trailer_end
+
+
+def _decode_docs_raw(body: bytes, off: int = 0) -> Tuple[List[Dict[str, Any]], int]:
+    """Mirrors ops.frameVectorDocsN + the typed unmarshal: one EncodeVectorDocs
+    block at body[off:]. Wire per doc: [id:u64][distance:f32][score:f32]
+    [contentLen:u32][content][metaLen:u32][metaJSON]. Returns (docs, next_off)."""
+    (count,) = struct.unpack(">I", body[off:off + 4]); off += 4
+    docs = []
+    for _ in range(count):
+        rid = struct.unpack(">Q", body[off:off + 8])[0]; off += 8
+        dist = struct.unpack(">f", body[off:off + 4])[0]; off += 4
+        score = struct.unpack(">f", body[off:off + 4])[0]; off += 4
+        (clen,) = struct.unpack(">I", body[off:off + 4]); off += 4
+        content = body[off:off + clen].decode("utf-8"); off += clen
+        (mlen,) = struct.unpack(">I", body[off:off + 4]); off += 4
+        meta = decode_metadata(json.loads(body[off:off + mlen])) if mlen else {}
+        off += mlen
+        docs.append({"id": rid, "distance": dist, "score": score, "content": content, "metadata": meta})
+    return docs, off
+
+
+def decode_docs_degraded_raw(body: bytes) -> Tuple[List[Dict[str, Any]], bool, List[int]]:
+    """Mirrors ops.DecodeVectorDocsDegradedRaw. Used by search_docs (and shares
+    the doc framing scroll/groups use)."""
+    docs, off = _decode_docs_raw(body)
+    degraded, missing, _ = _read_degraded_trailer(body, off)
+    return docs, degraded, missing
+
+
+def decode_scroll_result_raw(body: bytes) -> Tuple[List[Dict[str, Any]], bool, List[int], str]:
+    """Mirrors ops.DecodeScrollResultRaw: the doc block, the ALWAYS-present
+    degraded trailer, then the [cursorLen:u32][cursorBytes] next_cursor tail
+    (may be zero-length ⇒ ""). Tolerant of an old/short body (empty cursor)."""
+    docs, off = _decode_docs_raw(body)
+    degraded, missing, off = _read_degraded_trailer(body, off)
+    next_cursor = ""
+    if len(body) >= off + 4:
+        (clen,) = struct.unpack(">I", body[off:off + 4]); off += 4
+        if clen > 0 and len(body) >= off + clen:
+            next_cursor = body[off:off + clen].decode("utf-8")
+    return docs, degraded, missing, next_cursor
+
+
+def decode_groups_degraded_raw(body: bytes) -> Tuple[List[Dict[str, Any]], bool, List[int]]:
+    """Mirrors ops.DecodeGroupsDegradedRaw. Wire: [count:u32]{[keyLen:u32][keyJSON]
+    [hitsLen:u32][hits: EncodeVectorDocs block]} then the degraded trailer. Each
+    group's key is a single tagged Value (json.Marshal of vector.Value), decoded
+    with decode_value (NOT decode_metadata, which expects a map)."""
+    (count,) = struct.unpack(">I", body[0:4]); off = 4
+    groups = []
+    for _ in range(count):
+        (klen,) = struct.unpack(">I", body[off:off + 4]); off += 4
+        key = decode_value(json.loads(body[off:off + klen])); off += klen
+        (dlen,) = struct.unpack(">I", body[off:off + 4]); off += 4
+        hits, _ = _decode_docs_raw(body[off:off + dlen], 0)
+        off += dlen
+        groups.append({"key": key, "hits": hits})
+    degraded, missing, _ = _read_degraded_trailer(body, off)
+    return groups, degraded, missing
+
+
+def _decode_hybrid_results_block(body: bytes, off: int = 0) -> Tuple[List[Dict[str, Any]], int]:
+    """Mirrors ops.decodeHybridResultsN: [count:u32]{[id:u64][distance:f32]
+    [score:f32]}. Shared by hybrid_search/hybrid_text and the recommend/query
+    flat-fused result (which carries the SAME per-row shape)."""
+    (count,) = struct.unpack(">I", body[off:off + 4]); off += 4
+    results = []
+    for _ in range(count):
+        rid = struct.unpack(">Q", body[off:off + 8])[0]; off += 8
+        dist = struct.unpack(">f", body[off:off + 4])[0]; off += 4
+        score = struct.unpack(">f", body[off:off + 4])[0]; off += 4
+        results.append({"id": rid, "distance": dist, "score": score})
+    return results, off
+
+
+def decode_hybrid_results_degraded(body: bytes) -> Tuple[List[Dict[str, Any]], bool, List[int]]:
+    """Mirrors ops.DecodeHybridResultsDegraded. Used by hybrid_search/hybrid_text."""
+    results, off = _decode_hybrid_results_block(body)
+    degraded, missing, _ = _read_degraded_trailer(body, off)
+    return results, degraded, missing
+
+
+# queryResultModeRerank (ops/query.go): the tag a flat fused/recommend query
+# result carries. recommend/query build a single-leaf ModeFusion spec whose
+# server-side result the coordinator always re-encodes flat under this tag
+# (see EncodeQueryResultFused) — a FUSION-tagged (unfused-lanes) body is not a
+# valid result here.
+_QUERY_RESULT_MODE_RERANK = 1
+
+
+def decode_query_result_degraded(body: bytes) -> Tuple[List[Dict[str, Any]], bool, List[int]]:
+    """Mirrors ops.DecodeQueryResultDegraded: a mode-tagged flat fused result
+    (used by recommend/query) plus the degraded trailer. Fails loud if the body
+    is not RERANK-tagged (mirroring the Go decoder's fail-loud contract)."""
+    if len(body) < 1:
+        raise ValueError("truncated query result")
+    mode = body[0]
+    if mode != _QUERY_RESULT_MODE_RERANK:
+        raise ValueError(f"query result mode {mode} is not a flat fused result")
+    results, off = _decode_hybrid_results_block(body, 1)
+    degraded, missing, _ = _read_degraded_trailer(body, off)
+    return results, degraded, missing
+
+
+def _decode_get_body_after_found(body: bytes, off: int, version_framed: bool) -> Tuple[Dict[str, Any], int]:
+    """Mirrors ops.decodeGetResultAtArena from just AFTER the leading [found=1]
+    byte: [dim:u32][vec][ttl:u64][metaPresent:u8][?metaLen:u32][?metaJSON]
+    [sparsePresent:u8][?sparse] then a trailing version block. version_framed
+    selects how that block is read:
+      - True (batch row): ALWAYS framed ([verPresent:u8][?version:u64]) so the
+        record self-delimits and the next row's id is found unambiguously.
+      - False (single get): OPTIONAL — read only when bytes remain.
+    Returns ({vector, metadata, ttl_ms, sparse, version}, next_off)."""
+    (dim,) = struct.unpack(">I", body[off:off + 4]); off += 4
+    vec = None
+    if dim:
+        vec = [struct.unpack(">f", body[off + 4 * i:off + 4 * i + 4])[0] for i in range(dim)]
+        off += 4 * dim
+    (ttl_ms,) = struct.unpack(">Q", body[off:off + 8]); off += 8
+    meta_present = body[off]; off += 1
+    meta = None
+    if meta_present:
+        (mlen,) = struct.unpack(">I", body[off:off + 4]); off += 4
+        meta = decode_metadata(json.loads(body[off:off + mlen])); off += mlen
+    sparse_present = body[off]; off += 1
+    sparse = None
+    if sparse_present:
+        (nnz,) = struct.unpack(">I", body[off:off + 4]); off += 4
+        idx, val = [], []
+        for _ in range(nnz):
+            idx.append(struct.unpack(">I", body[off:off + 4])[0])
+            val.append(struct.unpack(">f", body[off + 4:off + 8])[0])
+            off += 8
+        sparse = {"indices": idx, "values": val}
+    version = 0
+    if version_framed:
+        ver_present = body[off]; off += 1
+        if ver_present:
+            (version,) = struct.unpack(">Q", body[off:off + 8]); off += 8
+    elif off < len(body):
+        ver_present = body[off]; off += 1
+        if ver_present:
+            (version,) = struct.unpack(">Q", body[off:off + 8]); off += 8
+    return {"vector": vec, "metadata": meta or {}, "ttl_ms": ttl_ms, "sparse": sparse, "version": version}, off
+
+
+def decode_get_batch_result(body: bytes) -> List[Dict[str, Any]]:
+    """Mirrors ops.DecodeVectorGetBatchResult. Wire: [n:u32] then per row
+    [id:u64][found:u8] followed, when found, by the SAME record layout a single
+    vector_get carries (see _decode_get_body_after_found), with an ALWAYS-framed
+    trailing version block so rows self-delimit. Returns a list of
+    {id, found, vector, metadata, ttl_ms, sparse, version} — a not-found row
+    carries only id/found (the rest default to the not-found shape)."""
+    (n,) = struct.unpack(">I", body[0:4]); off = 4
+    rows = []
+    for _ in range(n):
+        rid = struct.unpack(">Q", body[off:off + 8])[0]; off += 8
+        found = bool(body[off]); off += 1
+        if not found:
+            rows.append({"id": rid, "found": False, "vector": None, "metadata": {}, "ttl_ms": 0, "sparse": None, "version": 0})
+            continue
+        rec, off = _decode_get_body_after_found(body, off, version_framed=True)
+        rec["id"] = rid
+        rec["found"] = True
+        rows.append(rec)
+    return rows

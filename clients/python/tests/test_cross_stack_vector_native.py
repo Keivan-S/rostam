@@ -141,6 +141,172 @@ class CrossStackVectorNativeTest(unittest.TestCase):
         self.assertTrue(r.vector.exists("mix", 1))
         self.assertEqual(r.get("kv:key"), b"val")
 
+    # ---- Phase C: batch / scroll / RAG-shaped search / hybrid / recommend ----
+
+    def test_get_batch(self):
+        r = self.r
+        r.vector.create_collection("gb", dim=4, metric="cosine")
+        r.vector.upsert("gb", 1, [0.1, 0.2, 0.3, 0.4], content="one", metadata={"tenant": "a"})
+        r.vector.upsert("gb", 2, [0.5, 0.6, 0.7, 0.8], metadata={"tenant": "b"})
+        rows = r.vector.get_batch("gb", [1, 2, 99])
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(rows[0]["id"], 1)
+        self.assertTrue(rows[0]["found"])
+        self.assertEqual(len(rows[0]["vector"]), 4)
+        self.assertEqual(rows[0]["content"], "one")
+        self.assertEqual(rows[0]["metadata"], {"tenant": "a"})
+        self.assertEqual(rows[1]["id"], 2)
+        self.assertTrue(rows[1]["found"])
+        self.assertEqual(rows[2]["id"], 99)
+        self.assertFalse(rows[2]["found"])              # absent id: found=False, not an error
+
+    def test_get_batch_projection(self):
+        r = self.r
+        r.vector.create_collection("gbp", dim=4, metric="cosine")
+        r.vector.upsert("gbp", 1, [0.1, 0.2, 0.3, 0.4], metadata={"a": 1})
+        rows = r.vector.get_batch("gbp", [1], with_vector=False, with_payload=False)
+        self.assertTrue(rows[0]["found"])
+        self.assertIsNone(rows[0]["vector"])
+        self.assertEqual(rows[0]["metadata"], {})
+
+    def test_scroll_pages_through_all_points_with_cursor(self):
+        r = self.r
+        r.vector.create_collection("sc", dim=4, metric="cosine")
+        for i in range(1, 6):
+            r.vector.upsert("sc", i, [float(i)] * 4, content=f"doc{i}")
+        seen = []
+        cursor = ""
+        for _ in range(10):                              # bounded loop guards against an infinite scroll
+            docs, cursor = r.vector.scroll("sc", limit=2, cursor=cursor)
+            seen.extend(d["id"] for d in docs)
+            if not cursor:
+                break
+        self.assertEqual(sorted(seen), [1, 2, 3, 4, 5])
+        self.assertEqual(cursor, "")                      # exhausted
+
+    def test_scroll_filter(self):
+        r = self.r
+        r.vector.create_collection("scf", dim=4, metric="cosine")
+        r.vector.upsert("scf", 1, [0.1, 0.2, 0.3, 0.4], metadata={"tenant": "acme"})
+        r.vector.upsert("scf", 2, [0.5, 0.6, 0.7, 0.8], metadata={"tenant": "beta"})
+        docs, cursor = r.vector.scroll("scf", filter=f.eq("tenant", "beta"), limit=10)
+        self.assertEqual([d["id"] for d in docs], [2])
+        self.assertEqual(cursor, "")
+
+    def test_search_docs(self):
+        r = self.r
+        r.vector.create_collection("sd", dim=4, metric="cosine")
+        r.vector.upsert("sd", 1, [0.9, 0.1, 0, 0], content="alpha", metadata={"tenant": "acme"})
+        r.vector.upsert("sd", 2, [0, 0, 0.9, 0.1], content="beta", metadata={"tenant": "beta"})
+        docs = r.vector.search_docs("sd", [0.9, 0.1, 0, 0], k=2)
+        self.assertEqual(docs[0]["id"], 1)
+        self.assertEqual(docs[0]["content"], "alpha")
+        self.assertEqual(docs[0]["metadata"], {"tenant": "acme"})
+
+    def test_search_docs_filter(self):
+        r = self.r
+        r.vector.create_collection("sdf", dim=4, metric="cosine")
+        r.vector.upsert("sdf", 1, [0.9, 0.1, 0, 0], content="alpha", metadata={"tenant": "acme"})
+        r.vector.upsert("sdf", 2, [0.8, 0.2, 0, 0], content="beta", metadata={"tenant": "beta"})
+        docs = r.vector.search_docs("sdf", [0.9, 0.1, 0, 0], k=5, filter=f.eq("tenant", "beta"))
+        self.assertEqual([d["id"] for d in docs], [2])
+
+    def test_search_groups(self):
+        r = self.r
+        r.vector.create_collection("sg", dim=4, metric="cosine")
+        r.vector.upsert("sg", 1, [0.9, 0.1, 0, 0], content="a1", metadata={"cat": "x"})
+        r.vector.upsert("sg", 2, [0.8, 0.2, 0, 0], content="a2", metadata={"cat": "x"})
+        r.vector.upsert("sg", 3, [0, 0, 0.9, 0.1], content="b1", metadata={"cat": "y"})
+        groups = r.vector.search_groups("sg", [0.9, 0.1, 0, 0], k=5, group_by="cat", group_size=2)
+        self.assertGreaterEqual(len(groups), 2)           # groups formed for both cat values
+        by_key = {g["key"]: g for g in groups}
+        self.assertIn("x", by_key)
+        self.assertIn("y", by_key)
+        self.assertEqual(len(by_key["x"]["hits"]), 2)      # group_size=2 caps the "x" group at 2 hits
+        self.assertEqual({h["id"] for h in by_key["x"]["hits"]}, {1, 2})
+        self.assertEqual(by_key["y"]["hits"][0]["id"], 3)
+
+    def test_hybrid_search(self):
+        r = self.r
+        r.vector.create_collection("hs", dim=4, metric="cosine")
+        r.vector.upsert("hs", 1, [0.9, 0.1, 0, 0], sparse={"indices": [1, 5], "values": [0.5, 0.3]})
+        r.vector.upsert("hs", 2, [0, 0, 0.9, 0.1], sparse={"indices": [2, 5], "values": [0.9, 0.1]})
+        hits = r.vector.hybrid_search("hs", [0.9, 0.1, 0, 0], k=2,
+                                      sparse={"indices": [1, 5], "values": [0.5, 0.3]})
+        self.assertEqual(len(hits), 2)
+        self.assertEqual(hits[0]["id"], 1)                 # dense+sparse both favor id 1
+        self.assertGreater(hits[0]["score"], 0)
+
+    def test_hybrid_search_filter_and_weighted(self):
+        r = self.r
+        r.vector.create_collection("hsf", dim=4, metric="cosine")
+        r.vector.upsert("hsf", 1, [0.9, 0.1, 0, 0], metadata={"tenant": "acme"})
+        r.vector.upsert("hsf", 2, [0.8, 0.2, 0, 0], metadata={"tenant": "beta"})
+        hits = r.vector.hybrid_search("hsf", [0.9, 0.1, 0, 0], k=5,
+                                      filter=f.eq("tenant", "beta"), method="weighted", alpha=0.5)
+        self.assertEqual([h["id"] for h in hits], [2])
+
+    def test_hybrid_text(self):
+        r = self.r
+        r.vector.create_collection("ht", dim=4, metric="cosine", full_text=True)
+        r.vector.upsert("ht", 1, [0.9, 0.1, 0, 0], content="the quick brown fox jumps")
+        r.vector.upsert("ht", 2, [0, 0, 0.9, 0.1], content="a lazy dog sleeps all day")
+        hits = r.vector.hybrid_text("ht", [0.9, 0.1, 0, 0], "quick fox", k=2)
+        self.assertEqual(len(hits), 2)
+        self.assertEqual(hits[0]["id"], 1)                 # both dense and text lanes favor id 1
+        self.assertGreater(hits[0]["score"], 0)
+
+    def test_recommend_excludes_seed_and_favors_similar(self):
+        r = self.r
+        r.vector.create_collection("rc", dim=4, metric="cosine")
+        r.vector.upsert("rc", 1, [1, 0, 0, 0])
+        r.vector.upsert("rc", 2, [0.9, 0.1, 0, 0])   # close to the seed
+        r.vector.upsert("rc", 3, [0, 0, 1, 0])       # far from the seed
+        recs = r.vector.recommend("rc", [1], k=5)
+        rec_ids = [x["id"] for x in recs]
+        self.assertNotIn(1, rec_ids)                       # the positive seed itself is excluded
+        self.assertEqual(rec_ids[0], 2)                    # nearest neighbour of the seed ranks first
+
+    def test_recommend_negative_and_filter(self):
+        r = self.r
+        r.vector.create_collection("rcn", dim=4, metric="cosine")
+        r.vector.upsert("rcn", 1, [1, 0, 0, 0])
+        r.vector.upsert("rcn", 2, [0.9, 0.1, 0, 0], metadata={"tenant": "acme"})
+        r.vector.upsert("rcn", 3, [0, 0, 1, 0], metadata={"tenant": "beta"})
+        recs = r.vector.recommend("rcn", [1], k=5, filter=f.eq("tenant", "beta"))
+        self.assertEqual([x["id"] for x in recs], [3])      # filter admits only the beta point
+
+    def test_query_is_recommend_shaped(self):
+        # query() is documented as recommend-shaped only (Phase B's QuerySpec encoder
+        # builds a single-leaf RECOMMEND spec, not a general fusion/rerank tree) — it
+        # must return exactly what recommend() returns for the same arguments.
+        r = self.r
+        r.vector.create_collection("qy", dim=4, metric="cosine")
+        r.vector.upsert("qy", 1, [1, 0, 0, 0])
+        r.vector.upsert("qy", 2, [0.9, 0.1, 0, 0])
+        r.vector.upsert("qy", 3, [0, 0, 1, 0])
+        via_query = r.vector.query("qy", [1], k=5)
+        via_recommend = r.vector.recommend("qy", [1], k=5)
+        self.assertEqual(via_query, via_recommend)
+        self.assertNotIn(1, [x["id"] for x in via_query])
+
+    def test_upsert_batch(self):
+        r = self.r
+        r.vector.create_collection("ub", dim=4, metric="cosine")
+        r.vector.upsert_batch("ub", [
+            {"id": 1, "vector": [1, 0, 0, 0], "content": "p1"},
+            {"id": 2, "vector": [0, 1, 0, 0], "metadata": {"k": "v"}},
+            {"id": 3, "vector": [0, 0, 1, 0], "sparse": {"indices": [2], "values": [0.5]}},
+        ])
+        got1 = r.vector.get("ub", 1)
+        got2 = r.vector.get("ub", 2)
+        got3 = r.vector.get("ub", 3)
+        self.assertEqual(got1["content"], "p1")
+        self.assertEqual(got2["metadata"], {"k": "v"})
+        self.assertEqual(got3["sparse"]["indices"], [2])
+        rows = r.vector.get_batch("ub", [1, 2, 3])
+        self.assertEqual({row["id"] for row in rows if row["found"]}, {1, 2, 3})
+
 
 if __name__ == "__main__":
     unittest.main()
