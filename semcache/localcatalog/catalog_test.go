@@ -4,6 +4,7 @@ package localcatalog
 
 import (
 	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -35,6 +36,24 @@ func TestCatalogIntegrity(t *testing.T) {
 		}
 		if m.License == "" {
 			t.Errorf("%s: empty license", m.Name)
+		}
+	}
+}
+
+// TestNoMutableRevisionURLs ensures every catalog artifact is pinned to an
+// immutable commit SHA rather than a mutable ref like "resolve/main" or
+// "resolve/HEAD": if upstream main moves, a fresh download would fail the
+// pinned SHA and local embedding could not start.
+func TestNoMutableRevisionURLs(t *testing.T) {
+	for _, n := range Names() {
+		m, ok := Lookup(n)
+		if !ok {
+			t.Fatalf("Names() listed %q but Lookup failed", n)
+		}
+		for _, u := range []string{m.OnnxURL, m.VocabURL} {
+			if strings.Contains(u, "resolve/main") {
+				t.Errorf("%s: URL pinned to mutable revision: %s", m.Name, u)
+			}
 		}
 	}
 }
