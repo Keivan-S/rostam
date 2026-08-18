@@ -143,6 +143,67 @@ config from above:
     existing data directory to start over. There is no automatic re-embed
     migration in this release.
 
+## Local embeddings (`-tags localembed`)
+
+Building with `-tags localembed` compiles in a third embedder option — an
+in-process ONNX model — alongside BM25-only and `ROSTAM_EMBED_ENDPOINT`. No
+cloud API, no network call per embed:
+
+```sh
+CGO_ENABLED=1 go build -tags localembed ./cmd/rostam-server
+```
+
+The tag needs cgo for the ONNX Runtime binding, and at runtime, the ONNX
+Runtime shared library installed on the host — Rostam does not vendor it.
+Point `ROSTAM_ONNXRUNTIME_LIB` at the library file, or leave it unset and let
+the conventional install locations be searched.
+
+!!! warning "ONNX Runtime version floor"
+
+    This build's binding (`github.com/yalue/onnxruntime_go` v1.34.0) requires
+    `ORT_API_VERSION` 29, which only ONNX Runtime **1.29.0 or newer** provides.
+    An older install fails at load time rather than working with reduced
+    functionality — check your ONNX Runtime version before filing a bug.
+
+Select a model with `ROSTAM_EMBED_LOCAL=<name>`. It is mutually exclusive with
+`ROSTAM_EMBED_ENDPOINT` — setting both is a startup error, the same as the
+mismatch cases above. `1` or `default` selects the default model,
+`minilm-l6-v2`. Run `rostam-server mcp -list-embed-models` to print the full
+catalog from the binary you have installed.
+
+| Name | Dim | Pooling | License |
+|---|--:|---|---|
+| `minilm-l6-v2` (default) | 384 | mean | Apache-2.0 |
+| `bge-small-en-v1.5` | 384 | CLS | MIT |
+| `gte-small` | 384 | mean | MIT |
+
+The selected model's weights download to `~/.rostam/models/<name>/` on first
+run and are SHA-256-verified against a pinned checksum before use; override
+the location with `ROSTAM_EMBED_MODELS_DIR`. Later starts reuse the cached,
+already-verified files with no network call.
+
+**Known limitation:** every catalog model is used symmetrically — the same
+embedding function for what you store and what you search with. Asymmetric
+models such as E5, which need distinct query/passage prefixes to perform
+well, aren't in the catalog yet; that needs a query-vs-passage role extension
+to the embedder interface, which is future work.
+
+**A local embedder isn't limited to memory.** Once configured, it also
+satisfies the generic vector-DB tools' embedder requirement, so any
+collection — not just `mcp_memory` — can be written and queried by plain
+text, with no cloud API: `upsert` auto-embeds `content` when `vector` is
+omitted, and `search` embeds `query_text` in `dense`/`hybrid` mode when
+`vector` is omitted.
+
+```json
+{"tool": "upsert", "arguments": {"collection": "docs", "id": 1, "content": "hello rostam"}}
+{"tool": "search", "arguments": {"collection": "docs", "query_text": "hello"}}
+```
+
+Without the build tag, `-tags localembed` compiles out entirely: the default
+binary carries no dependency on ONNX Runtime, and setting `ROSTAM_EMBED_LOCAL`
+on a default build fails at startup naming the missing tag.
+
 ## Filters
 
 Tools that accept a `filter` argument take
