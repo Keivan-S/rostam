@@ -18,6 +18,37 @@ import (
 
 func emit(name string, b []byte) { fmt.Printf("%s\t%s\n", name, hex.EncodeToString(b)) }
 
+// mustSpec marshals an engine vector.QuerySpec into the pb.QuerySpec bytes the
+// vector_query op carries (proto.Marshal). Panics on an invalid spec — the oracle
+// only feeds it well-formed specs.
+func mustSpec(spec vector.QuerySpec) []byte {
+	b, err := ops.MarshalEngineQuerySpec(spec)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
+// recommendSpec builds the QuerySpec exactly the way the Go client's
+// (*Collection).Recommend does (rostam-ntvc client/vector_recommend.go): a single
+// LeafRecommend prefetch lane under ModeFusion, no Root, spec.K == leaf.K.
+func recommendSpec(positive, negative []uint64, k int, filter vector.Filter, strategy vector.RecommendStrategy) vector.QuerySpec {
+	leaf := vector.QueryLeaf{
+		Kind:      vector.LeafRecommend,
+		Positive:  positive,
+		Negative:  negative,
+		Strategy:  strategy,
+		ScoreDesc: strategy == vector.RecommendBestScore,
+		K:         k,
+		Filter:    filter,
+	}
+	return vector.QuerySpec{
+		Mode:     vector.ModeFusion,
+		K:        k,
+		Prefetch: []vector.QuerySource{vector.LeafSource(leaf)},
+	}
+}
+
 func main() {
 	// ---- create_collection: a matrix that exercises the config trailer -------
 	base := vector.Config{Dim: 8, Metric: vector.Cosine, M: 16, EfConstruction: 200, EfSearch: 64}
@@ -179,4 +210,29 @@ func main() {
 				{Kind: vector.OrderDatetime, Num: 999.0},
 			},
 		}, 0))
+
+	// ---- Phase B: vector_query recommend specs -------------------------------
+	// The QuerySpec is built exactly as the Go client's Recommend does; each case
+	// emits BOTH the raw marshaled pb.QuerySpec blob (queryspec/*) and the full
+	// EncodeQueryArgs op frame (query/*). Golden byte-matches the hand-rolled
+	// Python protobuf against Go's proto.Marshal.
+	recPos := recommendSpec([]uint64{1, 2, 3}, nil, 10, vector.Filter{}, vector.RecommendAverageVector)
+	emit("queryspec/recommend_pos", mustSpec(recPos))
+	emit("query/recommend_pos", ops.EncodeQueryArgs("docs", mustSpec(recPos), 0, 0, 0))
+
+	recPosNeg := recommendSpec([]uint64{1, 2}, []uint64{9}, 5, vector.Filter{}, vector.RecommendAverageVector)
+	emit("queryspec/recommend_pos_neg", mustSpec(recPosNeg))
+	emit("query/recommend_pos_neg", ops.EncodeQueryArgs("docs", mustSpec(recPosNeg), 0, 0, 0))
+
+	recFilter := recommendSpec([]uint64{1}, nil, 5, tenantFilter, vector.RecommendAverageVector)
+	emit("queryspec/recommend_filter", mustSpec(recFilter))
+	emit("query/recommend_filter", ops.EncodeQueryArgs("docs", mustSpec(recFilter), 0, 0, 0))
+
+	recBest := recommendSpec([]uint64{1, 2}, nil, 5, vector.Filter{}, vector.RecommendBestScore)
+	emit("queryspec/recommend_best_score", mustSpec(recBest))
+	emit("query/recommend_best_score", ops.EncodeQueryArgs("docs", mustSpec(recBest), 0, 0, 0))
+
+	// op-frame with the bounded-staleness read-opts trailer (exercises the
+	// [marker|stalenessbit][rc][opa][bound:u64] tail EncodeQueryArgs appends).
+	emit("query/recommend_bounded", ops.EncodeQueryArgs("docs", mustSpec(recPos), ops.ConsistencyBoundedStaleness, 0, 555))
 }

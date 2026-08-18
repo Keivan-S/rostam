@@ -607,6 +607,189 @@ def encode_create_collection_args(name: str, cfg: Dict[str, Any]) -> bytes:
     return bytes(out)
 
 
+# ---- vector_query: hand-rolled protobuf QuerySpec ---------------------------
+#
+# The vector_query op carries a proto-marshaled pb.QuerySpec as its spec blob
+# (ops/query.go: EncodeQueryArgs → specBytes = proto.Marshal(querySpecToProto)).
+# The stdlib-only Python client has no protobuf library, so the wire encoding is
+# hand-rolled here to byte-match Go's proto.Marshal. proto3 rules replicated:
+#   - key = (field_number << 3) | wire_type, itself a varint
+#   - scalars are omitted when zero/empty (default); a set message oneof arm is
+#     ALWAYS emitted (even an empty sub-message)
+#   - fields are emitted in ASCENDING field-number order
+#   - repeated scalar (varint) fields use PACKED encoding (one length-delimited
+#     block of concatenated varints)
+# Proto field map (from grpcapi/pb/rostam.pb.go):
+#   QuerySpec: root=1(msg) prefetch=2(rep msg) mode=3(enum) fusion_method=4(str)
+#              alpha=5(fixed64) rrf_k=6(varint) k=7(varint) prefetch_sources=8
+#              group_by=9(str) group_size=10(varint)
+#   QueryLeaf oneof: dense=1 sparse=2 named_dense=3 named_sparse=4 mv_maxsim=5
+#              recommend=6(msg) discover=7
+#   RecommendLeaf: positive=1(varint rep packed) negative=2(varint rep packed)
+#              k=3(varint) filter_json=4(bytes) strategy=5(enum) best_pos=6
+#              best_neg=7 space=8(str)
+# Enum values: QueryMode FUSION=0 RERANK=1 ; RecommendStrategy AVERAGE=0 BEST=1.
+# A recommend request (client Recommend) builds ModeFusion (=0 ⇒ omitted) with a
+# single LeafRecommend prefetch lane and no root; fusion_method resolves to "rrf"
+# (non-empty ⇒ always emitted) and spec.k == leaf.k.
+
+_QUERY_MODE = {"fusion": 0, "rerank": 1}
+_RECOMMEND_STRATEGY = {"average": 0, "average_vector": 0, "best": 1, "best_score": 1}
+
+# QueryLeaf oneof field numbers
+_LEAF_RECOMMEND = 6
+# QuerySpec field numbers
+_SPEC_PREFETCH = 2
+_SPEC_MODE = 3
+_SPEC_FUSION_METHOD = 4
+_SPEC_K = 7
+# RecommendLeaf field numbers
+_REC_POSITIVE = 1
+_REC_NEGATIVE = 2
+_REC_K = 3
+_REC_FILTER_JSON = 4
+_REC_STRATEGY = 5
+
+
+def _pb_uvarint(n: int) -> bytes:
+    """Base-128 unsigned varint (Go binary.PutUvarint / proto varint)."""
+    if n < 0:
+        n &= (1 << 64) - 1  # two's-complement into u64 (enums/ids are non-negative here)
+    out = bytearray()
+    while True:
+        b = n & 0x7F
+        n >>= 7
+        if n:
+            out.append(b | 0x80)
+        else:
+            out.append(b)
+            return bytes(out)
+
+
+def _pb_key(field: int, wire: int) -> bytes:
+    return _pb_uvarint((field << 3) | wire)
+
+
+def _pb_len_delim(field: int, payload: bytes) -> bytes:
+    """Wire type 2: [key][len:varint][payload]. Always emitted (caller decides)."""
+    return _pb_key(field, 2) + _pb_uvarint(len(payload)) + payload
+
+
+def _pb_varint_field(field: int, n: int) -> bytes:
+    """Wire type 0 scalar, proto3 omit-zero."""
+    if n == 0:
+        return b""
+    return _pb_key(field, 0) + _pb_uvarint(n)
+
+
+def _pb_string_field(field: int, s: str) -> bytes:
+    """Wire type 2 string, proto3 omit-empty."""
+    b = s.encode("utf-8")
+    if not b:
+        return b""
+    return _pb_len_delim(field, b)
+
+
+def _pb_bytes_field(field: int, b: bytes) -> bytes:
+    """Wire type 2 bytes, proto3 omit-empty."""
+    if not b:
+        return b""
+    return _pb_len_delim(field, b)
+
+
+def _pb_packed_varints(field: int, vals: Sequence[int]) -> bytes:
+    """Repeated scalar varint, PACKED (proto3 default). Omit-empty."""
+    if not vals:
+        return b""
+    payload = b"".join(_pb_uvarint(int(v)) for v in vals)
+    return _pb_len_delim(field, payload)
+
+
+def _marshal_recommend_leaf(positive: Sequence[int], negative: Sequence[int],
+                            k: int, filter_json: bytes, strategy: int) -> bytes:
+    """Marshal a pb.RecommendLeaf (fields in ascending number order)."""
+    out = bytearray()
+    out += _pb_packed_varints(_REC_POSITIVE, positive)
+    out += _pb_packed_varints(_REC_NEGATIVE, negative)
+    out += _pb_varint_field(_REC_K, k)
+    out += _pb_bytes_field(_REC_FILTER_JSON, filter_json)
+    out += _pb_varint_field(_REC_STRATEGY, strategy)
+    return bytes(out)
+
+
+def marshal_recommend_query_spec(*, positive: Sequence[int],
+                                 negative: Optional[Sequence[int]] = None,
+                                 k: int = 0,
+                                 filter: Optional[Dict[str, Any]] = None,
+                                 strategy: int = 0) -> bytes:
+    """Hand-roll the marshaled pb.QuerySpec bytes for a RECOMMEND query, matching
+    Go's proto.Marshal(querySpecToProto(recommendSpec(...))) byte-for-byte.
+
+    Mirrors the Go client's Recommend spec shape: Mode=ModeFusion (enum 0, so the
+    mode field is omitted), a single LeafRecommend prefetch lane (no root), and
+    spec.K == leaf.K. fusion_method resolves to "rrf" and is always emitted.
+
+    The per-leaf filter rides as filter_json — Go's json.Marshal(vector.Filter)
+    output (struct-field order op/field/value, kind as a string). Pass `filter`
+    as the already-Go-shaped tagged dict (e.g. {"op":"eq","field":...,"value":
+    {"kind":"string","str":...}}); it is dumped with compact separators, matching
+    Go's marshaler byte-for-byte.
+    """
+    positive = list(positive or [])
+    negative = list(negative or [])
+    fj = b""
+    if filter:
+        fj = json.dumps(filter, separators=(",", ":")).encode("utf-8")
+
+    leaf_body = _marshal_recommend_leaf(positive, negative, k, fj, strategy)
+    # QueryLeaf: the recommend oneof arm (field 6) is a set message — always emitted.
+    query_leaf = _pb_len_delim(_LEAF_RECOMMEND, leaf_body)
+
+    out = bytearray()
+    out += _pb_len_delim(_SPEC_PREFETCH, query_leaf)  # prefetch[0] (repeated QueryLeaf)
+    # mode: ModeFusion == 0 ⇒ omitted (proto3 default). RERANK would emit field 3.
+    out += _pb_string_field(_SPEC_FUSION_METHOD, "rrf")
+    out += _pb_varint_field(_SPEC_K, k)
+    return bytes(out)
+
+
+def encode_query_args(collection: str, spec_bytes: bytes, *,
+                      read_consistency: int = 0, on_partition_unavailable: int = 0,
+                      bound: int = 0) -> bytes:
+    """Mirrors ops.EncodeQueryArgs. Wire:
+    [colLen:u8][col][specLen:u32][specBytes][optsTrailer]
+
+    optsTrailer is appendReadOptsTrailerBounded (ops/consistency.go): omitted when
+    rc==0 && opa==0; else [marker][rc][opa](+[bound:u64]). The marker is
+    readOptsTrailerMarker(1); for BOUNDED_STALENESS it also sets readOptsStalenessBit
+    (2 ⇒ marker byte 3) and the 8-byte BE bound rides only then."""
+    out = bytearray(_col(collection))
+    out += struct.pack(">I", len(spec_bytes))
+    out += spec_bytes
+    if read_consistency == 0 and on_partition_unavailable == 0:
+        return bytes(out)  # byte-identical to the no-trailer form
+    if read_consistency == CONSISTENCY_BOUNDED_STALENESS:
+        out += bytes([1 | 2, read_consistency, on_partition_unavailable])
+        out += struct.pack(">Q", bound)
+    else:
+        out += bytes([1, read_consistency, on_partition_unavailable])
+    return bytes(out)
+
+
+def encode_recommend_query(collection: str, *, positive: Sequence[int],
+                           negative: Optional[Sequence[int]] = None, k: int = 0,
+                           filter: Optional[Dict[str, Any]] = None, strategy: int = 0,
+                           read_consistency: int = 0, on_partition_unavailable: int = 0,
+                           bound: int = 0) -> bytes:
+    """Build the full vector_query op args for a RECOMMEND request: hand-roll the
+    QuerySpec proto blob then frame it with EncodeQueryArgs. `strategy`: 0 =
+    average-vector (default), 1 = best-score."""
+    spec = marshal_recommend_query_spec(positive=positive, negative=negative, k=k,
+                                        filter=filter, strategy=strategy)
+    return encode_query_args(collection, spec, read_consistency=read_consistency,
+                             on_partition_unavailable=on_partition_unavailable, bound=bound)
+
+
 # ---- result decoders --------------------------------------------------------
 def decode_search_results(body: bytes) -> List[Dict[str, Any]]:
     (count,) = struct.unpack(">I", body[:4])

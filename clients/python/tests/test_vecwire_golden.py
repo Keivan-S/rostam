@@ -147,6 +147,33 @@ _DATAPLANE = {
                 {"kind": "datetime", "num": 999.0},
             ],
         }),
+
+    # ---- Phase B: vector_query recommend (hand-rolled protobuf QuerySpec) -----
+    # queryspec/* is the raw marshaled pb.QuerySpec blob; query/* is the full
+    # EncodeQueryArgs op frame. Both are byte-checked against Go's proto.Marshal.
+    "queryspec/recommend_pos": lambda: w.marshal_recommend_query_spec(
+        positive=[1, 2, 3], k=10),
+    "query/recommend_pos": lambda: w.encode_recommend_query(
+        "docs", positive=[1, 2, 3], k=10),
+
+    "queryspec/recommend_pos_neg": lambda: w.marshal_recommend_query_spec(
+        positive=[1, 2], negative=[9], k=5),
+    "query/recommend_pos_neg": lambda: w.encode_recommend_query(
+        "docs", positive=[1, 2], negative=[9], k=5),
+
+    "queryspec/recommend_filter": lambda: w.marshal_recommend_query_spec(
+        positive=[1], k=5, filter=_TENANT_FILTER),
+    "query/recommend_filter": lambda: w.encode_recommend_query(
+        "docs", positive=[1], k=5, filter=_TENANT_FILTER),
+
+    "queryspec/recommend_best_score": lambda: w.marshal_recommend_query_spec(
+        positive=[1, 2], k=5, strategy=1),
+    "query/recommend_best_score": lambda: w.encode_recommend_query(
+        "docs", positive=[1, 2], k=5, strategy=1),
+
+    "query/recommend_bounded": lambda: w.encode_recommend_query(
+        "docs", positive=[1, 2, 3], k=10,
+        read_consistency=w.CONSISTENCY_BOUNDED_STALENESS, bound=555),
 }
 
 
