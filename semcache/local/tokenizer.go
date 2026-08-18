@@ -12,6 +12,11 @@ import (
 
 const MaxSeqLen = 512
 
+// maxWordChars mirrors BERT's WordPiece max_input_chars_per_word: a single word
+// longer than this (in runes) is emitted as one [UNK] without attempting the
+// O(n^2) longest-prefix search, bounding work on pathological no-space input.
+const maxWordChars = 100
+
 type Tokenizer struct {
 	vocab     map[string]int64
 	lowerCase bool
@@ -86,6 +91,9 @@ func (t *Tokenizer) basicTokens(text string) []string {
 // continuations, falling back to [UNK] for the whole word.
 func (t *Tokenizer) wordPiece(word string) []int64 {
 	runes := []rune(word)
+	if len(runes) > maxWordChars {
+		return []int64{t.unkID} // over-long word: skip the O(n^2) search
+	}
 	var out []int64
 	start := 0
 	for start < len(runes) {

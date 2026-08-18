@@ -19,7 +19,14 @@ CGO_ENABLED=0 go build ./vector/... ./objstore ./cache ./ops
 
 # the optional GPU exact-KNN index requires cgo + a CUDA toolchain
 CGO_ENABLED=1 go build -tags cuda ./...
+
+# the optional local ONNX embedder needs ONNX Runtime >=1.29.0 at runtime
+CGO_ENABLED=1 go build -tags localembed ./cmd/rostam-server
 ```
+
+The `localembed` build enables in-process semantic-cache embeddings; see the
+local embeddings section of [`server/mcp.md`](server/mcp.md) for model catalog,
+`ROSTAM_ONNXRUNTIME_LIB`, and first-run download details.
 
 Without cgo, WASM stored procedures are stubbed: registration/invocation
 returns `wasm.ErrNoCGO`, everything else works.

@@ -6,6 +6,7 @@ package local
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -51,6 +52,37 @@ func TestEncodeWordPiece(t *testing.T) {
 	for _, m := range mask {
 		if m != 1 {
 			t.Fatalf("mask has non-1 for real tokens: %v", mask)
+		}
+	}
+}
+
+func TestEncodeOverLongWordIsSingleUnk(t *testing.T) {
+	vocab := []string{"[PAD]", "[UNK]", "[CLS]", "[SEP]", "a", "##a", "hello"}
+	tok, _ := NewTokenizer(writeVocab(t, vocab), true)
+
+	// A >100-rune no-space word must collapse to one [UNK]=1 without the
+	// O(n^2) prefix search: [CLS] [UNK] [SEP].
+	long := strings.Repeat("a", 101)
+	ids, _ := tok.Encode(long, MaxSeqLen)
+	want := []int64{2, 1, 3}
+	if len(ids) != len(want) {
+		t.Fatalf("ids=%v want %v", ids, want)
+	}
+	for i := range want {
+		if ids[i] != want[i] {
+			t.Fatalf("ids=%v want %v", ids, want)
+		}
+	}
+
+	// A <=100-char word still tokenizes normally (not forced to [UNK]).
+	ids2, _ := tok.Encode("hello", MaxSeqLen)
+	want2 := []int64{2, 6, 3} // [CLS] hello [SEP]
+	if len(ids2) != len(want2) {
+		t.Fatalf("ids2=%v want %v", ids2, want2)
+	}
+	for i := range want2 {
+		if ids2[i] != want2[i] {
+			t.Fatalf("ids2=%v want %v", ids2, want2)
 		}
 	}
 }
