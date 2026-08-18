@@ -47,10 +47,22 @@ func Ensure(ctx context.Context, spec localcatalog.ModelSpec, root string, hc *h
 // fetchVerify downloads url to dest if dest is not already present, verifying
 // the download's SHA-256 against wantSHA before installing it. A checksum
 // mismatch removes the temp file and returns an error; dest is never left
-// holding unverified content.
+// holding unverified content. An existing dest is re-hashed and compared to
+// wantSHA before being trusted: a match reuses it with no network request, a
+// mismatch (corruption, or a stale file from a ModelSpec whose checksum
+// changed) removes it and falls through to a fresh download+verify.
 func fetchVerify(ctx context.Context, hc *http.Client, url, wantSHA, dest string) error {
 	if fi, err := os.Stat(dest); err == nil && fi.Size() > 0 {
-		return nil // already cached (verified when first installed)
+		got, err := sha256File(dest)
+		if err != nil {
+			return err
+		}
+		if got == wantSHA {
+			return nil // already cached and verified
+		}
+		if err := os.Remove(dest); err != nil {
+			return fmt.Errorf("remove stale cache %s: %w", dest, err)
+		}
 	}
 	if hc == nil {
 		hc = http.DefaultClient
@@ -90,4 +102,18 @@ func fetchVerify(ctx context.Context, hc *http.Client, url, wantSHA, dest string
 		return fmt.Errorf("checksum mismatch for %s: got %s want %s", url, got, wantSHA)
 	}
 	return os.Rename(tmpName, dest)
+}
+
+// sha256File returns the lowercase hex SHA-256 digest of the file at path.
+func sha256File(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = f.Close() }()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }

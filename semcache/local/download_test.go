@@ -58,6 +58,51 @@ func TestEnsureDownloadsVerifiesAndReuses(t *testing.T) {
 	}
 }
 
+func TestEnsureReplacesCorruptCache(t *testing.T) {
+	onnx := []byte("fake-onnx-bytes")
+	vocab := []byte("[PAD]\n[UNK]\n[CLS]\n[SEP]\nhello\n")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/model.onnx" {
+			_, _ = w.Write(onnx)
+		} else {
+			_, _ = w.Write(vocab)
+		}
+	}))
+	defer srv.Close()
+
+	spec := localcatalog.ModelSpec{
+		Name: "corrupt", OnnxURL: srv.URL + "/model.onnx", OnnxSHA: sha256hex(onnx),
+		VocabURL: srv.URL + "/vocab.txt", VocabSHA: sha256hex(vocab), Dim: 4,
+	}
+	root := t.TempDir()
+
+	// Pre-seed the cache with a wrong (but non-empty) model.onnx, as if left
+	// behind by corruption or an older ModelSpec whose checksum has since
+	// changed.
+	dir := root + "/corrupt"
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir+"/model.onnx", []byte("stale-wrong-bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	op, _, err := Ensure(context.Background(), spec, root, srv.Client())
+	if err != nil {
+		t.Fatalf("Ensure returned error for a replaceable stale cache: %v", err)
+	}
+	b, err := os.ReadFile(op)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := sha256hex(b); got != spec.OnnxSHA {
+		t.Fatalf("cached file not replaced with correct artifact: sha=%s want %s", got, spec.OnnxSHA)
+	}
+	if string(b) != string(onnx) {
+		t.Fatalf("onnx content mismatch after replacing corrupt cache: got %q want %q", b, onnx)
+	}
+}
+
 func TestEnsureRejectsBadChecksum(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("tampered"))
