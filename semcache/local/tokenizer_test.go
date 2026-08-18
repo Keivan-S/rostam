@@ -87,6 +87,30 @@ func TestEncodeOverLongWordIsSingleUnk(t *testing.T) {
 	}
 }
 
+func TestEncodeWhitespaceControlCharsSplit(t *testing.T) {
+	// \t and \n are BOTH unicode.IsControl and unicode.IsSpace; they must
+	// split tokens like ordinary whitespace, not get silently dropped and
+	// merge the surrounding words into one unknown token.
+	vocab := []string{"[PAD]", "[UNK]", "[CLS]", "[SEP]", "hello", "world"}
+	p := writeVocab(t, vocab)
+	tok, err := NewTokenizer(p, true, "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, _ := tok.Encode("hello world", MaxSeqLen)
+	for _, sep := range []string{"\t", "\n"} {
+		got, _ := tok.Encode("hello"+sep+"world", MaxSeqLen)
+		if len(got) != len(want) {
+			t.Fatalf("Encode(%q)=%v want same shape as %v", "hello"+sep+"world", got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("Encode(%q)=%v want %v", "hello"+sep+"world", got, want)
+			}
+		}
+	}
+}
+
 func TestEncodeCustomSpecialTokens(t *testing.T) {
 	// MPNet-style framing: "<s>"=2, "</s>"=3, "[UNK]"=1, no [CLS]/[SEP] at all.
 	vocab := []string{"[PAD]", "[UNK]", "<s>", "</s>", "hello", "world"}

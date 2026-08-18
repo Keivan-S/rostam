@@ -82,10 +82,10 @@ func (t *Tokenizer) basicTokens(text string) []string {
 	}
 	for _, r := range text {
 		switch {
-		case unicode.IsControl(r):
-			// drop
 		case unicode.IsSpace(r):
 			flush()
+		case unicode.IsControl(r):
+			// drop
 		case unicode.IsPunct(r) || unicode.IsSymbol(r):
 			flush()
 			out = append(out, string(r))
