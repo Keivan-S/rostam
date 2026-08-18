@@ -17,10 +17,6 @@ func TestEmbedderFromEnv_LocalMutualExclusion(t *testing.T) {
 	}
 }
 
-func TestEmbedderFromEnv_LocalCompiledOut(t *testing.T) {
-	// Default build (no -tags localembed): selecting a local model must fail loud.
-	_, err := embedderFromEnv(envMap(map[string]string{"ROSTAM_EMBED_LOCAL": "minilm-l6-v2"}))
-	if err == nil || !strings.Contains(err.Error(), "localembed") {
-		t.Fatalf("want compiled-out error mentioning localembed, got %v", err)
-	}
-}
+// TestEmbedderFromEnv_LocalCompiledOut lives in localembed_stub_test.go
+// (//go:build !localembed): under -tags localembed, ROSTAM_EMBED_LOCAL
+// dispatches to the real embedder, not the compiled-out stub.
