@@ -353,6 +353,10 @@ class _VectorAPI:
         return _vecwire.decode_exists_result(payload or b"\x00")
 
     # ---- Phase C: batch / scroll / RAG-shaped search / hybrid / recommend ---
+    #
+    # Below, `_degraded`/`_missing` from the decoders are intentionally not
+    # surfaced to the caller yet (same as search()'s single-node-only reads) —
+    # a clustered-deployment follow-up.
 
     def get_batch(self, collection: str, ids: Sequence[int], *, with_vector: bool = True,
                   with_payload: bool = True) -> List[Dict[str, Any]]:
@@ -469,10 +473,13 @@ class _VectorAPI:
                               filter=filter, strategy=strategy)
 
     def upsert_batch(self, collection: str, points: Sequence[Dict[str, Any]]) -> None:
-        """N pipelined vector_upsert ops sent back-to-back over one connection —
-        there is no native-TCP batch-upsert wire op (see
-        _vecwire.encode_upsert_batch_args). Each point dict:
-        {id, vector, content="", ttl_ms=0, metadata=None, sparse=None}."""
+        """N sequential vector_upsert ops over one connection, each awaited
+        before the next is sent — there is no native-TCP batch-upsert wire op
+        (see _vecwire.encode_upsert_batch_args), and this does not pipeline
+        (matching the Go client, which also loops since there's no native batch
+        op); real pipelining (write all frames, then read all responses) is a
+        possible future optimization. Each point dict: {id, vector, content="",
+        ttl_ms=0, metadata=None, sparse=None}."""
         for args in _vecwire.encode_upsert_batch_args(collection, points):
             self._c._call("vector_upsert", args)
 

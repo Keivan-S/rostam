@@ -36,11 +36,13 @@ _HYBRID_F_FILTER = 1 << 0
 _HYBRID_F_SPARSE = 1 << 1
 _HYBRID_F_OPTS = 1 << 2
 
-# hybrid_text flag bits (text.go: textFlagFilter/textFlagOpts/textFlagGlobalIDF/textFlagGlobalStats)
+# hybrid_text flag bits (text.go: textFlagFilter/textFlagOpts/textFlagGlobalIDF).
+# textFlagGlobalStats (1 << 3) is deliberately not defined here: it tags the
+# coordinator-only phase-1 global-DF stats block, which this client never
+# constructs (see encode_hybrid_text_args_global).
 _TEXT_F_FILTER = 1 << 0
 _TEXT_F_OPTS = 1 << 1
 _TEXT_F_GLOBAL_IDF = 1 << 2
-_TEXT_F_GLOBAL_STATS = 1 << 3
 
 # fusion method (vector/fusion.go: FusionMethod)
 _FUSION_METHOD = {"rrf": 0, "weighted": 1, "dbsf": 2}
@@ -371,11 +373,13 @@ def encode_hybrid_search_args_opts(collection: str, dense: Vector, k: int,
 def encode_hybrid_text_args_global(collection: str, dense: Vector, query: str, k: int,
                                    opts: Optional[Dict[str, Any]] = None, *,
                                    read_consistency: int = 0, on_partition_unavailable: int = 0,
-                                   bound: int = 0, global_idf: bool = False,
-                                   g: Optional[Dict[str, Any]] = None) -> bytes:
+                                   bound: int = 0, global_idf: bool = False) -> bytes:
     """Mirrors ops.EncodeHybridTextArgsGlobal. `opts`: {filter=None, method="rrf",
-    alpha=0.0, rrf_k=0, dense_k=0, sparse_k=0}. `g` (normally None — the
-    coordinator-only phase-1 global-DF stats block): {n=0, avgdl=0.0, df={term:freq}}."""
+    alpha=0.0, rrf_k=0, dense_k=0, sparse_k=0}. The Go op also carries a
+    coordinator-only phase-1 global-DF stats block (`g` / textFlagGlobalStats),
+    but that block is populated by the coordinator itself when fanning a
+    global_idf=True request out to shards — this client only ever sends the
+    initial (no-`g`) request, so that block is intentionally not encoded here."""
     opts = opts or {}
     filt = opts.get("filter")
     flags = 0
@@ -405,16 +409,6 @@ def encode_hybrid_text_args_global(collection: str, dense: Vector, query: str, k
     if has_opts:
         out += bytes([read_consistency, on_partition_unavailable])
         out += _bound_tail(read_consistency, bound)
-
-    if g is not None:
-        flags |= _TEXT_F_GLOBAL_STATS
-        out[0] = flags
-        out += struct.pack(">q", int(g.get("n", 0)))
-        out += struct.pack(">f", float(g.get("avgdl", 0.0)))
-        df = g.get("df", {}) or {}
-        out += struct.pack(">I", len(df))
-        for term in sorted(df.keys()):
-            out += struct.pack(">I", term) + struct.pack(">I", df[term])
 
     return bytes(out)
 
@@ -480,9 +474,10 @@ def encode_upsert_batch_args(collection: str, points: Sequence[Dict[str, Any]]) 
     httpapi/binary_bulk.go for POST /points/bulk and /points/bulk/build) is an
     HTTP-only staging protocol for the multi-core index build, not part of the
     ops.Encode* native-TCP family and not something a TCP client op can drive.
-    So a native-TCP upsert_batch is just N pipelined vector_upsert ops: this
+    So a native-TCP upsert_batch is just N sequential vector_upsert ops: this
     returns the list of per-point encode_upsert_args() outputs for the caller to
-    send back-to-back (pipelined) over the same connection.
+    send one at a time (each awaited before the next) over the same connection —
+    not pipelined (matching the Go client, which also loops per-point).
     Each point dict: {id, vector, content="", ttl_ms=0, metadata=None, sparse=None}.
     """
     out = []
@@ -877,6 +872,45 @@ def decode_get_result(body: bytes) -> Optional[Dict[str, Any]]:
 # These mirror the Go decoders in ops/vector.go and ops/query.go: read_only the
 # same layout, degraded-trailer-tolerant where the Go decoder is (a missing
 # trailer decodes as degraded=False, missing=[]).
+#
+# Every length prefix these decoders read (count/clen/mlen/nnz/dim/...) is
+# validated against the remaining buffer before it's used to slice, via the
+# _need/_read_* helpers below — a truncated or hostile response raises a clear
+# ValueError instead of over-reading (silently returning garbage) or
+# over-allocating.
+
+def _need(body: bytes, off: int, n: int, what: str) -> None:
+    """Raise ValueError unless body[off:off + n] is fully within bounds."""
+    if off < 0 or n < 0 or off + n > len(body):
+        raise ValueError(
+            f"corrupt/truncated {what} response: need {n} bytes at offset {off}, "
+            f"body is only {len(body)} bytes")
+
+
+def _read_u32(body: bytes, off: int, what: str) -> Tuple[int, int]:
+    _need(body, off, 4, what)
+    return struct.unpack(">I", body[off:off + 4])[0], off + 4
+
+
+def _read_u64(body: bytes, off: int, what: str) -> Tuple[int, int]:
+    _need(body, off, 8, what)
+    return struct.unpack(">Q", body[off:off + 8])[0], off + 8
+
+
+def _read_f32(body: bytes, off: int, what: str) -> Tuple[float, int]:
+    _need(body, off, 4, what)
+    return struct.unpack(">f", body[off:off + 4])[0], off + 4
+
+
+def _read_bytes(body: bytes, off: int, n: int, what: str) -> Tuple[bytes, int]:
+    _need(body, off, n, what)
+    return body[off:off + n], off + n
+
+
+def _read_flag(body: bytes, off: int, what: str) -> Tuple[bool, int]:
+    _need(body, off, 1, what)
+    return bool(body[off]), off + 1
+
 
 def _read_degraded_trailer(body: bytes, off: int) -> Tuple[bool, List[int], int]:
     """Mirrors ops.readDegradedTrailerN: [degraded:u8][missingCount:u16]{partID:u16}
@@ -900,18 +934,20 @@ def _read_degraded_trailer(body: bytes, off: int) -> Tuple[bool, List[int], int]
 def _decode_docs_raw(body: bytes, off: int = 0) -> Tuple[List[Dict[str, Any]], int]:
     """Mirrors ops.frameVectorDocsN + the typed unmarshal: one EncodeVectorDocs
     block at body[off:]. Wire per doc: [id:u64][distance:f32][score:f32]
-    [contentLen:u32][content][metaLen:u32][metaJSON]. Returns (docs, next_off)."""
-    (count,) = struct.unpack(">I", body[off:off + 4]); off += 4
+    [contentLen:u32][content][metaLen:u32][metaJSON]. Returns (docs, next_off).
+    Raises ValueError (not struct.error/IndexError) on a truncated body."""
+    count, off = _read_u32(body, off, "docs count")
     docs = []
     for _ in range(count):
-        rid = struct.unpack(">Q", body[off:off + 8])[0]; off += 8
-        dist = struct.unpack(">f", body[off:off + 4])[0]; off += 4
-        score = struct.unpack(">f", body[off:off + 4])[0]; off += 4
-        (clen,) = struct.unpack(">I", body[off:off + 4]); off += 4
-        content = body[off:off + clen].decode("utf-8"); off += clen
-        (mlen,) = struct.unpack(">I", body[off:off + 4]); off += 4
-        meta = decode_metadata(json.loads(body[off:off + mlen])) if mlen else {}
-        off += mlen
+        rid, off = _read_u64(body, off, "doc id")
+        dist, off = _read_f32(body, off, "doc distance")
+        score, off = _read_f32(body, off, "doc score")
+        clen, off = _read_u32(body, off, "doc content length")
+        content_b, off = _read_bytes(body, off, clen, "doc content")
+        content = content_b.decode("utf-8")
+        mlen, off = _read_u32(body, off, "doc metadata length")
+        meta_b, off = _read_bytes(body, off, mlen, "doc metadata")
+        meta = decode_metadata(json.loads(meta_b)) if mlen else {}
         docs.append({"id": rid, "distance": dist, "score": score, "content": content, "metadata": meta})
     return docs, off
 
@@ -931,6 +967,9 @@ def decode_scroll_result_raw(body: bytes) -> Tuple[List[Dict[str, Any]], bool, L
     docs, off = _decode_docs_raw(body)
     degraded, missing, off = _read_degraded_trailer(body, off)
     next_cursor = ""
+    # Deliberately tolerant (not _read_u32/_read_bytes, which raise): an
+    # old/short body with no cursor tail at all is a valid, expected shape
+    # (single-node server, see scroll()'s caller), not a corrupt response.
     if len(body) >= off + 4:
         (clen,) = struct.unpack(">I", body[off:off + 4]); off += 4
         if clen > 0 and len(body) >= off + clen:
@@ -942,15 +981,17 @@ def decode_groups_degraded_raw(body: bytes) -> Tuple[List[Dict[str, Any]], bool,
     """Mirrors ops.DecodeGroupsDegradedRaw. Wire: [count:u32]{[keyLen:u32][keyJSON]
     [hitsLen:u32][hits: EncodeVectorDocs block]} then the degraded trailer. Each
     group's key is a single tagged Value (json.Marshal of vector.Value), decoded
-    with decode_value (NOT decode_metadata, which expects a map)."""
-    (count,) = struct.unpack(">I", body[0:4]); off = 4
+    with decode_value (NOT decode_metadata, which expects a map). Raises
+    ValueError on a truncated body."""
+    count, off = _read_u32(body, 0, "groups count")
     groups = []
     for _ in range(count):
-        (klen,) = struct.unpack(">I", body[off:off + 4]); off += 4
-        key = decode_value(json.loads(body[off:off + klen])); off += klen
-        (dlen,) = struct.unpack(">I", body[off:off + 4]); off += 4
-        hits, _ = _decode_docs_raw(body[off:off + dlen], 0)
-        off += dlen
+        klen, off = _read_u32(body, off, "group key length")
+        key_b, off = _read_bytes(body, off, klen, "group key")
+        key = decode_value(json.loads(key_b))
+        dlen, off = _read_u32(body, off, "group hits length")
+        hits_b, off = _read_bytes(body, off, dlen, "group hits")
+        hits, _ = _decode_docs_raw(hits_b, 0)
         groups.append({"key": key, "hits": hits})
     degraded, missing, _ = _read_degraded_trailer(body, off)
     return groups, degraded, missing
@@ -959,13 +1000,14 @@ def decode_groups_degraded_raw(body: bytes) -> Tuple[List[Dict[str, Any]], bool,
 def _decode_hybrid_results_block(body: bytes, off: int = 0) -> Tuple[List[Dict[str, Any]], int]:
     """Mirrors ops.decodeHybridResultsN: [count:u32]{[id:u64][distance:f32]
     [score:f32]}. Shared by hybrid_search/hybrid_text and the recommend/query
-    flat-fused result (which carries the SAME per-row shape)."""
-    (count,) = struct.unpack(">I", body[off:off + 4]); off += 4
+    flat-fused result (which carries the SAME per-row shape). Raises
+    ValueError on a truncated body."""
+    count, off = _read_u32(body, off, "hybrid results count")
     results = []
     for _ in range(count):
-        rid = struct.unpack(">Q", body[off:off + 8])[0]; off += 8
-        dist = struct.unpack(">f", body[off:off + 4])[0]; off += 4
-        score = struct.unpack(">f", body[off:off + 4])[0]; off += 4
+        rid, off = _read_u64(body, off, "hybrid result id")
+        dist, off = _read_f32(body, off, "hybrid result distance")
+        score, off = _read_f32(body, off, "hybrid result score")
         results.append({"id": rid, "distance": dist, "score": score})
     return results, off
 
@@ -988,9 +1030,9 @@ _QUERY_RESULT_MODE_RERANK = 1
 def decode_query_result_degraded(body: bytes) -> Tuple[List[Dict[str, Any]], bool, List[int]]:
     """Mirrors ops.DecodeQueryResultDegraded: a mode-tagged flat fused result
     (used by recommend/query) plus the degraded trailer. Fails loud if the body
-    is not RERANK-tagged (mirroring the Go decoder's fail-loud contract)."""
-    if len(body) < 1:
-        raise ValueError("truncated query result")
+    is not RERANK-tagged (mirroring the Go decoder's fail-loud contract), or is
+    truncated."""
+    _need(body, 0, 1, "query result mode byte")
     mode = body[0]
     if mode != _QUERY_RESULT_MODE_RERANK:
         raise ValueError(f"query result mode {mode} is not a flat fused result")
@@ -1007,37 +1049,39 @@ def _decode_get_body_after_found(body: bytes, off: int, version_framed: bool) ->
       - True (batch row): ALWAYS framed ([verPresent:u8][?version:u64]) so the
         record self-delimits and the next row's id is found unambiguously.
       - False (single get): OPTIONAL — read only when bytes remain.
-    Returns ({vector, metadata, ttl_ms, sparse, version}, next_off)."""
-    (dim,) = struct.unpack(">I", body[off:off + 4]); off += 4
+    Returns ({vector, metadata, ttl_ms, sparse, version}, next_off). Raises
+    ValueError on a truncated body."""
+    dim, off = _read_u32(body, off, "get vector dim")
     vec = None
     if dim:
-        vec = [struct.unpack(">f", body[off + 4 * i:off + 4 * i + 4])[0] for i in range(dim)]
-        off += 4 * dim
-    (ttl_ms,) = struct.unpack(">Q", body[off:off + 8]); off += 8
-    meta_present = body[off]; off += 1
+        vec_b, off = _read_bytes(body, off, 4 * dim, "get vector data")
+        vec = [struct.unpack(">f", vec_b[i * 4:i * 4 + 4])[0] for i in range(dim)]
+    ttl_ms, off = _read_u64(body, off, "get ttl")
+    meta_present, off = _read_flag(body, off, "get metadata-present flag")
     meta = None
     if meta_present:
-        (mlen,) = struct.unpack(">I", body[off:off + 4]); off += 4
-        meta = decode_metadata(json.loads(body[off:off + mlen])); off += mlen
-    sparse_present = body[off]; off += 1
+        mlen, off = _read_u32(body, off, "get metadata length")
+        meta_b, off = _read_bytes(body, off, mlen, "get metadata")
+        meta = decode_metadata(json.loads(meta_b))
+    sparse_present, off = _read_flag(body, off, "get sparse-present flag")
     sparse = None
     if sparse_present:
-        (nnz,) = struct.unpack(">I", body[off:off + 4]); off += 4
+        nnz, off = _read_u32(body, off, "get sparse nnz")
         idx, val = [], []
         for _ in range(nnz):
-            idx.append(struct.unpack(">I", body[off:off + 4])[0])
-            val.append(struct.unpack(">f", body[off + 4:off + 8])[0])
-            off += 8
+            entry_b, off = _read_bytes(body, off, 8, "get sparse entry")
+            idx.append(struct.unpack(">I", entry_b[0:4])[0])
+            val.append(struct.unpack(">f", entry_b[4:8])[0])
         sparse = {"indices": idx, "values": val}
     version = 0
     if version_framed:
-        ver_present = body[off]; off += 1
+        ver_present, off = _read_flag(body, off, "get batch version-present flag")
         if ver_present:
-            (version,) = struct.unpack(">Q", body[off:off + 8]); off += 8
+            version, off = _read_u64(body, off, "get batch version")
     elif off < len(body):
-        ver_present = body[off]; off += 1
+        ver_present, off = _read_flag(body, off, "get version-present flag")
         if ver_present:
-            (version,) = struct.unpack(">Q", body[off:off + 8]); off += 8
+            version, off = _read_u64(body, off, "get version")
     return {"vector": vec, "metadata": meta or {}, "ttl_ms": ttl_ms, "sparse": sparse, "version": version}, off
 
 
@@ -1047,12 +1091,13 @@ def decode_get_batch_result(body: bytes) -> List[Dict[str, Any]]:
     vector_get carries (see _decode_get_body_after_found), with an ALWAYS-framed
     trailing version block so rows self-delimit. Returns a list of
     {id, found, vector, metadata, ttl_ms, sparse, version} — a not-found row
-    carries only id/found (the rest default to the not-found shape)."""
-    (n,) = struct.unpack(">I", body[0:4]); off = 4
+    carries only id/found (the rest default to the not-found shape). Raises
+    ValueError on a truncated body."""
+    n, off = _read_u32(body, 0, "get_batch count")
     rows = []
     for _ in range(n):
-        rid = struct.unpack(">Q", body[off:off + 8])[0]; off += 8
-        found = bool(body[off]); off += 1
+        rid, off = _read_u64(body, off, "get_batch row id")
+        found, off = _read_flag(body, off, "get_batch found flag")
         if not found:
             rows.append({"id": rid, "found": False, "vector": None, "metadata": {}, "ttl_ms": 0, "sparse": None, "version": 0})
             continue

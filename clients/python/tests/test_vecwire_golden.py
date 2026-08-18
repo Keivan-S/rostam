@@ -226,7 +226,7 @@ class VecwireGuardTest(unittest.TestCase):
 class VecwireUpsertBatchTest(unittest.TestCase):
     # There is no native-TCP batch-upsert wire op (see _vecwire.encode_upsert_batch_args'
     # docstring), so this isn't a golden test — it just asserts the batch helper is
-    # exactly N pipelined encode_upsert_args() calls, byte for byte.
+    # exactly N sequential encode_upsert_args() calls, byte for byte.
     def test_batch_equals_sequential_singles(self):
         points = [
             {"id": 1, "vector": _VEC, "content": "hello"},
