@@ -206,7 +206,8 @@ omitted, and `search` embeds `query_text` in `dense`/`hybrid` mode when
 {"tool": "search", "arguments": {"collection": "docs", "query_text": "hello"}}
 ```
 
-Without the build tag, `-tags localembed` compiles out entirely: the default
+The local embedder is compiled in only when `-tags localembed` is passed to
+`go build`; without it, the feature compiles out entirely — the default
 binary carries no dependency on ONNX Runtime, and setting `ROSTAM_EMBED_LOCAL`
 on a default build fails at startup naming the missing tag.
 
