@@ -21,6 +21,7 @@ import (
 	"github.com/rostamlabs/rostam/mcp"
 	"github.com/rostamlabs/rostam/ops"
 	"github.com/rostamlabs/rostam/semcache"
+	"github.com/rostamlabs/rostam/semcache/localcatalog"
 	"github.com/rostamlabs/rostam/tlsutil"
 )
 
@@ -87,8 +88,17 @@ func runMcpCmd(args []string) {
 	fs.StringVar(&fl.tlsKey, "tls-key", "", "client private key PEM for mTLS (-connect; requires -tls-cert)")
 	fs.StringVar(&fl.tlsServer, "tls-server-name", "", "expected server certificate name (SNI + verification) for -connect")
 	fs.BoolVar(&fl.destructive, "enable-destructive", false, "register delete/delete_by_filter tools for arbitrary collections (off by default)")
+	listModels := fs.Bool("list-embed-models", false, "print the local embedding models available with -tags localembed, then exit")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
+	}
+
+	if *listModels {
+		for _, n := range localcatalog.Names() {
+			m, _ := localcatalog.Lookup(n)
+			fmt.Printf("%-20s dim=%d pool=%s license=%s  (%s)\n", m.Name, m.Dim, m.Pooling, m.License, m.HFRepo)
+		}
+		return
 	}
 
 	// Was -data given explicitly on the command line, as opposed to sitting at
@@ -289,7 +299,14 @@ func mcpSetup(fl mcpFlags, lookupEnv func(string) (string, bool)) (mcpRuntime, e
 // rather than silently falling back to BM25-only. Shared by any subcommand
 // that wants a hosted embedder (mcp today; llm-proxy will too).
 func embedderFromEnv(lookupEnv func(string) (string, bool)) (semcache.Embedder, error) {
+	localName, _ := lookupEnv("ROSTAM_EMBED_LOCAL")
 	endpoint, _ := lookupEnv("ROSTAM_EMBED_ENDPOINT")
+	if localName != "" {
+		if endpoint != "" {
+			return nil, errors.New("rostam-server: ROSTAM_EMBED_LOCAL and ROSTAM_EMBED_ENDPOINT are mutually exclusive")
+		}
+		return newLocalEmbedder(localName, lookupEnv)
+	}
 	if endpoint == "" {
 		return nil, nil
 	}
