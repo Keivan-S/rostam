@@ -41,11 +41,10 @@ import (
 	ort "github.com/yalue/onnxruntime_go"
 )
 
-// Fixed I/O contract shared with the rest of the localembed path.
-var (
-	ortInputNames  = []string{"input_ids", "attention_mask", "token_type_ids"}
-	ortOutputNames = []string{"last_hidden_state"}
-)
+// Base input names every supported encoder declares. token_type_ids is optional
+// (present on BERT-family exports, absent on the MPNet/RoBERTa lineage) and is
+// resolved per model from the ONNX graph's declared inputs.
+var baseInputNames = []string{"input_ids", "attention_mask"}
 
 var ortInit struct {
 	sync.Once
@@ -93,37 +92,99 @@ func ensureORT(libPath string) error {
 }
 
 // ortSession is a reusable ONNX Runtime session over a transformer encoder that
-// emits last_hidden_state. Batch and sequence length are dynamic and supplied
-// per run call.
+// emits a token-level hidden-state tensor. Batch and sequence length are dynamic
+// and supplied per run call. hasTokenType records whether the model declares a
+// token_type_ids input; models without it (e.g. all-mpnet-base-v2) are fed only
+// input_ids + attention_mask.
 type ortSession struct {
-	sess *ort.DynamicAdvancedSession
+	sess         *ort.DynamicAdvancedSession
+	hasTokenType bool
 }
 
 // newORTSession ensures the ORT environment is initialized against libPath and
-// builds a session for the model at modelPath bound to the fixed input/output
-// names.
+// builds a session for the model at modelPath. It introspects the model's
+// declared inputs/outputs so token_type_ids is bound only when the graph
+// actually declares it, and the single hidden-state output is bound by its real
+// declared name rather than an assumed one.
 func newORTSession(modelPath, libPath string) (*ortSession, error) {
 	if err := ensureORT(libPath); err != nil {
 		return nil, fmt.Errorf("initialize ONNX Runtime: %w", err)
 	}
-	sess, err := ort.NewDynamicAdvancedSession(modelPath, ortInputNames, ortOutputNames, nil)
+
+	inInfo, outInfo, err := ort.GetInputOutputInfo(modelPath)
+	if err != nil {
+		return nil, fmt.Errorf("introspect ONNX model %q: %w", modelPath, err)
+	}
+	declared := make(map[string]bool, len(inInfo))
+	for _, in := range inInfo {
+		declared[in.Name] = true
+	}
+	for _, req := range baseInputNames {
+		if !declared[req] {
+			return nil, fmt.Errorf("ONNX model %q does not declare required input %q", modelPath, req)
+		}
+	}
+
+	inputNames := append([]string(nil), baseInputNames...)
+	hasTokenType := declared["token_type_ids"]
+	if hasTokenType {
+		inputNames = append(inputNames, "token_type_ids")
+	}
+
+	outName, err := hiddenStateOutput(outInfo)
+	if err != nil {
+		return nil, fmt.Errorf("ONNX model %q: %w", modelPath, err)
+	}
+
+	sess, err := ort.NewDynamicAdvancedSession(modelPath, inputNames, []string{outName}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create ONNX session for %q: %w", modelPath, err)
 	}
-	return &ortSession{sess: sess}, nil
+	return &ortSession{sess: sess, hasTokenType: hasTokenType}, nil
 }
 
-// run feeds the three int64 input tensors (each shaped [batch, seqLen]) through
-// the session and returns the flattened row-major last_hidden_state together
-// with its trailing hidden dimension. tokenType is expected to be all zeros for
-// single-segment inputs but is passed through verbatim.
+// hiddenStateOutput picks the token-level hidden-state output: the single rank-3
+// float tensor ([batch, seqLen, hidden]). Auxiliary outputs some exports add
+// (e.g. a rank-2 pooled sentence embedding) are ignored. It prefers a
+// "last_hidden_state" match when several rank-3 float outputs exist.
+func hiddenStateOutput(outInfo []ort.InputOutputInfo) (string, error) {
+	var candidate string
+	for _, o := range outInfo {
+		if o.OrtValueType != ort.ONNXTypeTensor {
+			continue
+		}
+		if o.DataType != ort.TensorElementDataTypeFloat || len(o.Dimensions) != 3 {
+			continue
+		}
+		if o.Name == "last_hidden_state" {
+			return o.Name, nil
+		}
+		if candidate == "" {
+			candidate = o.Name
+		}
+	}
+	if candidate == "" {
+		return "", errors.New("no rank-3 float hidden-state output found")
+	}
+	return candidate, nil
+}
+
+// run feeds the int64 input tensors (each shaped [batch, seqLen]) through the
+// session and returns the flattened row-major hidden-state tensor together with
+// its trailing hidden dimension. tokenType is expected to be all zeros for
+// single-segment inputs and is passed only to models that declare a
+// token_type_ids input; for models without it (hasTokenType false) tokenType is
+// ignored and the argument may be nil.
 func (s *ortSession) run(inputIDs, attnMask, tokenType []int64, batch, seqLen int) (hidden []float32, hiddenDim int, err error) {
 	want := batch * seqLen
-	for name, data := range map[string][]int64{
+	lens := map[string][]int64{
 		"input_ids":      inputIDs,
 		"attention_mask": attnMask,
-		"token_type_ids": tokenType,
-	} {
+	}
+	if s.hasTokenType {
+		lens["token_type_ids"] = tokenType
+	}
+	for name, data := range lens {
 		if len(data) != want {
 			return nil, 0, fmt.Errorf("%s has %d elements, want batch*seqLen=%d", name, len(data), want)
 		}
@@ -143,14 +204,19 @@ func (s *ortSession) run(inputIDs, attnMask, tokenType []int64, batch, seqLen in
 	}
 	defer destroyValue(maskTensor, &err)
 
-	typeTensor, err := ort.NewTensor(shape, tokenType)
-	if err != nil {
-		return nil, 0, fmt.Errorf("build token_type_ids tensor: %w", err)
+	// Input order here must match the inputNames order bound in newORTSession:
+	// input_ids, attention_mask, then token_type_ids only when declared.
+	inputs := []ort.Value{idTensor, maskTensor}
+	if s.hasTokenType {
+		typeTensor, terr := ort.NewTensor(shape, tokenType)
+		if terr != nil {
+			return nil, 0, fmt.Errorf("build token_type_ids tensor: %w", terr)
+		}
+		defer destroyValue(typeTensor, &err)
+		inputs = append(inputs, typeTensor)
 	}
-	defer destroyValue(typeTensor, &err)
 
-	inputs := []ort.Value{idTensor, maskTensor, typeTensor}
-	outputs := []ort.Value{nil} // nil => ORT auto-allocates last_hidden_state
+	outputs := []ort.Value{nil} // nil => ORT auto-allocates the hidden-state tensor
 
 	if err = s.sess.Run(inputs, outputs); err != nil {
 		return nil, 0, fmt.Errorf("run session: %w", err)
@@ -158,18 +224,18 @@ func (s *ortSession) run(inputIDs, attnMask, tokenType []int64, batch, seqLen in
 
 	out := outputs[0]
 	if out == nil {
-		return nil, 0, errors.New("session produced no last_hidden_state output")
+		return nil, 0, errors.New("session produced no hidden-state output")
 	}
 	defer destroyValue(out, &err)
 
 	outTensor, ok := out.(*ort.Tensor[float32])
 	if !ok {
-		return nil, 0, fmt.Errorf("last_hidden_state has unexpected type %T, want *ort.Tensor[float32]", out)
+		return nil, 0, fmt.Errorf("hidden-state output has unexpected type %T, want *ort.Tensor[float32]", out)
 	}
 
 	outShape := outTensor.GetShape() // expect [batch, seqLen, hidden]
 	if len(outShape) != 3 {
-		return nil, 0, fmt.Errorf("last_hidden_state has rank %d, want 3 ([batch, seqLen, hidden])", len(outShape))
+		return nil, 0, fmt.Errorf("hidden-state output has rank %d, want 3 ([batch, seqLen, hidden])", len(outShape))
 	}
 	hiddenDim = int(outShape[2])
 

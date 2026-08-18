@@ -39,6 +39,12 @@ type ModelSpec struct {
 	Pooling   Pooling
 	LowerCase bool
 	License   string
+	// ClsToken and SepToken name the sequence-framing special tokens used by
+	// the tokenizer. Empty means the BERT defaults "[CLS]"/"[SEP]"; models in
+	// the RoBERTa/MPNet lineage set them to "<s>"/"</s>" instead. The unknown
+	// token is always "[UNK]".
+	ClsToken string
+	SepToken string
 }
 
 // DefaultModel is chosen when ROSTAM_EMBED_LOCAL is "1", "default", or empty.
@@ -80,6 +86,51 @@ var catalog = map[string]ModelSpec{
 		Pooling:   PoolingMean,
 		LowerCase: true,
 		License:   "MIT",
+	},
+
+	// --- 768-dim "base" tier ---------------------------------------------
+
+	"bge-base-en-v1.5": {
+		Name:      "bge-base-en-v1.5",
+		HFRepo:    "BAAI/bge-base-en-v1.5",
+		OnnxURL:   "https://huggingface.co/BAAI/bge-base-en-v1.5/resolve/main/onnx/model.onnx",
+		OnnxSHA:   "9bc579acdba21c253c62a9bf866891355a63ffa3442b52c8a37d75b2ccb91848",
+		VocabURL:  "https://huggingface.co/BAAI/bge-base-en-v1.5/resolve/main/vocab.txt",
+		VocabSHA:  "07eced375cec144d27c900241f3e339478dec958f92fddbc551f295c992038a3",
+		Dim:       768,
+		Pooling:   PoolingCLS,
+		LowerCase: true,
+		License:   "MIT",
+	},
+	"gte-base": {
+		Name:      "gte-base",
+		HFRepo:    "thenlper/gte-base",
+		OnnxURL:   "https://huggingface.co/thenlper/gte-base/resolve/main/onnx/model.onnx",
+		OnnxSHA:   "dbfc7a6898c7c95fc53e52aaaf8302b5b2f5e8ec90d0eafa8e3d4acd26abef39",
+		VocabURL:  "https://huggingface.co/thenlper/gte-base/resolve/main/vocab.txt",
+		VocabSHA:  "07eced375cec144d27c900241f3e339478dec958f92fddbc551f295c992038a3",
+		Dim:       768,
+		Pooling:   PoolingMean,
+		LowerCase: true,
+		License:   "MIT",
+	},
+	// all-mpnet-base-v2 uses "<s>"/"</s>" framing and its ONNX export declares
+	// no token_type_ids input; both quirks are handled generically (see the
+	// tokenizer's configurable special tokens and the onnx session's declared-
+	// input introspection).
+	"all-mpnet-base-v2": {
+		Name:      "all-mpnet-base-v2",
+		HFRepo:    "sentence-transformers/all-mpnet-base-v2",
+		OnnxURL:   "https://huggingface.co/sentence-transformers/all-mpnet-base-v2/resolve/main/onnx/model.onnx",
+		OnnxSHA:   "74187b16d9c946fea252e120cfd7a12c5779d8b8b86838a2e4c56573c47941bd",
+		VocabURL:  "https://huggingface.co/sentence-transformers/all-mpnet-base-v2/resolve/main/vocab.txt",
+		VocabSHA:  "dbd90cb94e2247bd4d4ccaecbf616d2290e66691d7d5e5bb81f063c2d0649ada",
+		Dim:       768,
+		Pooling:   PoolingMean,
+		LowerCase: true,
+		License:   "Apache-2.0",
+		ClsToken:  "<s>",
+		SepToken:  "</s>",
 	},
 }
 

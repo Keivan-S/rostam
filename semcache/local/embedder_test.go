@@ -7,6 +7,7 @@ import (
 	"context"
 	"math"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/rostamlabs/rostam/semcache/localcatalog"
@@ -39,13 +40,25 @@ func TestEmbedEndToEnd(t *testing.T) {
 	if !ok {
 		t.Skip("set ROSTAM_ONNXRUNTIME_LIB to run the ONNX end-to-end test")
 	}
+	// A shared, persistent cache (ROSTAM_LOCALEMBED_CACHE) lets repeated runs
+	// reuse the multi-hundred-MB base-tier downloads instead of re-fetching per
+	// subtest; unset, each subtest downloads into its own temp dir. filepath.Clean
+	// sanitizes the env-provided path (it is developer-supplied, not attacker
+	// input, but keeps gosec's taint analysis quiet).
+	var cacheRoot string
+	if v := os.Getenv("ROSTAM_LOCALEMBED_CACHE"); v != "" {
+		cacheRoot = filepath.Clean(v)
+	}
 	for _, name := range localcatalog.Names() {
 		t.Run(name, func(t *testing.T) {
 			spec, ok := localcatalog.Lookup(name)
 			if !ok {
 				t.Fatalf("Lookup(%q) failed", name)
 			}
-			root := t.TempDir()
+			root := cacheRoot
+			if root == "" {
+				root = t.TempDir()
+			}
 			e, err := NewEmbedder(context.Background(), spec, root, lib, nil)
 			if err != nil {
 				t.Fatalf("NewEmbedder: %v", err)

@@ -171,11 +171,17 @@ mismatch cases above. `1` or `default` selects the default model,
 `minilm-l6-v2`. Run `rostam-server mcp -list-embed-models` to print the full
 catalog from the binary you have installed.
 
+The catalog has two tiers: a 384-dim tier (smaller and faster) and a higher-
+quality 768-dim "base" tier.
+
 | Name | Dim | Pooling | License |
 |---|--:|---|---|
 | `minilm-l6-v2` (default) | 384 | mean | Apache-2.0 |
 | `bge-small-en-v1.5` | 384 | CLS | MIT |
 | `gte-small` | 384 | mean | MIT |
+| `bge-base-en-v1.5` | 768 | CLS | MIT |
+| `gte-base` | 768 | mean | MIT |
+| `all-mpnet-base-v2` | 768 | mean | Apache-2.0 |
 
 The selected model's weights download to `~/.rostam/models/<name>/` on first
 run and are SHA-256-verified against a pinned checksum before use; override

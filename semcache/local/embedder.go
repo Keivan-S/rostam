@@ -22,7 +22,7 @@ func NewEmbedder(ctx context.Context, spec localcatalog.ModelSpec, root, libPath
 	if err != nil {
 		return nil, err
 	}
-	tok, err := NewTokenizer(vocabPath, spec.LowerCase)
+	tok, err := NewTokenizer(vocabPath, spec.LowerCase, spec.ClsToken, spec.SepToken, "")
 	if err != nil {
 		return nil, err
 	}

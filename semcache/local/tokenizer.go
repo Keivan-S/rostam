@@ -5,6 +5,7 @@ package local
 
 import (
 	"bufio"
+	"fmt"
 	"os"
 	"strings"
 	"unicode"
@@ -25,7 +26,20 @@ type Tokenizer struct {
 	unkID     int64
 }
 
-func NewTokenizer(vocabPath string, lowerCase bool) (*Tokenizer, error) {
+// NewTokenizer loads a WordPiece vocab and resolves the sequence-framing
+// special tokens. clsTok/sepTok/unkTok name the tokens to frame with; an empty
+// string selects the BERT default ("[CLS]"/"[SEP]"/"[UNK]"). It errors if any
+// configured special token is absent from the vocab.
+func NewTokenizer(vocabPath string, lowerCase bool, clsTok, sepTok, unkTok string) (*Tokenizer, error) {
+	if clsTok == "" {
+		clsTok = "[CLS]"
+	}
+	if sepTok == "" {
+		sepTok = "[SEP]"
+	}
+	if unkTok == "" {
+		unkTok = "[UNK]"
+	}
 	f, err := os.Open(vocabPath)
 	if err != nil {
 		return nil, err
@@ -42,16 +56,12 @@ func NewTokenizer(vocabPath string, lowerCase bool) (*Tokenizer, error) {
 	if err := sc.Err(); err != nil {
 		return nil, err
 	}
-	get := func(k string) int64 {
-		if v, ok := vocab[k]; ok {
-			return v
+	for _, tk := range []string{clsTok, sepTok, unkTok} {
+		if _, ok := vocab[tk]; !ok {
+			return nil, fmt.Errorf("vocab %q is missing required special token %q", vocabPath, tk)
 		}
-		return -1
 	}
-	t := &Tokenizer{vocab: vocab, lowerCase: lowerCase, clsID: get("[CLS]"), sepID: get("[SEP]"), unkID: get("[UNK]")}
-	if t.clsID < 0 || t.sepID < 0 || t.unkID < 0 {
-		return nil, os.ErrInvalid // vocab missing required special tokens
-	}
+	t := &Tokenizer{vocab: vocab, lowerCase: lowerCase, clsID: vocab[clsTok], sepID: vocab[sepTok], unkID: vocab[unkTok]}
 	return t, nil
 }
 
