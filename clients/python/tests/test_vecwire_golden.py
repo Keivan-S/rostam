@@ -63,6 +63,10 @@ _CREATE = {
 
 _VEC = [0.1, 0.2, 0.3, 0.4]
 
+# The exact JSON shape Go's vector.Filter{Op: FilterEq, Field: "tenant", Value:
+# vector.NewString("acme")} marshals to (struct-field order: op, field, value).
+_TENANT_FILTER = {"op": "eq", "field": "tenant", "value": {"kind": "string", "str": "acme"}}
+
 # name -> callable producing the bytes, for fixed-binary data-plane ops
 _DATAPLANE = {
     "insert/plain": lambda: w.encode_insert_args("docs", 1, _VEC),
@@ -73,6 +77,76 @@ _DATAPLANE = {
     "exists": lambda: w.encode_exists_args("docs", 42),
     "get/plain": lambda: w.encode_get_args("docs", 1, 0),
     "get/withvec_payload": lambda: w.encode_get_args("docs", 1, 0x03),
+
+    # ---- Phase A: get_batch / search(_docs) opts / search_groups / hybrid_search
+    #      / hybrid_text / scroll -----------------------------------------------
+    "get_batch/empty": lambda: w.encode_vector_get_batch_args("docs", []),
+    "get_batch/plain": lambda: w.encode_vector_get_batch_args("docs", [1, 2, 3]),
+    "get_batch/withvec_payload": lambda: w.encode_vector_get_batch_args("docs", [7, 9999999999], flags=0x03),
+
+    "search/opts_plain": lambda: w.encode_search_args_opts("docs", 10, _VEC),
+    "search/opts_filter_leader": lambda: w.encode_search_args_opts(
+        "docs", 5, _VEC, _TENANT_FILTER,
+        read_consistency=w.CONSISTENCY_LEADER_ONLY, on_partition_unavailable=1),
+    "search/opts_bounded": lambda: w.encode_search_args_opts(
+        "docs", 5, _VEC, read_consistency=w.CONSISTENCY_BOUNDED_STALENESS, bound=12345),
+
+    "group/plain": lambda: w.encode_group_search_args_opts(
+        "docs", 5, _VEC, {"group_by": "doc_id", "group_size": 2, "fetch_k": 50}),
+    "group/filter_opts": lambda: w.encode_group_search_args_opts(
+        "docs", 5, _VEC, {"group_by": "doc_id", "group_size": 3, "fetch_k": 100, "filter": _TENANT_FILTER},
+        read_consistency=w.CONSISTENCY_LEADER_ONLY, on_partition_unavailable=1),
+    "group/bounded": lambda: w.encode_group_search_args_opts(
+        "docs", 5, _VEC, {"group_by": "cat"},
+        read_consistency=w.CONSISTENCY_BOUNDED_STALENESS, bound=777),
+
+    "hybrid/plain": lambda: w.encode_hybrid_search_args_opts("docs", _VEC, 10),
+    "hybrid/sparse": lambda: w.encode_hybrid_search_args_opts(
+        "docs", _VEC, 10, sparse={"indices": [3, 17], "values": [0.8, 0.4]},
+        opts={"method": "weighted", "alpha": 0.6, "rrf_k": 60, "dense_k": 50, "sparse_k": 50}),
+    "hybrid/filter_opts": lambda: w.encode_hybrid_search_args_opts(
+        "docs", _VEC, 10, opts={"filter": _TENANT_FILTER},
+        read_consistency=w.CONSISTENCY_LEADER_ONLY, on_partition_unavailable=1),
+    "hybrid/bounded": lambda: w.encode_hybrid_search_args_opts(
+        "docs", _VEC, 10, sparse={"indices": [1], "values": [1.0]}, opts={"method": "dbsf"},
+        read_consistency=w.CONSISTENCY_BOUNDED_STALENESS, bound=999),
+
+    "hybrid_text/plain": lambda: w.encode_hybrid_text_args_global("docs", _VEC, "hello world", 10),
+    "hybrid_text/filter_opts_globalidf": lambda: w.encode_hybrid_text_args_global(
+        "docs", _VEC, "quick fox", 5, opts={"filter": _TENANT_FILTER, "method": "weighted", "alpha": 0.7},
+        read_consistency=w.CONSISTENCY_LEADER_ONLY, on_partition_unavailable=1, global_idf=True),
+    "hybrid_text/bounded": lambda: w.encode_hybrid_text_args_global(
+        "docs", _VEC, "", 5, read_consistency=w.CONSISTENCY_BOUNDED_STALENESS, bound=555),
+
+    "scroll/plain": lambda: w.encode_scroll_args_order_bounded("docs", 50),
+    "scroll/filter": lambda: w.encode_scroll_args_order_bounded("docs", 20, filter=_TENANT_FILTER),
+    "scroll/cursor": lambda: w.encode_scroll_args_order_bounded("docs", 20, after_id=42),
+    "scroll/bounded_opts": lambda: w.encode_scroll_args_order_bounded(
+        "docs", 20, read_consistency=w.CONSISTENCY_BOUNDED_STALENESS, on_partition_unavailable=1, bound=4242),
+    "scroll/order_numeric": lambda: w.encode_scroll_args_order_bounded(
+        "docs", 20, order={"key": "score", "desc": True, "has_start": True, "start_from": 1.5}),
+    "scroll/order_datetime_resume": lambda: w.encode_scroll_args_order_bounded(
+        "docs", 20, after_id=99,
+        order={"key": "created_at", "is_datetime": True, "kind": "datetime",
+               "has_resume": True, "resume_key": 12345.0}),
+    "scroll/order_string_resume": lambda: w.encode_scroll_args_order_bounded(
+        "docs", 20, order={"key": "title", "kind": "string", "has_resume_str": True, "resume_str": "foo"}),
+    "scroll/order_multikey": lambda: w.encode_scroll_args_order_bounded(
+        "docs", 20, after_id=5,
+        read_consistency=w.CONSISTENCY_LEADER_ONLY, on_partition_unavailable=1,
+        order={
+            "key": "score", "desc": True,
+            "tail": [
+                {"key": "title", "kind": "string"},
+                {"key": "created_at", "is_datetime": True, "kind": "datetime", "desc": True},
+            ],
+            "has_resume_keys": True,
+            "resume_keys": [
+                {"kind": "numeric", "num": 3.5},
+                {"kind": "string", "str": "bar"},
+                {"kind": "datetime", "num": 999.0},
+            ],
+        }),
 }
 
 
@@ -120,6 +194,27 @@ class VecwireGuardTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             w.encode_insert_args("docs", 1, _VEC,
                                  sparse={"indices": [1, 2, 3], "values": [0.5, 0.5]})
+
+
+class VecwireUpsertBatchTest(unittest.TestCase):
+    # There is no native-TCP batch-upsert wire op (see _vecwire.encode_upsert_batch_args'
+    # docstring), so this isn't a golden test — it just asserts the batch helper is
+    # exactly N pipelined encode_upsert_args() calls, byte for byte.
+    def test_batch_equals_sequential_singles(self):
+        points = [
+            {"id": 1, "vector": _VEC, "content": "hello"},
+            {"id": 2, "vector": _VEC, "content": "world", "metadata": {"tenant": "acme"}},
+            {"id": 3, "vector": _VEC, "ttl_ms": 5000,
+             "sparse": {"indices": [3, 17], "values": [0.8, 0.4]}},
+        ]
+        got = w.encode_upsert_batch_args("docs", points)
+        want = [
+            w.encode_upsert_args("docs", 1, _VEC, content="hello"),
+            w.encode_upsert_args("docs", 2, _VEC, content="world", metadata={"tenant": "acme"}),
+            w.encode_upsert_args("docs", 3, _VEC, ttl_ms=5000,
+                                 sparse={"indices": [3, 17], "values": [0.8, 0.4]}),
+        ]
+        self.assertEqual(got, want)
 
 
 if __name__ == "__main__":

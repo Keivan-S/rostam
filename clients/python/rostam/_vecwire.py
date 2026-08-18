@@ -28,6 +28,31 @@ _F_TTL = 1 << 0
 _F_META = 1 << 1
 _F_SPARSE = 1 << 2
 _F_FILTER = 1 << 0  # search flags use bit0 for filter
+_F_SEARCH_OPTS = 1 << 1  # search flags: consistency opts trailer present (vecFlagSearchOpts)
+
+# hybrid_search flag bits (vector.go: hybridFlagFilter/hybridFlagSparse/hybridFlagOpts)
+_HYBRID_F_FILTER = 1 << 0
+_HYBRID_F_SPARSE = 1 << 1
+_HYBRID_F_OPTS = 1 << 2
+
+# hybrid_text flag bits (text.go: textFlagFilter/textFlagOpts/textFlagGlobalIDF/textFlagGlobalStats)
+_TEXT_F_FILTER = 1 << 0
+_TEXT_F_OPTS = 1 << 1
+_TEXT_F_GLOBAL_IDF = 1 << 2
+_TEXT_F_GLOBAL_STATS = 1 << 3
+
+# fusion method (vector/fusion.go: FusionMethod)
+_FUSION_METHOD = {"rrf": 0, "weighted": 1, "dbsf": 2}
+
+# order_by kind (vector/order.go: OrderKind) — only "string" changes the wire shape;
+# numeric/datetime share the float64 path and are distinguished by the is_datetime bit.
+_ORDER_KIND = {"numeric": 0, "datetime": 1, "string": 2}
+
+# read-consistency levels (ops/consistency.go)
+CONSISTENCY_ANY_REPLICA = 0
+CONSISTENCY_LEADER_ONLY = 1
+CONSISTENCY_LINEARIZABLE = 2
+CONSISTENCY_BOUNDED_STALENESS = 3
 
 
 def _col(collection: str) -> bytes:
@@ -63,6 +88,305 @@ def encode_search_args(collection: str, k: int, query: Vector,
     if filter:
         fj = json.dumps(filter, separators=(",", ":")).encode("utf-8")
         out += struct.pack(">I", len(fj)) + fj
+    return bytes(out)
+
+
+def _bound_tail(read_consistency: int, bound: int) -> bytes:
+    """Mirrors ops.appendBoundTail: the 8-byte BE staleness bound rides ONLY when
+    read_consistency == CONSISTENCY_BOUNDED_STALENESS (3); every other level is
+    byte-identical to the pre-bounded-staleness wire (no tail bytes at all)."""
+    if read_consistency != CONSISTENCY_BOUNDED_STALENESS:
+        return b""
+    return struct.pack(">Q", bound)
+
+
+def encode_search_args_opts(collection: str, k: int, query: Vector,
+                            filter: Optional[Dict[str, Any]] = None, *,
+                            read_consistency: int = 0, on_partition_unavailable: int = 0,
+                            bound: int = 0) -> bytes:
+    """Mirrors ops.EncodeVectorSearchArgsOpts. Shared by vector_search AND
+    vector_search_docs — the two ops carry an IDENTICAL wire layout and differ only
+    in the op string used at call time (search_docs additionally returns each hit's
+    stored content, which is a server-side concern, not a wire-shape one)."""
+    base = encode_search_args(collection, k, query, filter)
+    if read_consistency == 0 and on_partition_unavailable == 0:
+        return base  # byte-identical to the legacy/no-opts form
+    out = bytearray(base)
+    out[0] |= _F_SEARCH_OPTS
+    out += bytes([read_consistency, on_partition_unavailable])
+    out += _bound_tail(read_consistency, bound)
+    return bytes(out)
+
+
+# search_docs shares vector_search's wire encoder exactly (ops.EncodeVectorSearchArgsOpts
+# backs both vector_search and vector_search_docs); only the op name differs at call time.
+encode_search_docs_args_opts = encode_search_args_opts
+
+
+def encode_vector_get_batch_args(collection: str, ids: Sequence[int], flags: int = 0) -> bytes:
+    """Mirrors ops.EncodeVectorGetBatchArgs. Wire:
+    [colLen:u8][col][flags:u8][n:u32][id:u64 x n]."""
+    out = bytearray(_col(collection))
+    out += bytes([flags & 0xFF])
+    out += struct.pack(">I", len(ids))
+    for i in ids:
+        out += struct.pack(">Q", i)
+    return bytes(out)
+
+
+def _scroll_base(collection: str, limit: int, filter: Optional[Dict[str, Any]]) -> bytes:
+    fj = b""
+    if filter:
+        fj = json.dumps(filter, separators=(",", ":")).encode("utf-8")
+    out = bytearray(_col(collection))
+    out += struct.pack(">I", limit)
+    out += struct.pack(">I", len(fj)) + fj
+    return bytes(out)
+
+
+def _encode_scroll_order_block(order: Dict[str, Any]) -> bytes:
+    """Mirrors ops.appendScrollOrderBlock. `order` shape:
+    {key, desc=False, is_datetime=False, kind="numeric"|"datetime"|"string",
+     has_start=False, start_from=0.0, has_resume=False, resume_key=0.0,
+     has_resume_str=False, resume_str="",
+     tail=[{key, desc=False, is_datetime=False, kind="numeric"}, ...],
+     has_resume_keys=False, resume_keys=[{kind, num=0.0, str=""}, ...]}
+    kind only changes wire shape for "string" (bit2 + the resume-str tail); the
+    string-resume tail is written ONLY when kind=="string" (additive, matches Go).
+    """
+    key = order["key"].encode("utf-8")
+    desc = bool(order.get("desc", False))
+    is_datetime = bool(order.get("is_datetime", False))
+    kind = order.get("kind", "numeric")
+    tail = order.get("tail") or []
+
+    flags = 0
+    if desc:
+        flags |= 1 << 0
+    if is_datetime:
+        flags |= 1 << 1
+    if kind == "string":
+        flags |= 1 << 2
+    if tail:
+        flags |= 1 << 3  # scrollOrderFlagMultiKey
+
+    out = bytearray([1])  # orderPresent=1
+    out += struct.pack(">I", len(key)) + key
+    out += bytes([flags])
+
+    if order.get("has_start"):
+        out += bytes([1]) + struct.pack(">d", float(order["start_from"]))
+    else:
+        out += bytes([0])
+
+    if order.get("has_resume"):
+        out += bytes([1]) + struct.pack(">d", float(order["resume_key"]))
+    else:
+        out += bytes([0])
+
+    if kind == "string":
+        if order.get("has_resume_str"):
+            rs = order["resume_str"].encode("utf-8")
+            out += bytes([1]) + struct.pack(">I", len(rs)) + rs
+        else:
+            out += bytes([0])
+
+    if tail:
+        out += bytes([len(tail)])
+        for tk in tail:
+            tkey = tk["key"].encode("utf-8")
+            out += struct.pack(">I", len(tkey)) + tkey
+            tf = 0
+            if tk.get("desc"):
+                tf |= 1 << 0
+            if tk.get("is_datetime"):
+                tf |= 1 << 1
+            if tk.get("kind") == "string":
+                tf |= 1 << 2
+            out += bytes([tf])
+        if order.get("has_resume_keys"):
+            out += bytes([1])
+            for rv in order.get("resume_keys", []):
+                rk = _ORDER_KIND[rv["kind"]]
+                out += bytes([rk])
+                if rv["kind"] == "string":
+                    s = rv["str"].encode("utf-8")
+                    out += struct.pack(">I", len(s)) + s
+                else:
+                    out += struct.pack(">d", float(rv["num"]))
+        else:
+            out += bytes([0])
+
+    return bytes(out)
+
+
+def encode_scroll_args_order_bounded(collection: str, limit: int, *,
+                                     filter: Optional[Dict[str, Any]] = None,
+                                     read_consistency: int = 0, on_partition_unavailable: int = 0,
+                                     after_id: Optional[int] = None,
+                                     order: Optional[Dict[str, Any]] = None,
+                                     bound: int = 0) -> bytes:
+    """Mirrors ops.EncodeScrollArgsOrderBounded. NOTE the asymmetry this replicates
+    byte-for-byte: when order is None the opts+cursor trailer (and the cursor's
+    cursorPresent=0 byte) is omitted ENTIRELY unless opts or a cursor are actually
+    in use (EncodeScrollArgsCursorBounded); when order is given, the trailer AND an
+    explicit cursorPresent byte (0 or 1) are always forced present, so the order
+    block has an unambiguous, self-delimiting start position."""
+    base = _scroll_base(collection, limit, filter)
+    has_after = after_id is not None
+
+    if order is None:
+        if read_consistency == 0 and on_partition_unavailable == 0 and not has_after:
+            return base  # byte-identical to the legacy form
+        out = bytearray(base)
+        out += bytes([1, read_consistency, on_partition_unavailable])
+        out += _bound_tail(read_consistency, bound)
+        if has_after:
+            out += bytes([1]) + struct.pack(">Q", after_id)
+        # else: no cursorPresent byte at all (matches EncodeScrollArgsCursorBounded)
+        return bytes(out)
+
+    out = bytearray(base)
+    out += bytes([1, read_consistency, on_partition_unavailable])
+    out += _bound_tail(read_consistency, bound)
+    if has_after:
+        out += bytes([1]) + struct.pack(">Q", after_id)
+    else:
+        out += bytes([0])  # cursorPresent=0, forced present
+    out += _encode_scroll_order_block(order)
+    return bytes(out)
+
+
+def _encode_sparse(sparse: Optional[Dict[str, Sequence]]) -> bytes:
+    """Mirrors ops.writeSparse: [nnz:u32]{[dim:u32][value:f32]}."""
+    idx = list(sparse["indices"]) if sparse else []
+    val = list(sparse["values"]) if sparse else []
+    if len(idx) != len(val):
+        raise ValueError("sparse indices and values must have the same length")
+    out = bytearray(struct.pack(">I", len(idx)))
+    for i, v in zip(idx, val, strict=True):
+        out += struct.pack(">I", i) + struct.pack(">f", v)
+    return bytes(out)
+
+
+def encode_group_search_args_opts(collection: str, k: int, query: Vector,
+                                  opts: Optional[Dict[str, Any]] = None, *,
+                                  read_consistency: int = 0, on_partition_unavailable: int = 0,
+                                  bound: int = 0) -> bytes:
+    """Mirrors ops.EncodeGroupSearchArgsOpts. `opts`: {group_by, group_size=0,
+    fetch_k=0, filter=None}. Unlike search/hybrid, the filter block here is
+    UNCONDITIONAL (no flag bit) — Go always writes [filterLen:u32][filterJSON],
+    with filterJSON empty (len 0) when there is no filter."""
+    opts = opts or {}
+    group_by = str(opts.get("group_by", "")).encode("utf-8")
+    if len(group_by) > 0xFFFF:
+        raise ValueError("group_by too long")
+    filt = opts.get("filter")
+    fj = json.dumps(filt, separators=(",", ":")).encode("utf-8") if filt else b""
+
+    out = bytearray(_col(collection))
+    out += struct.pack(">I", k)
+    out += struct.pack(">I", int(opts.get("group_size", 0)))
+    out += struct.pack(">I", int(opts.get("fetch_k", 0)))
+    out += struct.pack(">H", len(group_by)) + group_by
+    out += _f32be(query)
+    out += struct.pack(">I", len(fj)) + fj
+
+    if read_consistency == 0 and on_partition_unavailable == 0:
+        return bytes(out)
+    out += bytes([1, read_consistency, on_partition_unavailable])
+    out += _bound_tail(read_consistency, bound)
+    return bytes(out)
+
+
+def encode_hybrid_search_args_opts(collection: str, dense: Vector, k: int,
+                                   sparse: Optional[Dict[str, Sequence]] = None,
+                                   opts: Optional[Dict[str, Any]] = None, *,
+                                   read_consistency: int = 0, on_partition_unavailable: int = 0,
+                                   bound: int = 0) -> bytes:
+    """Mirrors ops.EncodeHybridSearchArgsOpts. `opts`: {filter=None, method="rrf",
+    alpha=0.0, rrf_k=0, dense_k=0, sparse_k=0}."""
+    opts = opts or {}
+    filt = opts.get("filter")
+    flags = 0
+    fj = b""
+    if filt:
+        flags |= _HYBRID_F_FILTER
+        fj = json.dumps(filt, separators=(",", ":")).encode("utf-8")
+    has_sparse = bool(sparse and sparse.get("indices"))
+    if has_sparse:
+        flags |= _HYBRID_F_SPARSE
+
+    out = bytearray([flags])
+    out += _col(collection)
+    out += struct.pack(">I", k)
+    out += bytes([_FUSION_METHOD[opts.get("method", "rrf")]])
+    out += struct.pack(">d", float(opts.get("alpha", 0.0)))
+    out += struct.pack(">I", int(opts.get("rrf_k", 0)))
+    out += struct.pack(">I", int(opts.get("dense_k", 0)))
+    out += struct.pack(">I", int(opts.get("sparse_k", 0)))
+    out += _f32be(dense)
+    if has_sparse:
+        out += _encode_sparse(sparse)
+    if flags & _HYBRID_F_FILTER:
+        out += struct.pack(">I", len(fj)) + fj
+
+    if read_consistency == 0 and on_partition_unavailable == 0:
+        return bytes(out)
+    out[0] |= _HYBRID_F_OPTS
+    out += bytes([read_consistency, on_partition_unavailable])
+    out += _bound_tail(read_consistency, bound)
+    return bytes(out)
+
+
+def encode_hybrid_text_args_global(collection: str, dense: Vector, query: str, k: int,
+                                   opts: Optional[Dict[str, Any]] = None, *,
+                                   read_consistency: int = 0, on_partition_unavailable: int = 0,
+                                   bound: int = 0, global_idf: bool = False,
+                                   g: Optional[Dict[str, Any]] = None) -> bytes:
+    """Mirrors ops.EncodeHybridTextArgsGlobal. `opts`: {filter=None, method="rrf",
+    alpha=0.0, rrf_k=0, dense_k=0, sparse_k=0}. `g` (normally None — the
+    coordinator-only phase-1 global-DF stats block): {n=0, avgdl=0.0, df={term:freq}}."""
+    opts = opts or {}
+    filt = opts.get("filter")
+    flags = 0
+    fj = b""
+    if filt:
+        flags |= _TEXT_F_FILTER
+        fj = json.dumps(filt, separators=(",", ":")).encode("utf-8")
+    has_opts = read_consistency != 0 or on_partition_unavailable != 0
+    if has_opts:
+        flags |= _TEXT_F_OPTS
+    if global_idf:
+        flags |= _TEXT_F_GLOBAL_IDF
+
+    out = bytearray([flags])
+    out += _col(collection)
+    out += struct.pack(">I", k)
+    out += bytes([_FUSION_METHOD[opts.get("method", "rrf")]])
+    out += struct.pack(">d", float(opts.get("alpha", 0.0)))
+    out += struct.pack(">I", int(opts.get("rrf_k", 0)))
+    out += struct.pack(">I", int(opts.get("dense_k", 0)))
+    out += struct.pack(">I", int(opts.get("sparse_k", 0)))
+    out += _f32be(dense)
+    qb = query.encode("utf-8")
+    out += struct.pack(">I", len(qb)) + qb
+    if flags & _TEXT_F_FILTER:
+        out += struct.pack(">I", len(fj)) + fj
+    if has_opts:
+        out += bytes([read_consistency, on_partition_unavailable])
+        out += _bound_tail(read_consistency, bound)
+
+    if g is not None:
+        flags |= _TEXT_F_GLOBAL_STATS
+        out[0] = flags
+        out += struct.pack(">q", int(g.get("n", 0)))
+        out += struct.pack(">f", float(g.get("avgdl", 0.0)))
+        df = g.get("df", {}) or {}
+        out += struct.pack(">I", len(df))
+        for term in sorted(df.keys()):
+            out += struct.pack(">I", term) + struct.pack(">I", df[term])
+
     return bytes(out)
 
 
@@ -119,6 +443,29 @@ def encode_upsert_args(collection: str, id: int, vec: Vector, *, content: str = 
                        sparse: Optional[Dict[str, Sequence]] = None) -> bytes:
     return _encode_insert_like(True, collection, id, vec, content=content,
                                ttl_ms=ttl_ms, metadata=metadata, sparse=sparse)
+
+
+def encode_upsert_batch_args(collection: str, points: Sequence[Dict[str, Any]]) -> List[bytes]:
+    """There is NO single native-TCP batch-upsert wire op. ops.EncodeVectorUpsertArgs
+    is single-point only; the batch/bulk framing that does exist (RVB1, in
+    httpapi/binary_bulk.go for POST /points/bulk and /points/bulk/build) is an
+    HTTP-only staging protocol for the multi-core index build, not part of the
+    ops.Encode* native-TCP family and not something a TCP client op can drive.
+    So a native-TCP upsert_batch is just N pipelined vector_upsert ops: this
+    returns the list of per-point encode_upsert_args() outputs for the caller to
+    send back-to-back (pipelined) over the same connection.
+    Each point dict: {id, vector, content="", ttl_ms=0, metadata=None, sparse=None}.
+    """
+    out = []
+    for p in points:
+        out.append(encode_upsert_args(
+            collection, p["id"], p["vector"],
+            content=p.get("content", ""),
+            ttl_ms=p.get("ttl_ms", 0),
+            metadata=p.get("metadata"),
+            sparse=p.get("sparse"),
+        ))
+    return out
 
 
 def encode_delete_args(collection: str, id: int) -> bytes:

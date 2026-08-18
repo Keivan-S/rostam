@@ -116,4 +116,67 @@ func main() {
 	emit("exists", ops.EncodeExistsArgs("docs", 42))
 	emit("get/plain", ops.EncodeVectorGetArgs("docs", 1, 0))
 	emit("get/withvec_payload", ops.EncodeVectorGetArgs("docs", 1, 0x03))
+
+	// ---- Phase A: get_batch / scroll / search_docs / search_groups /
+	//      hybrid_search / hybrid_text ------------------------------------------
+	tenantFilter := vector.Filter{Op: vector.FilterEq, Field: "tenant", Value: vector.NewString("acme")}
+
+	// get_batch
+	emit("get_batch/empty", ops.EncodeVectorGetBatchArgs("docs", nil, 0))
+	emit("get_batch/plain", ops.EncodeVectorGetBatchArgs("docs", []uint64{1, 2, 3}, 0))
+	emit("get_batch/withvec_payload", ops.EncodeVectorGetBatchArgs("docs", []uint64{7, 9999999999}, ops.GetFlagsBoth))
+
+	// search / search_docs (same encoder — EncodeVectorSearchArgsOpts)
+	emit("search/opts_plain", ops.EncodeVectorSearchArgsOpts("docs", 10, vec, vector.Filter{}, 0, 0, 0))
+	emit("search/opts_filter_leader", ops.EncodeVectorSearchArgsOpts("docs", 5, vec, tenantFilter, ops.ConsistencyLeaderOnly, 1, 0))
+	emit("search/opts_bounded", ops.EncodeVectorSearchArgsOpts("docs", 5, vec, vector.Filter{}, ops.ConsistencyBoundedStaleness, 0, 12345))
+
+	// search_groups
+	emit("group/plain", ops.EncodeGroupSearchArgsOpts("docs", 5, vec, vector.GroupOpts{GroupBy: "doc_id", GroupSize: 2, FetchK: 50}, 0, 0, 0))
+	emit("group/filter_opts", ops.EncodeGroupSearchArgsOpts("docs", 5, vec, vector.GroupOpts{GroupBy: "doc_id", GroupSize: 3, FetchK: 100, Filter: tenantFilter}, ops.ConsistencyLeaderOnly, 1, 0))
+	emit("group/bounded", ops.EncodeGroupSearchArgsOpts("docs", 5, vec, vector.GroupOpts{GroupBy: "cat"}, ops.ConsistencyBoundedStaleness, 0, 777))
+
+	// hybrid_search
+	emit("hybrid/plain", ops.EncodeHybridSearchArgsOpts("docs", vec, 10, vector.SparseVector{}, vector.HybridOpts{}, 0, 0, 0))
+	emit("hybrid/sparse", ops.EncodeHybridSearchArgsOpts("docs", vec, 10,
+		vector.SparseVector{Indices: []uint32{3, 17}, Values: []float32{0.8, 0.4}},
+		vector.HybridOpts{Method: vector.FusionWeighted, Alpha: 0.6, RRFK: 60, DenseK: 50, SparseK: 50}, 0, 0, 0))
+	emit("hybrid/filter_opts", ops.EncodeHybridSearchArgsOpts("docs", vec, 10, vector.SparseVector{},
+		vector.HybridOpts{Filter: tenantFilter}, ops.ConsistencyLeaderOnly, 1, 0))
+	emit("hybrid/bounded", ops.EncodeHybridSearchArgsOpts("docs", vec, 10,
+		vector.SparseVector{Indices: []uint32{1}, Values: []float32{1.0}},
+		vector.HybridOpts{Method: vector.FusionDBSF}, ops.ConsistencyBoundedStaleness, 0, 999))
+
+	// hybrid_text (globalIDF true/false; g always nil per Phase A scope)
+	emit("hybrid_text/plain", ops.EncodeHybridTextArgsGlobal("docs", vec, "hello world", 10, vector.HybridOpts{}, 0, 0, 0, false, nil))
+	emit("hybrid_text/filter_opts_globalidf", ops.EncodeHybridTextArgsGlobal("docs", vec, "quick fox", 5,
+		vector.HybridOpts{Filter: tenantFilter, Method: vector.FusionWeighted, Alpha: 0.7}, ops.ConsistencyLeaderOnly, 1, 0, true, nil))
+	emit("hybrid_text/bounded", ops.EncodeHybridTextArgsGlobal("docs", vec, "", 5, vector.HybridOpts{}, ops.ConsistencyBoundedStaleness, 0, 555, false, nil))
+
+	// scroll
+	emit("scroll/plain", ops.EncodeScrollArgsOrderBounded("docs", vector.Filter{}, 50, 0, 0, 0, false, nil, 0))
+	emit("scroll/filter", ops.EncodeScrollArgsOrderBounded("docs", tenantFilter, 20, 0, 0, 0, false, nil, 0))
+	emit("scroll/cursor", ops.EncodeScrollArgsOrderBounded("docs", vector.Filter{}, 20, 0, 0, 42, true, nil, 0))
+	emit("scroll/bounded_opts", ops.EncodeScrollArgsOrderBounded("docs", vector.Filter{}, 20, ops.ConsistencyBoundedStaleness, 1, 0, false, nil, 4242))
+	emit("scroll/order_numeric", ops.EncodeScrollArgsOrderBounded("docs", vector.Filter{}, 20, 0, 0, 0, false,
+		&ops.ScrollOrder{Key: "score", Desc: true, HasStart: true, StartFrom: 1.5}, 0))
+	emit("scroll/order_datetime_resume", ops.EncodeScrollArgsOrderBounded("docs", vector.Filter{}, 20, 0, 0, 99, true,
+		&ops.ScrollOrder{Key: "created_at", IsDatetime: true, Kind: vector.OrderDatetime, HasResume: true, ResumeKey: 12345.0}, 0))
+	emit("scroll/order_string_resume", ops.EncodeScrollArgsOrderBounded("docs", vector.Filter{}, 20, 0, 0, 0, false,
+		&ops.ScrollOrder{Key: "title", Kind: vector.OrderString, HasResumeStr: true, ResumeStr: "foo"}, 0))
+	emit("scroll/order_multikey", ops.EncodeScrollArgsOrderBounded("docs", vector.Filter{}, 20, ops.ConsistencyLeaderOnly, 1, 5, true,
+		&ops.ScrollOrder{
+			Key:  "score",
+			Desc: true,
+			Tail: []ops.ScrollOrderKey{
+				{Key: "title", Kind: vector.OrderString},
+				{Key: "created_at", IsDatetime: true, Kind: vector.OrderDatetime, Desc: true},
+			},
+			HasResumeKeys: true,
+			ResumeKeys: []ops.ScrollOrderVal{
+				{Kind: vector.OrderNumeric, Num: 3.5},
+				{Kind: vector.OrderString, Str: "bar"},
+				{Kind: vector.OrderDatetime, Num: 999.0},
+			},
+		}, 0))
 }
