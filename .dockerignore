@@ -1,0 +1,20 @@
+# Keep the Docker build context minimal and secret-free.
+#
+# Both images do `COPY . .` and export build layers to the GHA cache
+# (cache-to: mode=max). actions/checkout persists GITHUB_TOKEN under .git, so
+# .git must never enter the build context or it can leak into cached layers.
+# The rest below are simply not build inputs (the server builds from Go source
+# + go.mod/go.sum); dropping them shrinks the context and speeds the build.
+.git
+.github
+.dockerignore
+
+# Agent/tooling scratch (git-ignored, never a build input)
+.omc
+.superpowers
+.claude
+
+# Editor / OS noise
+.vscode
+.idea
+.DS_Store
