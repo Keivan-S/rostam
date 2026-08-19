@@ -17,6 +17,18 @@ Notable user-visible changes. Entries that alter existing behaviour are marked
 
 ## v0.3.0 — 2026-08-16
 
+### The Python native client reaches vector parity over TCP
+
+`Rostam(...).vector` now speaks the full set of point, search, hybrid, and
+recommend ops over the native TCP protocol, not just the basics. Added:
+`get_batch`, `scroll`, `search_docs`, `search_groups`, `hybrid_search`,
+`hybrid_text`, `recommend`, `query`, and `upsert_batch` — so hybrid (BM25 +
+dense) search and recommendations no longer require the HTTP client. Every
+request is byte-identical to the Go encoder (verified by a cross-stack golden
+oracle) and every method is exercised against a live server. `recommend`/`query`
+currently encode the recommend-shaped query spec; a general multi-leaf query
+encoder is future work.
+
 ### A RAG CLI with no pipeline to assemble
 
 `rostam-server rag` turns the engine into a retrieval-augmented-generation tool

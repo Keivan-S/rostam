@@ -40,3 +40,19 @@ Issues = "https://github.com/rostamlabs/rostam/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["rostam"]
+
+[tool.ruff.lint]
+# Ruff's stock default select is E4/E7/E9/F. This project's wire codecs lean on
+# compact `x = ...; off += n` one-liners throughout (see rostam/_vecwire.py), so
+# E7 (pycodestyle statement style, e.g. E702/E731) is dropped rather than
+# rewriting that established pattern. A (flake8-builtins) is added since
+# `id`/`filter` parameter shadowing is checked deliberately, see below.
+select = ["E4", "E9", "F", "A"]
+
+[tool.ruff.lint.per-file-ignores]
+# `id`/`filter` intentionally shadow the Python builtins throughout this
+# package's public vector/KV API (upsert/get/delete/search/scroll/hybrid_*/
+# recommend/query/...) to keep parameter names aligned with the wire protocol
+# and the HTTP/LangChain adapter shapes. Suppress A002 package-wide rather than
+# a `# noqa: A002` at every one of these call sites.
+"rostam/*.py" = ["A002"]
