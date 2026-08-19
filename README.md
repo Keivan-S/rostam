@@ -460,6 +460,13 @@ Requires Go 1.26+. mmap persistence and the AVX2 kernels are Linux/amd64;
 everything has a portable fallback. The full build needs cgo (wasmtime); the
 vector/cache/ops packages build with `CGO_ENABLED=0`.
 
+Two optional build tags add cgo-only functionality, compiled out by default:
+
+| Tag | Enables | Requires |
+|---|---|---|
+| `-tags cuda` | GPU exact-KNN index | cgo + a CUDA toolchain |
+| `-tags localembed` | In-process ONNX embeddings for the MCP server's memory and generic vector-DB tools, no cloud API | cgo + ONNX Runtime 1.29.0+ ([docs](https://docs.rostamlabs.com/server/mcp/#local-embeddings-tags-localembed)) |
+
 ```sh
 make test    # tests           make race   # race detector
 make bench   # benchmarks      make all    # lint + tests + race + bench

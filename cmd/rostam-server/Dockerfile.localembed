@@ -1,0 +1,88 @@
+# Multi-stage build for rostam-server WITH the optional local ONNX embedder
+# (-tags localembed). This is a SEPARATE, opt-in image: the default Dockerfile
+# stays lean and ONNX-free. Build context must be the repo root:
+#
+#   docker build -f cmd/rostam-server/Dockerfile.localembed -t rostam-server:localembed .
+#
+# It builds the server with -tags localembed and bundles the ONNX Runtime shared
+# library (>= 1.29.0, required by the onnxruntime_go binding's ORT_API_VERSION
+# 29). Embedding models are NOT baked in — they download on first use to the
+# model cache; mount a volume at /models to persist them across restarts.
+#
+# NOTE: linux/amd64 only. The bundled ONNX Runtime is the x64 release; building
+# for arm64 needs the aarch64 ORT tarball (left as a follow-up).
+
+ARG ORT_VERSION=1.29.0
+
+# --- ONNX Runtime shared library ---------------------------------------------
+FROM debian:bookworm-slim AS ort
+ARG ORT_VERSION
+# SHA-256 of onnxruntime-linux-x64-${ORT_VERSION}.tgz (the versioned release URL
+# carries no integrity guarantee). Update alongside ORT_VERSION.
+ARG ORT_SHA256=c3fddc4f139a045b0c4902c57410f0694f1c2fdf9b6939fbe38b1aeae7cd14ba
+# TARGETARCH is populated by BuildKit. The bundled ONNX Runtime is the x64
+# release, so fail loudly on any other target rather than ship a broken image.
+ARG TARGETARCH
+RUN set -eu; \
+    if [ "${TARGETARCH:-amd64}" != "amd64" ]; then \
+      echo "Dockerfile.localembed supports linux/amd64 only (TARGETARCH=${TARGETARCH}); rebuild with --platform=linux/amd64" >&2; \
+      exit 1; \
+    fi; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends curl ca-certificates; \
+    curl -fsSL -o /tmp/ort.tgz \
+      "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz"; \
+    echo "${ORT_SHA256}  /tmp/ort.tgz" | sha256sum -c -; \
+    mkdir -p /opt/onnxruntime; \
+    tar -xzf /tmp/ort.tgz -C /opt/onnxruntime --strip-components=1; \
+    rm /tmp/ort.tgz
+
+# --- Go build (cgo + localembed tag) -----------------------------------------
+# cgo is required (wasmtime-go transitively, and the ONNX binding), so the build
+# image carries a C toolchain and the runtime image is debian-slim (not scratch).
+FROM golang:1.26-bookworm AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=1 go build -trimpath -tags localembed -ldflags="-s -w" \
+      -o /out/rostam-server ./cmd/rostam-server
+
+# --- Runtime -----------------------------------------------------------------
+FROM debian:bookworm-slim
+# ca-certificates: HTTPS model downloads from Hugging Face at first run.
+# libgomp1 / libstdc++6: ONNX Runtime's own shared-library dependencies.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates libgomp1 libstdc++6 \
+ && rm -rf /var/lib/apt/lists/* \
+ && useradd -m -u 10001 rostam \
+ && mkdir -p /data /models && chown rostam:rostam /data /models
+COPY --from=build /out/rostam-server /usr/local/bin/rostam-server
+# ONNX Runtime shared library — dlopen'd at runtime by the -tags localembed code.
+COPY --from=ort /opt/onnxruntime/lib/libonnxruntime.so* /usr/local/lib/
+RUN ldconfig
+# The embedder resolves the lib from ROSTAM_ONNXRUNTIME_LIB and caches models
+# under ROSTAM_EMBED_MODELS_DIR.
+ENV ROSTAM_ONNXRUNTIME_LIB=/usr/local/lib/libonnxruntime.so \
+    ROSTAM_EMBED_MODELS_DIR=/models
+USER rostam
+WORKDIR /data
+# Persist downloaded embedding models across container restarts.
+VOLUME ["/models"]
+EXPOSE 8080 7000
+#
+# List the model catalog:
+#   docker run --rm rostam-server:localembed mcp -list-embed-models
+#
+# Enable a local model by setting ROSTAM_EMBED_LOCAL (models download on first
+# use — persist them with a named volume mounted at /models):
+#
+#   docker run -p 8080:8080 -e ROSTAM_API_KEY=<token> \
+#     -e ROSTAM_EMBED_LOCAL=minilm-l6-v2 -v rostam-models:/models \
+#     rostam-server:localembed
+#
+# The local embedder then powers agent memory AND the generic vector-DB tools
+# (upsert/search auto-embed text). AUTHENTICATION IS REQUIRED for the default
+# 0.0.0.0 bind — pass ROSTAM_API_KEY (or append -insecure for a dev container).
+ENTRYPOINT ["rostam-server"]
+CMD ["-http", "0.0.0.0:8080", "-tcp", "0.0.0.0:7000"]

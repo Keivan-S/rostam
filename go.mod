@@ -20,6 +20,7 @@ require (
 	github.com/hashicorp/raft v1.7.3
 	github.com/jackc/puddle/v2 v2.2.2
 	github.com/panjf2000/gnet/v2 v2.10.0
+	github.com/yalue/onnxruntime_go v1.34.0
 	golang.org/x/sys v0.46.0
 	google.golang.org/grpc v1.81.1
 	google.golang.org/protobuf v1.36.11

@@ -3,6 +3,18 @@
 Notable user-visible changes. Entries that alter existing behaviour are marked
 **Breaking** and say what to do about it.
 
+## Unreleased
+
+- **Local ONNX embeddings (opt-in `-tags localembed`).** Rostam can now generate
+  semantic embeddings in-process from a catalog of downloadable models
+  (`minilm-l6-v2`, `bge-small-en-v1.5`, `gte-small`) with no cloud API. Select
+  one with `ROSTAM_EMBED_LOCAL=<name>`; weights download to `~/.rostam/models`
+  on first run and are checksum-verified. Requires ONNX Runtime installed; the
+  default build is unchanged. See `docs/server/mcp.md`.
+- **768-dim "base" tier for local embeddings.** The `-tags localembed` catalog
+  adds three higher-quality 768-dim models: `bge-base-en-v1.5`, `gte-base`, and
+  `all-mpnet-base-v2`. Select one with `ROSTAM_EMBED_LOCAL=<name>`.
+
 ## v0.3.0 — 2026-08-16
 
 ### A RAG CLI with no pipeline to assemble
