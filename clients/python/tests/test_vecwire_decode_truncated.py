@@ -38,6 +38,26 @@ class VecwireDecodeTruncatedTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             w.decode_search_results_degraded(body)
 
+    def test_partial_degraded_trailer_missing_ids_raises(self):
+        # Valid 1-row base block, then a trailer header declaring 2 missing
+        # partition ids with no id bytes following (truncated trailer).
+        base = struct.pack(">I", 1) + struct.pack(">Q", 1) + struct.pack(">f", 0.5)
+        body = base + struct.pack(">B", 1) + struct.pack(">H", 2)
+        with self.assertRaises(ValueError):
+            w.decode_search_results_degraded(body)
+
+    def test_stray_trailer_byte_raises(self):
+        # Zero rows, then a single stray byte — a partial trailer header, not a
+        # valid fully-absent (0-byte) trailer.
+        body = struct.pack(">I", 0) + b"\x01"
+        with self.assertRaises(ValueError):
+            w.decode_search_results_degraded(body)
+
+    def test_no_trailer_is_tolerated(self):
+        # Zero rows and exactly zero trailing bytes = single-node no-trailer body.
+        results, degraded, missing = w.decode_search_results_degraded(struct.pack(">I", 0))
+        self.assertEqual((results, degraded, missing), ([], False, []))
+
     def test_docs_count_with_no_row_data_raises(self):
         # A well-formed count=1, but no bytes for the row that count promises.
         body = struct.pack(">I", 1)

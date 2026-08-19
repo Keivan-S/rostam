@@ -931,15 +931,27 @@ def _read_flag(body: bytes, off: int, what: str) -> Tuple[bool, int]:
 
 def _read_degraded_trailer(body: bytes, off: int) -> Tuple[bool, List[int], int]:
     """Mirrors ops.readDegradedTrailerN: [degraded:u8][missingCount:u16]{partID:u16}
-    at body[off:]. Tolerant of absence/truncation (legacy/no-trailer body) —
-    returns (False, [], off) unchanged, exactly like the Go reader."""
-    if len(body) < off + 3:
+    at body[off:]. A fully-absent trailer (exactly zero bytes remaining — the
+    single-node / no-trailer body) is the only tolerated short case and returns
+    (False, [], off). Any bytes present but too few for a complete trailer are a
+    truncated/corrupt frame and raise ValueError, matching this module's decoder
+    contract (rather than silently returning incomplete degraded metadata)."""
+    remaining = len(body) - off
+    if remaining == 0:
         return False, [], off
+    if remaining < 3:
+        raise ValueError(
+            f"corrupt/truncated degraded trailer: {remaining} byte(s) at offset "
+            f"{off}, need >= 3 for the [degraded:u8][missingCount:u16] header"
+        )
     degraded = bool(body[off])
     (missing_count,) = struct.unpack(">H", body[off + 1:off + 3])
     trailer_end = off + 3 + 2 * missing_count
     if len(body) < trailer_end:
-        return degraded, [], off
+        raise ValueError(
+            f"corrupt/truncated degraded trailer: declares {missing_count} "
+            f"missing partition id(s) but body ends at {len(body)} (need {trailer_end})"
+        )
     missing = []
     p = off + 3
     for _ in range(missing_count):
