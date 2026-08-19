@@ -174,3 +174,52 @@ jobs:
           done
         env:
           VERSION: ${{ steps.meta.outputs.version }}
+
+  # Opt-in local-embedding image (-tags localembed): a SEPARATE image that
+  # bundles ONNX Runtime and is published as :localembed. It is NOT part of the
+  # default multi-arch manifest above — the default image stays lean and
+  # ONNX-free. linux/amd64 only, because the bundled ONNX Runtime is the x64
+  # release (Dockerfile.localembed fails the build on any other arch), so this
+  # image is single-arch and pushed directly rather than through the by-digest
+  # manifest dance.
+  image-localembed:
+    name: image (localembed)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          # Pinned tags always; the moving :localembed only on a real tag push,
+          # so re-releasing an OLD tag by hand cannot drag it backwards (the
+          # same rule the default image applies to :latest).
+          tags: |
+            type=semver,pattern=localembed-{{version}},value=${{ inputs.tag || github.ref_name }}
+            type=semver,pattern=localembed-{{major}}.{{minor}},value=${{ inputs.tag || github.ref_name }}
+            type=raw,value=localembed,enable=${{ github.event_name == 'push' }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: cmd/rostam-server/Dockerfile.localembed
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=localembed
+          cache-to: type=gha,mode=max,scope=localembed

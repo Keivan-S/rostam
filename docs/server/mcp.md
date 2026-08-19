@@ -161,9 +161,14 @@ the conventional install locations be searched.
 ### Docker
 
 The default image (`cmd/rostam-server/Dockerfile`) is deliberately lean and has
-no ONNX Runtime. A separate, opt-in image bundles it:
+no ONNX Runtime. A separate, opt-in image bundles it. Releases publish a prebuilt
+one (linux/amd64), or build it yourself:
 
 ```sh
+# Prebuilt (published per release; linux/amd64)
+docker run --rm ghcr.io/rostamlabs/rostam:localembed mcp -list-embed-models
+
+# Or build it yourself
 docker build -f cmd/rostam-server/Dockerfile.localembed -t rostam-server:localembed .
 docker run --rm rostam-server:localembed mcp -list-embed-models
 ```

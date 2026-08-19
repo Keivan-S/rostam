@@ -19,6 +19,12 @@
 # only when the build has cgo on: a native build (cgo defaults off when
 # cross-compiling) on a machine with a C compiler.
 #
+# Local in-process embeddings (-tags localembed) are likewise a cgo feature and
+# need ONNX Runtime at runtime, so they are NOT in these binaries. Use the
+# ghcr.io/rostamlabs/rostam:localembed image (bundles ONNX Runtime), or build
+# from source: CGO_ENABLED=1 go install -tags localembed \
+#   github.com/rostamlabs/rostam/cmd/rostam-server@latest
+#
 # POSIX sh on purpose: this runs on whatever /bin/sh a machine happens to have.
 set -eu
 
