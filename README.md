@@ -238,6 +238,23 @@ container image always includes them. `go install` includes them only when it
 builds with cgo — a native build (cgo defaults off when cross-compiling) on a
 machine with a C compiler.
 
+Local in-process embeddings (`-tags localembed`) are a cgo feature too, and need
+an ONNX Runtime shared library at runtime, so they are **not** in the pure-Go
+binaries either. Two supported ways to get them:
+
+```sh
+# Opt-in container image (linux/amd64) — bundles ONNX Runtime, self-contained
+docker run -p 8080:8080 -e ROSTAM_API_KEY=secret \
+  -e ROSTAM_EMBED_LOCAL=minilm-l6-v2 -v rostam-models:/models \
+  ghcr.io/rostamlabs/rostam:localembed
+
+# Or build from source with the tag (needs ONNX Runtime >= 1.29.0 installed)
+CGO_ENABLED=1 go install -tags localembed \
+  github.com/rostamlabs/rostam/cmd/rostam-server@latest
+```
+
+See [Local embeddings](docs/server/mcp.md) for the model catalog and configuration.
+
 ## Quick start — run the server
 
 ```sh

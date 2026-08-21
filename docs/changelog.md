@@ -14,6 +14,10 @@ Notable user-visible changes. Entries that alter existing behaviour are marked
 - **768-dim "base" tier for local embeddings.** The `-tags localembed` catalog
   adds three higher-quality 768-dim models: `bge-base-en-v1.5`, `gte-base`, and
   `all-mpnet-base-v2`. Select one with `ROSTAM_EMBED_LOCAL=<name>`.
+- **Prebuilt local-embedding image.** Releases now publish an opt-in
+  `ghcr.io/rostamlabs/rostam:localembed` image (linux/amd64) that bundles ONNX
+  Runtime, so local embeddings work without building from source or installing
+  ONNX Runtime yourself. The default image stays lean and ONNX-free.
 
 ## v0.3.0 — 2026-08-16
 
