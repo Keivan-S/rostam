@@ -21,18 +21,18 @@ func TestVectorRouteKeyConsistency(t *testing.T) {
 		args []byte
 		ke   KeyExtractor
 	}{
-		{"create", EncodeCreateCollectionArgs("docs", vector.Config{Dim: 4}), vectorKeyColAt1},
-		{"drop", EncodeDropCollectionArgs("docs"), vectorKeyColAt1},
-		{"delete", EncodeVectorDeleteArgs("docs", 7), vectorKeyColAt1},
-		{"delete_by_filter", EncodeDeleteByFilterArgs("docs", vector.Filter{Op: vector.FilterEq, Field: "x", Value: vector.NewInt(1)}), vectorKeyColAt1},
-		{"scroll", EncodeScrollArgs("docs", vector.Filter{}, 0), vectorKeyColAt1},
-		{"search_groups", EncodeGroupSearchArgs("docs", 5, q, vector.GroupOpts{GroupBy: "g"}), vectorKeyColAt1},
-		{"insert", EncodeVectorInsertArgs("docs", 1, q), vectorKeyColAt2},
-		{"search", EncodeVectorSearchArgs("docs", 5, q), vectorKeyColAt2},
-		{"hybrid", EncodeHybridSearchArgs("docs", q, 5, vector.SparseVector{}, vector.HybridOpts{}), vectorKeyColAt2},
-		{"mv_create", EncodeMVCreateArgs("docs", vector.MultiVectorConfig{Dim: 4}), vectorKeyColAt1},
-		{"mv_add", EncodeMVAddArgs("docs", 1, [][]float32{q}, nil), vectorKeyColAt1},
-		{"mv_search", EncodeMVSearchArgs("docs", [][]float32{q}, 5, 0), vectorKeyColAt1},
+		{"create", EncodeCreateCollectionArgs("docs", vector.Config{Dim: 4}), VectorKeyColAt1},
+		{"drop", EncodeDropCollectionArgs("docs"), VectorKeyColAt1},
+		{"delete", EncodeVectorDeleteArgs("docs", 7), VectorKeyColAt1},
+		{"delete_by_filter", EncodeDeleteByFilterArgs("docs", vector.Filter{Op: vector.FilterEq, Field: "x", Value: vector.NewInt(1)}), VectorKeyColAt1},
+		{"scroll", EncodeScrollArgs("docs", vector.Filter{}, 0), VectorKeyColAt1},
+		{"search_groups", EncodeGroupSearchArgs("docs", 5, q, vector.GroupOpts{GroupBy: "g"}), VectorKeyColAt1},
+		{"insert", EncodeVectorInsertArgs("docs", 1, q), VectorKeyColAt2},
+		{"search", EncodeVectorSearchArgs("docs", 5, q), VectorKeyColAt2},
+		{"hybrid", EncodeHybridSearchArgs("docs", q, 5, vector.SparseVector{}, vector.HybridOpts{}), VectorKeyColAt2},
+		{"mv_create", EncodeMVCreateArgs("docs", vector.MultiVectorConfig{Dim: 4}), VectorKeyColAt1},
+		{"mv_add", EncodeMVAddArgs("docs", 1, [][]float32{q}, nil), VectorKeyColAt1},
+		{"mv_search", EncodeMVSearchArgs("docs", [][]float32{q}, 5, 0), VectorKeyColAt1},
 	}
 	for _, c := range cases {
 		key, ok := c.ke(c.args)
@@ -104,8 +104,8 @@ func TestVectorRouteKeyTenantQualified(t *testing.T) {
 	// A tenant-qualified name routes by its canonical form unchanged; a bare name
 	// gets the default tenant — and the two must differ so they can co-route only
 	// when they refer to the same canonical collection.
-	bare, _ := vectorKeyColAt1(EncodeDropCollectionArgs("docs"))
-	qual, _ := vectorKeyColAt1(EncodeDropCollectionArgs("acme/docs"))
+	bare, _ := VectorKeyColAt1(EncodeDropCollectionArgs("docs"))
+	qual, _ := VectorKeyColAt1(EncodeDropCollectionArgs("acme/docs"))
 	if string(bare) != "default/docs" {
 		t.Errorf("bare = %q", bare)
 	}
@@ -113,17 +113,17 @@ func TestVectorRouteKeyTenantQualified(t *testing.T) {
 		t.Errorf("qualified = %q", qual)
 	}
 	// "docs" and "default/docs" must hash to the same shard key.
-	d2, _ := vectorKeyColAt1(EncodeDropCollectionArgs("default/docs"))
+	d2, _ := VectorKeyColAt1(EncodeDropCollectionArgs("default/docs"))
 	if string(bare) != string(d2) {
 		t.Errorf("bare %q != default-qualified %q", bare, d2)
 	}
 }
 
 func TestVectorRouteKeyRejectsEmpty(t *testing.T) {
-	if _, ok := vectorKeyColAt1([]byte{0}); ok {
+	if _, ok := VectorKeyColAt1([]byte{0}); ok {
 		t.Error("empty name should not yield a routing key")
 	}
-	if _, ok := vectorKeyColAt2([]byte{0, 0}); ok {
+	if _, ok := VectorKeyColAt2([]byte{0, 0}); ok {
 		t.Error("empty name should not yield a routing key")
 	}
 }

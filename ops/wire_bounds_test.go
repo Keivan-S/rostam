@@ -60,8 +60,8 @@ func TestMVGetBatchResultHostileRowCount(t *testing.T) {
 		body := make([]byte, 4+9)
 		binary.BigEndian.PutUint32(body, n)
 		binary.BigEndian.PutUint64(body[4:], 7)
-		if _, err := DecodeMVGetBatchResult(body); !errors.Is(err, errVectorArgsTruncated) {
-			t.Fatalf("n=%d: err = %v, want errVectorArgsTruncated", n, err)
+		if _, err := DecodeMVGetBatchResult(body); !errors.Is(err, ErrVectorArgsTruncated) {
+			t.Fatalf("n=%d: err = %v, want ErrVectorArgsTruncated", n, err)
 		}
 	}
 	ok := make([]byte, 4+9)
@@ -87,8 +87,8 @@ func TestMVGetResultTokenCountOverflow(t *testing.T) {
 	body[0] = 1
 	binary.BigEndian.PutUint32(body[1:], 1<<31)
 	binary.BigEndian.PutUint32(body[5:], 1<<31)
-	if _, _, _, err := DecodeMVGetResult(body); !errors.Is(err, errVectorArgsTruncated) {
-		t.Fatalf("wrapping numTokens*dim: err = %v, want errVectorArgsTruncated", err)
+	if _, _, _, err := DecodeMVGetResult(body); !errors.Is(err, ErrVectorArgsTruncated) {
+		t.Fatalf("wrapping numTokens*dim: err = %v, want ErrVectorArgsTruncated", err)
 	}
 	// Plain oversized counts (no wrap) must be rejected too.
 	for _, pair := range [][2]uint32{{0xFFFFFFFF, 1}, {1, 0xFFFFFFFF}, {1 << 20, 1 << 20}} {
@@ -96,8 +96,8 @@ func TestMVGetResultTokenCountOverflow(t *testing.T) {
 		b[0] = 1
 		binary.BigEndian.PutUint32(b[1:], pair[0])
 		binary.BigEndian.PutUint32(b[5:], pair[1])
-		if _, _, _, err := DecodeMVGetResult(b); !errors.Is(err, errVectorArgsTruncated) {
-			t.Fatalf("numTokens=%d dim=%d: err = %v, want errVectorArgsTruncated", pair[0], pair[1], err)
+		if _, _, _, err := DecodeMVGetResult(b); !errors.Is(err, ErrVectorArgsTruncated) {
+			t.Fatalf("numTokens=%d dim=%d: err = %v, want ErrVectorArgsTruncated", pair[0], pair[1], err)
 		}
 	}
 	// A well-formed record still round-trips (the bound rejects only the impossible).
@@ -115,8 +115,8 @@ func TestMVScanResultHostileCounts(t *testing.T) {
 	// Hostile record count.
 	body := make([]byte, 4+16)
 	binary.BigEndian.PutUint32(body, 0xFFFFFFFF)
-	if _, err := DecodeMVScanResult(body); !errors.Is(err, errVectorArgsTruncated) {
-		t.Fatalf("record count: err = %v, want errVectorArgsTruncated", err)
+	if _, err := DecodeMVScanResult(body); !errors.Is(err, ErrVectorArgsTruncated) {
+		t.Fatalf("record count: err = %v, want ErrVectorArgsTruncated", err)
 	}
 	// One record whose numTokens*dim*4 wraps to zero.
 	wrap := make([]byte, 4+8+4+4+8)
@@ -124,8 +124,8 @@ func TestMVScanResultHostileCounts(t *testing.T) {
 	binary.BigEndian.PutUint64(wrap[4:], 42)     // id
 	binary.BigEndian.PutUint32(wrap[12:], 1<<31) // numTokens
 	binary.BigEndian.PutUint32(wrap[16:], 1<<31) // dim
-	if _, err := DecodeMVScanResult(wrap); !errors.Is(err, errVectorArgsTruncated) {
-		t.Fatalf("wrapping token matrix: err = %v, want errVectorArgsTruncated", err)
+	if _, err := DecodeMVScanResult(wrap); !errors.Is(err, ErrVectorArgsTruncated) {
+		t.Fatalf("wrapping token matrix: err = %v, want ErrVectorArgsTruncated", err)
 	}
 }
 
@@ -136,8 +136,8 @@ func TestNamedGetResultHostileSpaceCount(t *testing.T) {
 		body := make([]byte, 1+4+6)
 		body[0] = 1
 		binary.BigEndian.PutUint32(body[1:], n)
-		if _, _, _, _, err := DecodeNamedGetResult(body); !errors.Is(err, errVectorArgsTruncated) {
-			t.Fatalf("numSpaces=%d: err = %v, want errVectorArgsTruncated", n, err)
+		if _, _, _, _, err := DecodeNamedGetResult(body); !errors.Is(err, ErrVectorArgsTruncated) {
+			t.Fatalf("numSpaces=%d: err = %v, want ErrVectorArgsTruncated", n, err)
 		}
 	}
 	// Exact fit: one space, empty name, dim 0 — must decode, not be rejected.
@@ -159,14 +159,14 @@ func TestDecodeMatrixHostileRowCount(t *testing.T) {
 	for _, rows := range []uint32{0xFFFFFFFF, 2} {
 		b := make([]byte, 4+4)
 		binary.BigEndian.PutUint32(b, rows)
-		if _, _, err := decodeMatrix(b); !errors.Is(err, errVectorArgsTruncated) {
-			t.Fatalf("rows=%d: err = %v, want errVectorArgsTruncated", rows, err)
+		if _, _, err := DecodeMatrix(b); !errors.Is(err, ErrVectorArgsTruncated) {
+			t.Fatalf("rows=%d: err = %v, want ErrVectorArgsTruncated", rows, err)
 		}
 	}
 	// Exact fit: one row of dim 0.
 	b := make([]byte, 4+4)
 	binary.BigEndian.PutUint32(b, 1)
-	out, n, err := decodeMatrix(b)
+	out, n, err := DecodeMatrix(b)
 	if err != nil || len(out) != 1 || n != 8 {
 		t.Fatalf("exact-fit matrix: out=%v n=%d err=%v", out, n, err)
 	}
@@ -180,14 +180,14 @@ func TestVectorBlockDecodersHostileCounts(t *testing.T) {
 		binary.BigEndian.PutUint32(b, 0xFFFFFFFF)
 		return b
 	}
-	if _, err := DecodeVectorDocs(hostile(20)); !errors.Is(err, errVectorArgsTruncated) {
-		t.Errorf("docs: err = %v, want errVectorArgsTruncated", err)
+	if _, err := DecodeVectorDocs(hostile(20)); !errors.Is(err, ErrVectorArgsTruncated) {
+		t.Errorf("docs: err = %v, want ErrVectorArgsTruncated", err)
 	}
-	if _, err := DecodeScanVectorsResult(hostile(12)); !errors.Is(err, errVectorArgsTruncated) {
-		t.Errorf("scan: err = %v, want errVectorArgsTruncated", err)
+	if _, err := DecodeScanVectorsResult(hostile(12)); !errors.Is(err, ErrVectorArgsTruncated) {
+		t.Errorf("scan: err = %v, want ErrVectorArgsTruncated", err)
 	}
-	if _, err := DecodeGroups(hostile(4)); !errors.Is(err, errVectorArgsTruncated) {
-		t.Errorf("groups: err = %v, want errVectorArgsTruncated", err)
+	if _, err := DecodeGroups(hostile(4)); !errors.Is(err, ErrVectorArgsTruncated) {
+		t.Errorf("groups: err = %v, want ErrVectorArgsTruncated", err)
 	}
 	// Zero-element blocks still decode (the bound must not reject the empty case).
 	empty := make([]byte, 4)

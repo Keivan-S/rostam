@@ -6,7 +6,7 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/rostamlabs/rostam/ops"
+	"github.com/rostamlabs/rostam/ops/wire"
 	"github.com/rostamlabs/rostam/vector"
 )
 
@@ -32,13 +32,13 @@ type GetRequest struct {
 func getFlags(withVec, withPayload bool) uint8 {
 	var f uint8
 	if withVec {
-		f |= ops.GetFlagWithVector
+		f |= wire.GetFlagWithVector
 	}
 	if withPayload {
-		f |= ops.GetFlagWithPayload
+		f |= wire.GetFlagWithPayload
 	}
 	if f == 0 {
-		f = ops.GetFlagsBoth
+		f = wire.GetFlagsBoth
 	}
 	return f
 }
@@ -47,11 +47,11 @@ func getFlags(withVec, withPayload bool) uint8 {
 // exists, or ErrCollectionNotFound when the collection itself does not exist.
 func (col *Collection) Get(ctx context.Context, req GetRequest) (Point, error) {
 	body, err := col.c.Call(ctx, "vector_get",
-		ops.EncodeVectorGetArgs(col.name, req.ID, getFlags(req.WithVector, req.WithPayload)))
+		wire.EncodeVectorGetArgs(col.name, req.ID, getFlags(req.WithVector, req.WithPayload)))
 	if err != nil {
 		return Point{}, mapCollErr(err)
 	}
-	found, vec, meta, ttl, _, version, err := ops.DecodeVectorGetResultV(body)
+	found, vec, meta, ttl, _, version, err := wire.DecodeVectorGetResultV(body)
 	if err != nil {
 		return Point{}, err
 	}
@@ -80,11 +80,11 @@ type GetBatchResponse struct {
 // ErrCollectionNotFound when the collection itself does not exist.
 func (col *Collection) GetBatch(ctx context.Context, req GetBatchRequest) (GetBatchResponse, error) {
 	body, err := col.c.Call(ctx, "vector_get_batch",
-		ops.EncodeVectorGetBatchArgs(col.name, req.IDs, getFlags(req.WithVector, req.WithPayload)))
+		wire.EncodeVectorGetBatchArgs(col.name, req.IDs, getFlags(req.WithVector, req.WithPayload)))
 	if err != nil {
 		return GetBatchResponse{}, mapCollErr(err)
 	}
-	rows, err := ops.DecodeVectorGetBatchResult(body)
+	rows, err := wire.DecodeVectorGetBatchResult(body)
 	if err != nil {
 		return GetBatchResponse{}, err
 	}
@@ -134,18 +134,18 @@ type ScrollResponse struct {
 // the previous response's NextCursor as req.Cursor to fetch the next page.
 // Returns ErrCollectionNotFound when the collection itself does not exist.
 func (col *Collection) Scroll(ctx context.Context, req ScrollRequest) (ScrollResponse, error) {
-	dec, err := ops.DecodeScrollCursorTyped(req.Cursor)
+	dec, err := wire.DecodeScrollCursorTyped(req.Cursor)
 	if err != nil {
 		return ScrollResponse{}, err
 	}
 	afterID, hasAfter := dec.LastID, dec.Present
 
 	body, err := col.c.Call(ctx, "vector_scroll",
-		ops.EncodeScrollArgsOrderBounded(col.name, req.Filter, req.Limit, 0, 0, afterID, hasAfter, nil, 0))
+		wire.EncodeScrollArgsOrderBounded(col.name, req.Filter, req.Limit, 0, 0, afterID, hasAfter, nil, 0))
 	if err != nil {
 		return ScrollResponse{}, mapCollErr(err)
 	}
-	docs, _, _, nextCursor, err := ops.DecodeScrollResultRaw(body)
+	docs, _, _, nextCursor, err := wire.DecodeScrollResultRaw(body)
 	if err != nil {
 		return ScrollResponse{}, err
 	}

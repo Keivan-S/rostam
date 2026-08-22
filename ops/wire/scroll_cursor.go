@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-package ops
+package wire
 
 import (
 	"encoding/base64"
@@ -146,9 +146,9 @@ const scrollCursorStringHeaderLen = 6
 // the exact-length check in the decoder.
 const scrollCursorStringMaxLen = 1 << 16
 
-// scrollCursorFlagDesc is flags bit0: set when the cursor was issued for a
+// ScrollCursorFlagDesc is flags bit0: set when the cursor was issued for a
 // descending order_by scroll.
-const scrollCursorFlagDesc byte = 1 << 0
+const ScrollCursorFlagDesc byte = 1 << 0
 
 // ---------------------------------------------------------------------------
 // Cursor v4: ordered (k1, …, kN, id) resume cursor for a MULTI-KEY order_by scroll.
@@ -181,7 +181,7 @@ const scrollCursorFlagDesc byte = 1 << 0
 //   - keyHash    = vector.OrderKeyHash over the joined order_by key list — detects a
 //     mid-pagination order_by change (same guard as v2/v3, generalised to the tuple).
 //   - numKeys    = number of keys in the tuple (>= 2 for a real v4; bounded by
-//     scrollCursorMaxKeys, fail-loud otherwise).
+//     ScrollCursorMaxKeys, fail-loud otherwise).
 //   - per key kind+value, then the id tiebreak.
 
 // scrollCursorVersionTuple is the v4 (multi-key-ordered) cursor wire version.
@@ -191,14 +191,14 @@ const scrollCursorVersionTuple byte = 4
 // 1 version + 1 flags + 2 keyHash + 1 numKeys = 5.
 const scrollCursorTupleHeaderLen = 5
 
-// scrollCursorMaxKeys bounds the v4 tuple arity. A multi-key order with more than this
+// ScrollCursorMaxKeys bounds the v4 tuple arity. A multi-key order with more than this
 // many keys is rejected loudly (a corrupt/hostile numKeys never drives an unbounded
 // allocation or read). 16 is far beyond any realistic composite sort.
-const scrollCursorMaxKeys = 16
+const ScrollCursorMaxKeys = 16
 
-// scrollCursorKindString is the v4 per-key kind byte for a string key (mirrors
+// ScrollCursorKindString is the v4 per-key kind byte for a string key (mirrors
 // vector.OrderString == 2). Numeric (0) / datetime (1) keys carry a float64.
-const scrollCursorKindString byte = 2
+const ScrollCursorKindString byte = 2
 
 // OrderKeyVal is one typed key value in a v4 cursor resume tuple: a float64 (Num) for a
 // numeric/datetime key or a string (Str) for a string key, tagged by Kind (the wire
@@ -250,7 +250,7 @@ func EncodeScrollCursorOrder(value float64, id uint64, desc bool, keyHash uint16
 	var buf [scrollCursorOrderLen]byte
 	buf[0] = scrollCursorVersionOrder
 	if desc {
-		buf[1] |= scrollCursorFlagDesc
+		buf[1] |= ScrollCursorFlagDesc
 	}
 	binary.BigEndian.PutUint16(buf[2:], keyHash)
 	binary.BigEndian.PutUint64(buf[4:], math.Float64bits(value))
@@ -272,7 +272,7 @@ func EncodeScrollCursorOrderString(value string, id uint64, desc bool, keyHash u
 	buf := make([]byte, scrollCursorStringHeaderLen+len(value)+8)
 	buf[0] = scrollCursorVersionString
 	if desc {
-		buf[1] |= scrollCursorFlagDesc
+		buf[1] |= ScrollCursorFlagDesc
 	}
 	binary.BigEndian.PutUint16(buf[2:], keyHash)
 	binary.BigEndian.PutUint16(buf[4:], uint16(len(value))) //nolint:gosec // bounded above by scrollCursorStringMaxLen
@@ -288,21 +288,21 @@ func EncodeScrollCursorOrderString(value string, id uint64, desc bool, keyHash u
 // tuple in the tuple-lexicographic total order. See the v4 layout comment above.
 //
 // It is FAIL-LOUD: an empty tuple, a tuple with fewer than 2 keys (single-key MUST emit
-// v2/v3, never v4), more than scrollCursorMaxKeys keys, or a string key value longer than
+// v2/v3, never v4), more than ScrollCursorMaxKeys keys, or a string key value longer than
 // scrollCursorStringMaxLen all return ErrBadScrollCursor (a corrupt token is never
 // produced).
 func EncodeScrollCursorOrderTuple(tuple []OrderKeyVal, id uint64, desc bool, keyHash uint16) (string, error) {
 	if len(tuple) < 2 {
 		return "", fmt.Errorf("%w: v4 cursor requires >= 2 keys (got %d; single-key uses v2/v3)", ErrBadScrollCursor, len(tuple))
 	}
-	if len(tuple) > scrollCursorMaxKeys {
-		return "", fmt.Errorf("%w: v4 cursor has too many keys (%d > %d)", ErrBadScrollCursor, len(tuple), scrollCursorMaxKeys)
+	if len(tuple) > ScrollCursorMaxKeys {
+		return "", fmt.Errorf("%w: v4 cursor has too many keys (%d > %d)", ErrBadScrollCursor, len(tuple), ScrollCursorMaxKeys)
 	}
 	// Size the buffer: fixed header + per-key (1 kind byte + value) + 8-byte id.
 	size := scrollCursorTupleHeaderLen + 8
 	for _, kv := range tuple {
 		size++ // kind byte
-		if kv.Kind == scrollCursorKindString {
+		if kv.Kind == ScrollCursorKindString {
 			if len(kv.Str) > scrollCursorStringMaxLen {
 				return "", fmt.Errorf("%w: v4 string key value too long (%d bytes)", ErrBadScrollCursor, len(kv.Str))
 			}
@@ -314,15 +314,15 @@ func EncodeScrollCursorOrderTuple(tuple []OrderKeyVal, id uint64, desc bool, key
 	buf := make([]byte, size)
 	buf[0] = scrollCursorVersionTuple
 	if desc {
-		buf[1] |= scrollCursorFlagDesc
+		buf[1] |= ScrollCursorFlagDesc
 	}
 	binary.BigEndian.PutUint16(buf[2:], keyHash)
-	buf[4] = byte(len(tuple)) //nolint:gosec // bounded above by scrollCursorMaxKeys
+	buf[4] = byte(len(tuple)) //nolint:gosec // bounded above by ScrollCursorMaxKeys
 	off := scrollCursorTupleHeaderLen
 	for _, kv := range tuple {
 		buf[off] = kv.Kind
 		off++
-		if kv.Kind == scrollCursorKindString {
+		if kv.Kind == ScrollCursorKindString {
 			binary.BigEndian.PutUint16(buf[off:], uint16(len(kv.Str))) //nolint:gosec // bounded above
 			off += 2
 			copy(buf[off:], kv.Str)
@@ -338,7 +338,7 @@ func EncodeScrollCursorOrderTuple(tuple []OrderKeyVal, id uint64, desc bool, key
 
 // decodeScrollCursorTuple parses the v4 (multi-key) body (raw[1:] onward already past
 // the version byte; raw includes the version byte at index 0). It is fail-loud: a
-// numKeys out of [2, scrollCursorMaxKeys], a per-key strLen that overruns the token, an
+// numKeys out of [2, ScrollCursorMaxKeys], a per-key strLen that overruns the token, an
 // unknown kind byte, or a trailing-byte mismatch all return ErrBadScrollCursor — no
 // panic, no OOB read, no unbounded allocation.
 func decodeScrollCursorTuple(raw []byte) (DecodedScrollCursor, error) {
@@ -346,7 +346,7 @@ func decodeScrollCursorTuple(raw []byte) (DecodedScrollCursor, error) {
 		return DecodedScrollCursor{}, ErrBadScrollCursor
 	}
 	numKeys := int(raw[4])
-	if numKeys < 2 || numKeys > scrollCursorMaxKeys {
+	if numKeys < 2 || numKeys > ScrollCursorMaxKeys {
 		return DecodedScrollCursor{}, ErrBadScrollCursor
 	}
 	tuple := make([]OrderKeyVal, numKeys)
@@ -357,7 +357,7 @@ func decodeScrollCursorTuple(raw []byte) (DecodedScrollCursor, error) {
 		}
 		kind := raw[off]
 		off++
-		if kind == scrollCursorKindString {
+		if kind == ScrollCursorKindString {
 			if off+2 > len(raw)-8 {
 				return DecodedScrollCursor{}, ErrBadScrollCursor
 			}
@@ -383,7 +383,7 @@ func decodeScrollCursorTuple(raw []byte) (DecodedScrollCursor, error) {
 	return DecodedScrollCursor{
 		Present: true,
 		Version: scrollCursorVersionTuple,
-		Desc:    raw[1]&scrollCursorFlagDesc != 0,
+		Desc:    raw[1]&ScrollCursorFlagDesc != 0,
 		KeyHash: binary.BigEndian.Uint16(raw[2:]),
 		Tuple:   tuple,
 		LastID:  binary.BigEndian.Uint64(raw[off:]),
@@ -426,7 +426,7 @@ func DecodeScrollCursorTyped(token string) (DecodedScrollCursor, error) {
 		return DecodedScrollCursor{
 			Present: true,
 			Version: scrollCursorVersionOrder,
-			Desc:    raw[1]&scrollCursorFlagDesc != 0,
+			Desc:    raw[1]&ScrollCursorFlagDesc != 0,
 			KeyHash: binary.BigEndian.Uint16(raw[2:]),
 			Value:   math.Float64frombits(binary.BigEndian.Uint64(raw[4:])),
 			LastID:  binary.BigEndian.Uint64(raw[12:]),
@@ -450,7 +450,7 @@ func DecodeScrollCursorTyped(token string) (DecodedScrollCursor, error) {
 		return DecodedScrollCursor{
 			Present:  true,
 			Version:  scrollCursorVersionString,
-			Desc:     raw[1]&scrollCursorFlagDesc != 0,
+			Desc:     raw[1]&ScrollCursorFlagDesc != 0,
 			KeyHash:  binary.BigEndian.Uint16(raw[2:]),
 			StrValue: string(raw[scrollCursorStringHeaderLen:strEnd]),
 			LastID:   binary.BigEndian.Uint64(raw[strEnd:]),

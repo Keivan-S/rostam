@@ -54,7 +54,7 @@ func mvQuerySpecBlob(t *testing.T, spec vector.QuerySpec) []byte {
 }
 
 // TestMVQueryLeafRoundTrip checks an MV-MaxSim leaf spec survives the proto↔struct
-// conversion (querySpecToProto → querySpecFromProto), landing in the mv_maxsim
+// conversion (QuerySpecToProto → QuerySpecFromProto), landing in the mv_maxsim
 // oneof arm, with the token matrix and the doc-sparse leaf intact.
 func TestMVQueryLeafRoundTrip(t *testing.T) {
 	spec := vector.QuerySpec{
@@ -67,9 +67,9 @@ func TestMVQueryLeafRoundTrip(t *testing.T) {
 		Method: vector.FusionRRF,
 		K:      5,
 	}
-	p, err := querySpecToProto(spec)
+	p, err := QuerySpecToProto(spec)
 	if err != nil {
-		t.Fatalf("querySpecToProto: %v", err)
+		t.Fatalf("QuerySpecToProto: %v", err)
 	}
 	if _, ok := p.GetRoot().GetLeaf().(*pb.QueryLeaf_MvMaxsim); !ok {
 		t.Fatalf("root not encoded as MvMaxsim: %T", p.GetRoot().GetLeaf())
@@ -81,9 +81,9 @@ func TestMVQueryLeafRoundTrip(t *testing.T) {
 		t.Fatalf("prefetch[1] not encoded as Sparse: %T", p.GetPrefetch()[1].GetLeaf())
 	}
 
-	got, err := querySpecFromProto(p, 0)
+	got, err := QuerySpecFromProto(p, 0)
 	if err != nil {
-		t.Fatalf("querySpecFromProto: %v", err)
+		t.Fatalf("QuerySpecFromProto: %v", err)
 	}
 	if got.Root.Kind != vector.LeafMVMaxSim || len(got.Root.Tokens) != 2 || len(got.Root.Tokens[0]) != 3 {
 		t.Fatalf("root maxsim tokens lost: %+v", got.Root)
@@ -106,7 +106,7 @@ func TestMVQueryLeafRoundTrip(t *testing.T) {
 	if err := proto.Unmarshal(gotBlob, &pbSpec); err != nil {
 		t.Fatalf("unmarshal spec blob: %v", err)
 	}
-	rt, err := querySpecFromProto(&pbSpec, 0)
+	rt, err := QuerySpecFromProto(&pbSpec, 0)
 	if err != nil || rt.Root.Kind != vector.LeafMVMaxSim || len(rt.Root.Tokens) != 2 {
 		t.Fatalf("blob round-trip lost maxsim: %+v err=%v", rt, err)
 	}

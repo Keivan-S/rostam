@@ -16,6 +16,7 @@ import (
 	"github.com/rostamlabs/rostam/cache"
 	"github.com/rostamlabs/rostam/client"
 	"github.com/rostamlabs/rostam/ops"
+	"github.com/rostamlabs/rostam/ops/wire"
 	"github.com/rostamlabs/rostam/server"
 	"github.com/rostamlabs/rostam/shard"
 )
@@ -536,11 +537,18 @@ func newSmartTestCluster(t *testing.T, n int, numShards int) (*testCluster, *ops
 	if err := ops.RegisterBuiltins(clientReg); err != nil {
 		t.Fatal(err)
 	}
+	// client.Config.Ops is the client package's routing-only wire.Registry (the
+	// client cannot import ops); wire.RegisterRoutableBuiltins registers the same
+	// name/kind/KeyExtractor set as ops.RegisterBuiltins, just without handlers.
+	wireReg := wire.NewRegistry()
+	if err := wire.RegisterRoutableBuiltins(wireReg); err != nil {
+		t.Fatal(err)
+	}
 	c, err := client.New(client.Config{
 		Servers:                 addrs,
 		MaxConnsPerServer:       8,
 		MaxNotLeaderHops:        5,
-		Ops:                     clientReg,
+		Ops:                     wireReg,
 		TopologyRefreshInterval: 1 * time.Second,
 	})
 	if err != nil {

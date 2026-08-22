@@ -11,7 +11,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/rostamlabs/rostam/ops"
+	"github.com/rostamlabs/rostam/ops/wire"
 )
 
 // Config governs a Client and its per-server pools.
@@ -74,8 +74,8 @@ type Config struct {
 	// falls back to the round-robin + NotLeader retry. The
 	// registry must contain the same KeyExtractor mappings as the
 	// server's registry; the typical setup shares one registry between
-	// server and client by calling ops.RegisterBuiltins on both.
-	Ops *ops.Registry
+	// server and client by calling wire.RegisterRoutableBuiltins on the client and ops.RegisterBuiltins on the server.
+	Ops *wire.Registry
 
 	// TopologyRefreshInterval is how often the background goroutine
 	// polls __topology__. Default 5s. Ignored when Ops == nil.

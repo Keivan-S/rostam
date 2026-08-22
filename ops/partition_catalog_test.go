@@ -89,13 +89,13 @@ func TestCatalogRecordBackwardCompat(t *testing.T) {
 	old := make([]byte, 8)
 	binary.LittleEndian.PutUint32(old[0:4], 5) // Partitions
 	binary.LittleEndian.PutUint32(old[4:8], 2) // Version
-	rec, ok := decodeCatalogRecord(old)
+	rec, ok := DecodeCatalogRecord(old)
 	if !ok || rec.Partitions != 5 || rec.Generation != 0 {
 		t.Fatalf("old 8-byte record decoded %+v, want P=5 gen=0", rec)
 	}
 	// New 12-byte record round-trips gen.
-	b := encodeCatalogRecord(catalogRecord{Partitions: 8, Version: 1, Generation: 3})
-	rec2, ok := decodeCatalogRecord(b)
+	b := EncodeCatalogRecord(CatalogRecord{Partitions: 8, Version: 1, Generation: 3})
+	rec2, ok := DecodeCatalogRecord(b)
 	if !ok || rec2.Partitions != 8 || rec2.Generation != 3 || rec2.Version != 1 {
 		t.Fatalf("new record round-trip %+v", rec2)
 	}
@@ -105,8 +105,8 @@ func TestCatalogRecordBackwardCompat(t *testing.T) {
 // no targets) serializes byte-identically to the legacy 12-byte form, so
 // existing on-disk data and readers are unaffected.
 func TestCatalogRecordStableEncodesLegacy12B(t *testing.T) {
-	rec := catalogRecord{Partitions: 8, Version: 7, Generation: 3} // Status/Target* zero
-	got := encodeCatalogRecord(rec)
+	rec := CatalogRecord{Partitions: 8, Version: 7, Generation: 3} // Status/Target* zero
+	got := EncodeCatalogRecord(rec)
 	if len(got) != 12 {
 		t.Fatalf("Stable record encoded %d bytes, want 12", len(got))
 	}
@@ -126,7 +126,7 @@ func TestCatalogRecordLegacyDecodesStable(t *testing.T) {
 	binary.LittleEndian.PutUint32(legacy[0:4], 4)  // Partitions
 	binary.LittleEndian.PutUint32(legacy[4:8], 2)  // Version
 	binary.LittleEndian.PutUint32(legacy[8:12], 1) // Generation
-	rec, ok := decodeCatalogRecord(legacy)
+	rec, ok := DecodeCatalogRecord(legacy)
 	if !ok {
 		t.Fatal("decode legacy 12B failed")
 	}
@@ -142,12 +142,12 @@ func TestCatalogRecordLegacyDecodesStable(t *testing.T) {
 // serializes to 32 bytes and round-trips all eight fields (incl. the Source pin),
 // and that a legacy 24-byte resharding record (no Source) decodes Source=0.
 func TestCatalogRecordReshardingRoundTrip(t *testing.T) {
-	rec := catalogRecord{Partitions: 2, Version: 9, Generation: 0, Status: 1, TargetP: 4, TargetGen: 1, SourceP: 2, SourceGen: 0}
-	b := encodeCatalogRecord(rec)
+	rec := CatalogRecord{Partitions: 2, Version: 9, Generation: 0, Status: 1, TargetP: 4, TargetGen: 1, SourceP: 2, SourceGen: 0}
+	b := EncodeCatalogRecord(rec)
 	if len(b) != 32 {
 		t.Fatalf("Resharding record encoded %d bytes, want 32", len(b))
 	}
-	got, ok := decodeCatalogRecord(b)
+	got, ok := DecodeCatalogRecord(b)
 	if !ok {
 		t.Fatal("decode 32B failed")
 	}
@@ -163,7 +163,7 @@ func TestCatalogRecordReshardingRoundTrip(t *testing.T) {
 	binary.LittleEndian.PutUint32(legacy24[12:16], 1) // Status
 	binary.LittleEndian.PutUint32(legacy24[16:20], 4) // TargetP
 	binary.LittleEndian.PutUint32(legacy24[20:24], 1) // TargetGen
-	rec24, ok := decodeCatalogRecord(legacy24)
+	rec24, ok := DecodeCatalogRecord(legacy24)
 	if !ok || rec24.Status != 1 || rec24.TargetP != 4 || rec24.TargetGen != 1 || rec24.SourceP != 0 || rec24.SourceGen != 0 {
 		t.Fatalf("legacy 24B decode %+v, want Source=0", rec24)
 	}
@@ -173,14 +173,14 @@ func TestCatalogRecordReshardingRoundTrip(t *testing.T) {
 // <8B invalid; 8B legacy (gen 0); records between 12 and 24 decode the prefix
 // fields present without panicking.
 func TestCatalogRecordShortDecodeTolerance(t *testing.T) {
-	if _, ok := decodeCatalogRecord(make([]byte, 7)); ok {
+	if _, ok := DecodeCatalogRecord(make([]byte, 7)); ok {
 		t.Fatal("7-byte record should be invalid")
 	}
 	// 8-byte legacy: Status/Target* default to zero.
 	eight := make([]byte, 8)
 	binary.LittleEndian.PutUint32(eight[0:4], 3)
 	binary.LittleEndian.PutUint32(eight[4:8], 1)
-	rec, ok := decodeCatalogRecord(eight)
+	rec, ok := DecodeCatalogRecord(eight)
 	if !ok || rec.Partitions != 3 || rec.Generation != 0 || rec.Status != 0 {
 		t.Fatalf("8-byte decode %+v", rec)
 	}
@@ -192,7 +192,7 @@ func TestCatalogRecordShortDecodeTolerance(t *testing.T) {
 	binary.LittleEndian.PutUint32(twenty[8:12], 0)
 	binary.LittleEndian.PutUint32(twenty[12:16], 1) // Status
 	binary.LittleEndian.PutUint32(twenty[16:20], 4) // TargetP
-	rec2, ok := decodeCatalogRecord(twenty)
+	rec2, ok := DecodeCatalogRecord(twenty)
 	if !ok || rec2.Status != 1 || rec2.TargetP != 4 || rec2.TargetGen != 0 {
 		t.Fatalf("20-byte decode %+v", rec2)
 	}
@@ -230,7 +230,7 @@ func TestCatalogReshardGenRoundTrip(t *testing.T) {
 	if _, _, _, _, _, ok := c.ReshardGen("docs"); ok {
 		t.Fatal("after clear reshard should be Stable (!ok)")
 	}
-	raw, _ := store.GetCatalog(catalogKey("docs"))
+	raw, _ := store.GetCatalog(CatalogKey("docs"))
 	if len(raw) != 12 {
 		t.Fatalf("after clear stored record is %d bytes, want legacy 12", len(raw))
 	}
@@ -267,7 +267,7 @@ func TestSetPartitionsGenPreservesReshardState(t *testing.T) {
 		t.Fatalf("ReshardGen after cutover = (%d,%d,%d,%d,%d,%v), want (1,4,1,2,0,true)", st, tp, tg, sp, sg, ok)
 	}
 	// (c) Stored record kept the full 32-byte reshard form (not collapsed to 12B).
-	raw, _ := store.GetCatalog(catalogKey("docs"))
+	raw, _ := store.GetCatalog(CatalogKey("docs"))
 	if len(raw) != 32 {
 		t.Fatalf("after cutover stored record is %d bytes, want 32 (reshard preserved)", len(raw))
 	}

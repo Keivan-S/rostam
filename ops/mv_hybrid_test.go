@@ -12,7 +12,7 @@ import (
 // ops (the same bug class the named-hybrid feature hit). EncodeMVHybridArgs emits
 // the At2 wire ([flags:u8][colLen:u8][col]...), so vector_mv_hybrid_search /
 // vector_mv_hybrid_lanes MUST be registered At2 (offset 1, behind the flags byte)
-// in CollectionNameFor/collectionNameOffset/the KeyExtractor. If they were
+// in CollectionNameFor/CollectionNameOffset/the KeyExtractor. If they were
 // mis-registered At1 (like the rest of the mv_* family), CollectionNameFor would
 // read the leading flags byte as the name length and return GARBAGE, and on a P>1
 // collection the fan-out would silently fall to single-partition.
@@ -40,9 +40,9 @@ func TestMVHybridCollectionNameForAt2(t *testing.T) {
 		if name != "default/mycoll" {
 			t.Errorf("%s: name = %q, want %q (At1/At2 routing-offset regression)", c.op, name, "default/mycoll")
 		}
-		// collectionNameOffset must agree (offset 1 = At2).
-		if off, ok := collectionNameOffset(c.op); !ok || off != 1 {
-			t.Errorf("%s: collectionNameOffset = (%d,%v), want (1,true)", c.op, off, ok)
+		// CollectionNameOffset must agree (offset 1 = At2).
+		if off, ok := CollectionNameOffset(c.op); !ok || off != 1 {
+			t.Errorf("%s: CollectionNameOffset = (%d,%v), want (1,true)", c.op, off, ok)
 		}
 	}
 }

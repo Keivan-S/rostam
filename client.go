@@ -14,6 +14,7 @@ import (
 
 	"github.com/rostamlabs/rostam/client"
 	"github.com/rostamlabs/rostam/ops"
+	"github.com/rostamlabs/rostam/ops/wire"
 	"github.com/rostamlabs/rostam/vector"
 )
 
@@ -64,9 +65,21 @@ func NewClient(cfg ClientConfig) (Store, error) {
 	if cfg.TopologyRefreshInterval == 0 {
 		cfg.TopologyRefreshInterval = 5 * time.Second
 	}
+	// client.Config.Ops is a *wire.Registry (the client package cannot import
+	// ops — that is what would drag cache/objstore/vector-analysis into the
+	// networked client). cfg.Ops here is the caller's full server-side
+	// *ops.Registry (routing + handlers); ExportRouting adapts it into the
+	// routing-only registry the low-level client needs.
+	var wireOps *wire.Registry
+	if cfg.Ops != nil {
+		wireOps = wire.NewRegistry()
+		if err := cfg.Ops.ExportRouting(wireOps); err != nil {
+			return nil, fmt.Errorf("rostam: export routing registry: %w", err)
+		}
+	}
 	cc := client.Config{
 		Servers:                 cfg.Servers,
-		Ops:                     cfg.Ops,
+		Ops:                     wireOps,
 		MaxConnsPerServer:       int32(cfg.MaxConnsPerServer), //nolint:gosec // user-supplied, positive
 		MaxNotLeaderHops:        cfg.MaxNotLeaderHops,
 		TopologyRefreshInterval: cfg.TopologyRefreshInterval,

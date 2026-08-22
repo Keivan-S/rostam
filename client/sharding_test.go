@@ -8,7 +8,7 @@ import (
 
 	"github.com/cespare/xxhash/v2"
 
-	"github.com/rostamlabs/rostam/ops"
+	"github.com/rostamlabs/rostam/ops/wire"
 )
 
 // TestPickInitialTargetClientSharding verifies the client-side sharding fast
@@ -16,8 +16,8 @@ import (
 // leader when known, and to an owner (via Placement) when the leader is unknown
 // — never falling back to the round-robin server list.
 func TestPickInitialTargetClientSharding(t *testing.T) {
-	reg := ops.NewRegistry()
-	if err := ops.RegisterBuiltins(reg); err != nil {
+	reg := wire.NewRegistry()
+	if err := wire.RegisterRoutableBuiltins(reg); err != nil {
 		t.Fatal(err)
 	}
 	c, err := New(Config{
@@ -31,19 +31,19 @@ func TestPickInitialTargetClientSharding(t *testing.T) {
 	defer c.Close()
 
 	const numShards = 4
-	members := []ops.TopologyMember{
+	members := []wire.TopologyMember{
 		{NodeID: "n1", ServerAddr: "addr-n1"},
 		{NodeID: "n2", ServerAddr: "addr-n2"},
 	}
 	placement := [][]string{{"n1"}, {"n2"}, {"n1"}, {"n2"}}
 
 	key := []byte("some-key")
-	args := ops.EncodePutArgs(key, []byte("v"), 0)
+	args := wire.EncodePutArgs(key, []byte("v"), 0)
 	shard := int(xxhash.Sum64(key) % numShards)
 	wantOwnerAddr := members[map[int]int{0: 0, 1: 1, 2: 0, 3: 1}[shard]].ServerAddr
 
 	// Leader unknown for this shard → route to the owner from Placement.
-	c.topology.set(ops.Topology{
+	c.topology.set(wire.Topology{
 		NumShards: numShards,
 		Members:   members,
 		Leaders:   make([]string, numShards), // all ""
@@ -56,7 +56,7 @@ func TestPickInitialTargetClientSharding(t *testing.T) {
 	// Leader known → prefer the leader over the owner.
 	leaders := make([]string, numShards)
 	leaders[shard] = "addr-leader"
-	c.topology.set(ops.Topology{
+	c.topology.set(wire.Topology{
 		NumShards: numShards,
 		Members:   members,
 		Leaders:   leaders,

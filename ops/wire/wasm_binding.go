@@ -1,11 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
-package ops
+package wire
 
 import (
 	"errors"
 	"fmt"
 )
+
+// NoShardIndex is what a TxContext's ShardIndex reports when there is no
+// dispatcher behind it (a nil receiver). ops.NoShardIndex aliases this so
+// existing server-side call sites are unaffected. Handlers that attribute
+// node-wide state changes to a shard group must treat it as "no group
+// provenance" and record nothing — never as group 0, which would be a false
+// attribution.
+const NoShardIndex = -1
 
 // ErrWASMNoGroupBinding is returned by the WASM op handler when a committed
 // entry in shard group g invokes a REPLICATED read-write op for which g's

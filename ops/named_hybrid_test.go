@@ -56,7 +56,7 @@ func TestNamedHybridArgsNoOptsTrailer(t *testing.T) {
 		t.Fatal("encode not deterministic")
 	}
 	// The no-rc encoding must NOT carry the opts flag bit.
-	if a1[0]&namedHybridFlagOpts != 0 {
+	if a1[0]&NamedHybridFlagOpts != 0 {
 		t.Fatal("opts flag set despite rc==0 && opa==0")
 	}
 	col, ds, dq, ss, sq, k, _, rc, opa, _, err := DecodeNamedHybridArgs(a1)

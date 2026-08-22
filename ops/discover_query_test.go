@@ -13,7 +13,7 @@ import (
 )
 
 // TestDiscoverQueryLeafRoundTrip checks a discover-leaf spec survives the
-// proto↔struct conversion (querySpecToProto → querySpecFromProto) carrying BOTH
+// proto↔struct conversion (QuerySpecToProto → QuerySpecFromProto) carrying BOTH
 // the resolved target/context VECTORS and the unresolved target/context IDS, and
 // that the leaf lands in the QueryLeaf_Discover oneof arm with ScoreDesc=true.
 func TestDiscoverQueryLeafRoundTrip(t *testing.T) {
@@ -41,9 +41,9 @@ func TestDiscoverQueryLeafRoundTrip(t *testing.T) {
 		Method: vector.FusionRRF,
 		K:      5,
 	}
-	p, err := querySpecToProto(spec)
+	p, err := QuerySpecToProto(spec)
 	if err != nil {
-		t.Fatalf("querySpecToProto: %v", err)
+		t.Fatalf("QuerySpecToProto: %v", err)
 	}
 	// The root + prefetch[0] must land in the Discover arm.
 	rootD, ok := p.GetRoot().GetLeaf().(*pb.QueryLeaf_Discover)
@@ -60,9 +60,9 @@ func TestDiscoverQueryLeafRoundTrip(t *testing.T) {
 		t.Fatalf("prefetch[0] not encoded as Discover: %T", p.GetPrefetch()[0].GetLeaf())
 	}
 
-	got, err := querySpecFromProto(p, 0)
+	got, err := QuerySpecFromProto(p, 0)
 	if err != nil {
-		t.Fatalf("querySpecFromProto: %v", err)
+		t.Fatalf("QuerySpecFromProto: %v", err)
 	}
 	if got.Root.Kind != vector.LeafDiscover {
 		t.Fatalf("root kind = %d, want LeafDiscover", got.Root.Kind)
@@ -104,9 +104,9 @@ func TestDiscoverQueryLeafRoundTrip(t *testing.T) {
 	if err := proto.Unmarshal(gotBlob, &pbSpec); err != nil {
 		t.Fatalf("unmarshal spec blob: %v", err)
 	}
-	rt, err := querySpecFromProto(&pbSpec, 0)
+	rt, err := QuerySpecFromProto(&pbSpec, 0)
 	if err != nil {
-		t.Fatalf("querySpecFromProto (blob): %v", err)
+		t.Fatalf("QuerySpecFromProto (blob): %v", err)
 	}
 	if rt.Root.Kind != vector.LeafDiscover || len(rt.Root.DiscoverContextIDs) != 1 || len(rt.Root.DiscoverTarget) != 4 {
 		t.Fatalf("blob round-trip lost discover payload: %+v", rt.Root)

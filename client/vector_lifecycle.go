@@ -6,7 +6,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/rostamlabs/rostam/ops"
+	"github.com/rostamlabs/rostam/ops/wire"
 	"github.com/rostamlabs/rostam/vector"
 )
 
@@ -34,7 +34,7 @@ func (col *Collection) Create(ctx context.Context, req CreateRequest) error {
 		Persistent:     req.Persistent,
 		FullText:       req.FullText,
 	}
-	_, err := col.c.Call(ctx, "vector_create_collection", ops.EncodeCreateCollectionArgs(col.name, cfg))
+	_, err := col.c.Call(ctx, "vector_create_collection", wire.EncodeCreateCollectionArgs(col.name, cfg))
 	return mapCreateErr(err)
 }
 
@@ -45,7 +45,7 @@ func (col *Collection) Create(ctx context.Context, req CreateRequest) error {
 // as a defensive translation in case that server contract ever changes; see
 // Get/Search for the paths where a missing collection actually surfaces.)
 func (col *Collection) Drop(ctx context.Context) error {
-	_, err := col.c.Call(ctx, "vector_drop_collection", ops.EncodeDropCollectionArgs(col.name))
+	_, err := col.c.Call(ctx, "vector_drop_collection", wire.EncodeDropCollectionArgs(col.name))
 	if isCollectionNotFound(err) {
 		return ErrCollectionNotFound
 	}

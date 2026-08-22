@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/rostamlabs/rostam/ops"
+	"github.com/rostamlabs/rostam/ops/wire"
 )
 
 // TestPipelinedCallParity: with pipelining on, a simple put/get round-trips
@@ -24,10 +24,10 @@ func TestPipelinedCallParity(t *testing.T) {
 	defer func() { _ = c.Close() }()
 
 	ctx := context.Background()
-	if _, err := c.Call(ctx, "put", ops.EncodePutArgs([]byte("k"), []byte("v"), 0)); err != nil {
+	if _, err := c.Call(ctx, "put", wire.EncodePutArgs([]byte("k"), []byte("v"), 0)); err != nil {
 		t.Fatalf("pipelined put: %v", err)
 	}
-	res, err := c.Call(ctx, "get", ops.EncodeKeyArgs([]byte("k")))
+	res, err := c.Call(ctx, "get", wire.EncodeKeyArgs([]byte("k")))
 	if err != nil {
 		t.Fatalf("pipelined get: %v", err)
 	}
@@ -44,7 +44,7 @@ func TestPipelinedCallParity(t *testing.T) {
 func TestPipelinedResponsesMatchCallersUnderLoad(t *testing.T) {
 	addr, stop := startTestStack(t)
 	defer stop()
-	// Deep pipeline, only 2 conns → heavy multiplexing of many in-flight ops.
+	// Deep pipeline, only 2 conns → heavy multiplexing of many in-flight wire.
 	c, err := New(Config{Servers: []string{addr}, PipelineDepth: 64, PipelineConns: 2})
 	if err != nil {
 		t.Fatal(err)
@@ -62,11 +62,11 @@ func TestPipelinedResponsesMatchCallersUnderLoad(t *testing.T) {
 			for i := 0; i < perWorker; i++ {
 				key := []byte(fmt.Sprintf("w%d-k%d", w, i))
 				val := []byte(fmt.Sprintf("w%d-v%d", w, i))
-				if _, err := c.Call(ctx, "put", ops.EncodePutArgs(key, val, 0)); err != nil {
+				if _, err := c.Call(ctx, "put", wire.EncodePutArgs(key, val, 0)); err != nil {
 					errCh <- fmt.Errorf("put %s: %w", key, err)
 					return
 				}
-				got, err := c.Call(ctx, "get", ops.EncodeKeyArgs(key))
+				got, err := c.Call(ctx, "get", wire.EncodeKeyArgs(key))
 				if err != nil {
 					errCh <- fmt.Errorf("get %s: %w", key, err)
 					return
@@ -93,7 +93,7 @@ func TestPipelinedNotFoundAndRemoteError(t *testing.T) {
 	c, _ := New(Config{Servers: []string{addr}, PipelineDepth: 16})
 	defer func() { _ = c.Close() }()
 
-	if _, err := c.Call(context.Background(), "get", ops.EncodeKeyArgs([]byte("absent"))); err != ErrNotFound {
+	if _, err := c.Call(context.Background(), "get", wire.EncodeKeyArgs([]byte("absent"))); err != ErrNotFound {
 		t.Fatalf("missing key err = %v, want ErrNotFound", err)
 	}
 	if _, err := c.Call(context.Background(), "no_such_op", nil); err == nil {

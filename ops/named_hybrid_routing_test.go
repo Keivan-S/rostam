@@ -11,7 +11,7 @@ import (
 // TestNamedHybridCollectionNameForAt2 is the regression guard for the routing bug
 // fixed in 273d9b2: the named-hybrid ops emit the At2 wire
 // ([flags:u8][colLen:u8][col]...) like dense hybrid, but were registered At1
-// (col-first) in CollectionNameFor/collectionNameOffset/the KeyExtractor. With the
+// (col-first) in CollectionNameFor/CollectionNameOffset/the KeyExtractor. With the
 // At1 mapping, CollectionNameFor read the leading flags byte as the name length,
 // producing a GARBAGE name; on a P>1 collection the fan-out dispatcher then failed
 // to recognise the collection and fell through to single-partition results.

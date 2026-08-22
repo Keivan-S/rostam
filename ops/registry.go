@@ -10,67 +10,42 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+
+	"github.com/rostamlabs/rostam/ops/wire"
 )
 
-// OpKind tags ops as read-only (bypass Raft) or read-write (go through Raft).
-type OpKind uint8
+// OpKind, KeyExtractor, KeyExtractorInto, and RouteLayout are aliases onto the
+// leaf (ops/wire) definitions. The leaf owns these as plain value/function types
+// with no dependency on TxContext or cache, so the client's routing-only
+// wire.Registry and the server's handler-carrying ops.Registry (below) can share
+// one definition of "what an op's routing key looks like" without either
+// package needing to import the other's Registry type.
+type (
+	OpKind           = wire.OpKind
+	KeyExtractor     = wire.KeyExtractor
+	KeyExtractorInto = wire.KeyExtractorInto
+	RouteLayout      = wire.RouteLayout
+)
 
 const (
 	// OpReadOnly ops execute directly against the cache; they must not mutate state.
-	OpReadOnly OpKind = 0
+	OpReadOnly = wire.OpReadOnly
 	// OpReadWrite ops are serialised as Raft log entries and applied by the FSM.
-	OpReadWrite OpKind = 1
-)
+	OpReadWrite = wire.OpReadWrite
 
-// Handler is the function signature for a registered op.
-type Handler func(tx *TxContext, args []byte) ([]byte, error)
-
-// KeyExtractor extracts the routing key from an op's args. Returns
-// (keyBytes, true) when a key is present; (nil, false) when the args
-// shape is invalid. Shardless ops (e.g., __ping__) register with a nil
-// KeyExtractor instead.
-//
-// Returned key may alias into args; the caller does not retain it past
-// the routing decision.
-type KeyExtractor func(args []byte) ([]byte, bool)
-
-// KeyExtractorInto is the allocation-free form of KeyExtractor: it returns the
-// same routing key, but built either as a window INTO args or by appending to the
-// caller-owned scratch, instead of allocating a fresh []byte per call. A nil
-// return means "no key" (the (nil, false) of KeyExtractor).
-//
-// It exists only because a routing key is the shortest-lived value in the system:
-// the caller hashes it to a shard index and drops it. The returned key therefore
-// aliases args OR scratch, and the SCRATCH MUST NOT OUTLIVE THE ROUTING DECISION —
-// the next op's extraction overwrites it. No implementation may store either
-// slice, and no caller may keep the key past shardOf.
-//
-// A router does NOT reach one of these through a stored function value: routing
-// selects the extractor by RouteLayout and calls RouteKeyInto, a DIRECT call. That
-// is deliberate — an indirect call forces the compiler to assume the callee leaks
-// its arguments, which sends the caller's stack scratch to the heap and gives back
-// most of the allocation the whole path exists to remove.
-type KeyExtractorInto func(args, scratch []byte) []byte
-
-// RouteLayout names the args wire layout a built-in routable op's key lives in.
-// It is the allocation-free routing path's stand-in for a stored KeyExtractorInto
-// (see that type for why a function value is the wrong shape here): the registry
-// records which layout an op uses, and RouteKeyInto turns (layout, args) into the
-// key with a direct call.
-//
-// RouteLayoutNone means "no allocation-free extractor" — the op is either shardless
-// or dynamically registered (a WASM op, whose layout this package cannot know), and
-// routing falls back to its KeyExtractor.
-type RouteLayout uint8
-
-const (
 	// RouteLayoutNone: route via KeyExtractor (or not at all, if that is nil too).
-	RouteLayoutNone RouteLayout = iota
+	RouteLayoutNone = wire.RouteLayoutNone
 	// RouteLayoutColAt1: [colLen:u8][col]... — the collection name at offset 0.
-	RouteLayoutColAt1
+	RouteLayoutColAt1 = wire.RouteLayoutColAt1
 	// RouteLayoutColAt2: [flags:u8][colLen:u8][col]... — the name at offset 1.
-	RouteLayoutColAt2
+	RouteLayoutColAt2 = wire.RouteLayoutColAt2
 )
+
+// Handler is the function signature for a registered op. It stays in ops
+// (rather than moving to the leaf with OpKind/KeyExtractor/RouteLayout) because
+// TxContext wraps *cache.Cache — a server-only engine dependency the leaf must
+// not import.
+type Handler func(tx *TxContext, args []byte) ([]byte, error)
 
 // ErrDuplicateOp is returned when registering a name that already exists.
 var ErrDuplicateOp = errors.New("ops: op name already registered")
@@ -84,7 +59,7 @@ type entry struct {
 	fn   Handler
 	ke   KeyExtractor // nil = shardless
 	// layout is the allocation-free routing twin of ke, set ONLY for built-in
-	// routable ops (registerRoutableInto, called from this package). RouteKeyInto
+	// routable ops (registered from builtin.go via the shared wire table). RouteKeyInto
 	// on this layout extracts the exact same key as ke — same offsets, same
 	// canonicalization — and RouteLayoutNone simply means "route through ke", so a
 	// dynamically registered (WASM) op keeps the allocating path.
@@ -177,22 +152,6 @@ func (r *Registry) CrossShard(name string) bool {
 	return r.m[name].crossShard
 }
 
-// registerRoutableInto is RegisterRoutable plus the op's RouteLayout, which unlocks
-// the allocation-free routing path. It is package-private on purpose: the layout
-// and ke MUST agree on every args shape (they are two spellings of one wire
-// layout), which is only verifiable for the built-in ops whose layouts live in this
-// package. Everything registered from outside — WASM ops included — goes through
-// RegisterRoutable and routes via ke.
-func (r *Registry) registerRoutableInto(name string, kind OpKind, fn Handler, ke KeyExtractor, layout RouteLayout) error {
-	if ke == nil {
-		return errors.New("ops: registerRoutableInto requires non-nil KeyExtractor")
-	}
-	if layout == RouteLayoutNone {
-		return errors.New("ops: registerRoutableInto requires a RouteLayout; use RegisterRoutable when there is none")
-	}
-	return r.registerEntry(name, kind, fn, ke, layout, false)
-}
-
 func (r *Registry) registerEntry(name string, kind OpKind, fn Handler, ke KeyExtractor, layout RouteLayout, crossShard bool) error {
 	if err := validateEntry(name, kind, fn); err != nil {
 		return err
@@ -267,4 +226,48 @@ func (r *Registry) LookupEntry(name string) (fn Handler, kind OpKind, ke KeyExtr
 		return nil, 0, nil, false, false
 	}
 	return e.fn, e.kind, e.ke, e.crossShard, true
+}
+
+// ExportRouting copies every registered op's ROUTING metadata (kind,
+// KeyExtractor, RouteLayout, cross-shard) into dst, a client-safe routing-only
+// registry — no handler crosses over, since a Handler binds *TxContext (which
+// wraps *cache.Cache) and the leaf must not import cache.
+//
+// This is how a caller holding a full server-side Registry (e.g. one built by
+// RegisterBuiltins plus any custom or WASM ops) adapts it into the
+// wire.Registry a networked client needs for shard-aware routing: see
+// rostam.NewClient, which calls this to translate ClientConfig.Ops into the
+// low-level client.Config.Ops.
+func (r *Registry) ExportRouting(dst *wire.Registry) error {
+	r.mu.RLock()
+	entries := make(map[string]entry, len(r.m))
+	for name, e := range r.m {
+		entries[name] = e
+	}
+	r.mu.RUnlock()
+	for name, e := range entries {
+		var err error
+		switch {
+		case e.layout != RouteLayoutNone:
+			// The allocation-free layout path has no cross-shard variant on the leaf
+			// (no builtin is both layout-routed and cross-shard). Fail loud rather
+			// than silently drop the flag if that ever changes.
+			if e.crossShard {
+				return fmt.Errorf("ops: op %q is both layout-routed and cross-shard; wire.Registry has no cross-shard layout path", name)
+			}
+			err = dst.RegisterRoutableInto(name, e.kind, e.ke, e.layout)
+		case e.ke != nil:
+			if e.crossShard {
+				err = dst.RegisterRoutableCrossShard(name, e.kind, e.ke)
+			} else {
+				err = dst.RegisterRoutable(name, e.kind, e.ke)
+			}
+		default:
+			err = dst.Register(name, e.kind)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
