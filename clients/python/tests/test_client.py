@@ -56,12 +56,17 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         self._record()
-        if self.path == "/v1/health":
+        parsed = urlsplit(self.path)
+        if parsed.path == "/v1/health":
             return self._send(200, {"status": "ok"})
-        if "/points/" in self.path:
-            if self.path.endswith("/missing"):
+        if "/points/" in parsed.path:
+            # Match on the parsed path, not the raw self.path: a real GET
+            # (Rostam.get()) always appends `?with_vector=...&with_payload=...`,
+            # so `self.path.endswith("/missing")` would never fire for an
+            # actual missing-point request — only for a query-string-free path.
+            if parsed.path.endswith("/missing"):
                 return self._send(404, {"error": "not found"})
-            qs = parse_qs(urlsplit(self.path).query)
+            qs = parse_qs(parsed.query)
             with_vector = qs.get("with_vector", ["true"])[0] == "true"
             body = {"id": 1, "payload": {}}
             if with_vector:
@@ -141,13 +146,24 @@ class ClientTest(unittest.TestCase):
         p = self.c.get("docs", 1, with_vector=False)
         self.assertIsNone(p.vector)
 
+    def test_get_missing_point_returns_none(self):
+        # Rostam.get() always appends a query string (?with_vector=...&
+        # with_payload=...), so the fake server's "/missing" route match must
+        # be done on the parsed path, not the raw request line — otherwise a
+        # real 404 never round-trips into a None here.
+        self.assertIsNone(self.c.get("docs", "missing"))
+
+    def test_exists_missing_point_is_false(self):
+        self.assertFalse(self.c.exists("docs", "missing"))
+
     def test_health(self):
-        # health() is HTTP-only; the facade wires + guards it in a later task
-        # (Task 6). Exercise it on the backend directly for now.
-        self.assertTrue(self.c._t.health())
+        # health() is HTTP-only; the facade guards it (raises TransportError
+        # on TCP) and forwards it here. Exercise it through the public facade
+        # so a broken guard/forward would fail this test too.
+        self.assertTrue(self.c.health())
 
     def test_auth_header_sent(self):
-        self.c._t.health()
+        self.c.health()
         self.assertEqual(REQUESTS[-1]["auth"], "Bearer secret")
 
     def test_create_collection_body(self):
@@ -197,9 +213,9 @@ class ClientTest(unittest.TestCase):
         self.assertEqual(REQUESTS[-1]["body"]["sparse"], {"indices": [3], "values": [0.7]})
 
     def test_search_text(self):
-        # search_text() is HTTP-only and not part of the facade's flat vector
-        # surface (no TCP equivalent) — exercised on the backend directly.
-        docs = self.c._t.search_text("docs", "quick fox", k=5)
+        # search_text() is HTTP-only (no TCP equivalent); the facade guards
+        # and forwards it. Exercise it through the public facade.
+        docs = self.c.search_text("docs", "quick fox", k=5)
         self.assertEqual(docs[0].id, 4)
         self.assertEqual(docs[0].content, "the quick brown fox")
         self.assertEqual(docs[0].metadata, {"tag": "y"})
@@ -217,10 +233,10 @@ class ClientTest(unittest.TestCase):
 
     def test_search_text_global_idf(self):
         # Default omits the flag (byte-identical to the pre-global request body).
-        self.c._t.search_text("docs", "quick fox", k=5)
+        self.c.search_text("docs", "quick fox", k=5)
         self.assertNotIn("global_idf", REQUESTS[-1]["body"])
         # global_idf=True opts into the two-phase global-DF (dfs) path.
-        self.c._t.search_text("docs", "quick fox", k=5, global_idf=True)
+        self.c.search_text("docs", "quick fox", k=5, global_idf=True)
         self.assertIs(REQUESTS[-1]["body"]["global_idf"], True)
 
     def test_hybrid_text_global_idf(self):
@@ -310,9 +326,8 @@ class ClientTest(unittest.TestCase):
         self.assertFalse(self.c.delete("docs", "missing"))
 
     def test_delete_by_filter(self):
-        # delete_by_filter() is HTTP-only; the facade wires + guards it in a
-        # later task (Task 6).
-        n = self.c._t.delete_by_filter("docs", f.eq("doc_id", 2))
+        # delete_by_filter() is HTTP-only; the facade guards and forwards it.
+        n = self.c.delete_by_filter("docs", f.eq("doc_id", 2))
         self.assertEqual(n, 2)
 
     def test_error_status(self):

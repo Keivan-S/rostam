@@ -40,7 +40,7 @@ protocol over a socket.
     The same client speaks the vector database over the same connection — the
     flat API directly on `r` (`r.create_collection / upsert / search / get /
     delete`) — see [the vector docs](../vector/collections-and-indexes.md).
-    `r.kv` raises `TransportError` on an HTTP-connected client (`Rostam("http://...")`);
+    `r.kv.<operation>` raises `TransportError` on an HTTP-connected client (`Rostam("http://...")`);
     KV has no REST surface.
 
 Beyond get/put/del, two built-in atomic ops run server-side — no

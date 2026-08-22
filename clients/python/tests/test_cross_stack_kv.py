@@ -8,9 +8,7 @@ in any of them produces a wrong value or a spurious error, not a clean failure.
 So this launches the real server with `-tcp` and drives every op against it via
 ``Rostam("tcp://...").kv.*``.
 
-Uses ``from rostam.rostam import Rostam`` (not ``from rostam import Rostam``,
-which still resolves to the pre-unification ``kv.Rostam`` until the old classes
-are removed).
+Uses the public package API (``from rostam import Rostam, RostamError``).
 
 Skipped when no server binary is found (same rule as the other cross-stack
 modules): $ROSTAM_SERVER_BIN, or a `rostam-server*` built at the repo root.
@@ -25,8 +23,7 @@ import time
 import unittest
 
 from _serverbin import find_server_bin
-from rostam._types import RostamError
-from rostam.rostam import Rostam
+from rostam import Rostam, RostamError
 
 
 def _free_port():

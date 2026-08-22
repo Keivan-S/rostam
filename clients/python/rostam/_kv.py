@@ -54,7 +54,7 @@ class _KV:
 
     def get(self, key: Key) -> Optional[bytes]:
         """Return the value bytes, or ``None`` if the key is absent."""
-        return self._t._call("get", _enc_key(_as_bytes(key)))
+        return self._t._call("get", _enc_key(_as_bytes(key)), idempotent=True)
 
     def put(self, key: Key, value: Key, *, ttl_ms: int = 0) -> None:
         """Store ``value`` under ``key``. ``ttl_ms`` > 0 sets an expiry."""
@@ -84,7 +84,7 @@ class _KV:
 
     def ping(self) -> bool:
         """Round-trip a heartbeat; True if the server answered."""
-        self._t._call("__ping__", b"")
+        self._t._call("__ping__", b"", idempotent=True)
         return True
 
 

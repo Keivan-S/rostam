@@ -7,12 +7,10 @@ JSON-carrying parts (metadata, filter, content) that the golden test leaves to a
 live server on purpose, and confirms create_collection actually builds a usable
 collection for HNSW, Vamana and IVF.
 
-Uses ``from rostam.rostam import Rostam`` (not ``from rostam import Rostam``,
-which still resolves to the pre-unification ``kv.Rostam`` until the old
-classes are removed) and calls the flat API (``r.search(...)``, not
-``r.vector.search(...)``). Return types are the unified ``rostam._types``
-objects (``SearchResult``/``Document``/``Group``/``Point``/``ScrollPage``),
-accessed by attribute rather than by dict key.
+Uses the public package API (``from rostam import Rostam, ...``) and calls the
+flat API (``r.search(...)``, not ``r.vector.search(...)``). Return types are
+the unified result objects (``SearchResult``/``Document``/``Group``/``Point``/
+``ScrollPage``), accessed by attribute rather than by dict key.
 
 Skipped when no server binary is found (same rule as the other cross-stack
 modules): $ROSTAM_SERVER_BIN, or a `rostam-server*` built at the repo root.
@@ -27,9 +25,7 @@ import time
 import unittest
 
 from _serverbin import find_server_bin
-from rostam import filters as f
-from rostam._types import RostamError, TransportError
-from rostam.rostam import Rostam
+from rostam import Rostam, RostamError, TransportError, filters as f
 
 _BIN, _WHY = find_server_bin()
 

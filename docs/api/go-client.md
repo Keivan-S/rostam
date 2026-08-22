@@ -12,7 +12,7 @@ a running server or cluster (`rostam-server -tcp ...`):
 
 ## Typed Collection client
 
-`client.NewRouted` builds a `*client.Client` with Rostam's builtin routing
+`client.NewRouted` builds a `*client.Client` with Rostam's built-in routing
 registry wired in, so each request is dispatched to the shard that owns its
 key instead of round-robin:
 

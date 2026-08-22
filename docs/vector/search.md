@@ -13,7 +13,7 @@ designing around one:
 | kNN + content | `SearchDocs` | `points/search/docs` | `SearchDocs` | `vector_search_docs` | `search_docs()` |
 | [Grouping](#grouping-top-k-per-group) | `SearchGroups` | `points/search/groups` | `SearchGroups` | `vector_search_groups` | `search_groups()` |
 | [Scroll](#scroll-filtered-listing-with-pagination) | `ScrollDocs` | `points/scroll` | `Scroll` | `vector_scroll` | `scroll()` |
-| [Recommend](#recommendation-positivenegative-examples) | `Recommend` | via Query API | via `VectorQuery` | via `vector_query` | — |
+| [Recommend](#recommendation-positivenegative-examples) | `Recommend` | via Query API | via `VectorQuery` | via `vector_query` | `recommend()` |
 | [Discover](#discovery-context-pairs) | `Discover` | via Query API | via `VectorQuery` | via `vector_query` | — |
 | [MMR](#mmr-diversified-retrieval) | `SearchMMR` | — | — | — | client-side † |
 

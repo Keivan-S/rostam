@@ -186,9 +186,10 @@ raises `rostam.TransportError` (a `RostamError` subclass) naming the fix,
 rather than failing silently or with `AttributeError`:
 
 - **HTTP-only**: `health`, `delete_by_filter`, `bulk_stage`, `bulk_build`,
-  `batch_upsert`, `search_text`, `discover`, `mv_create_collection`,
-  `mv_drop_collection`, `mv_add`, `mv_search`, `mv_delete`, and the general
-  composable `query`.
+  `batch_upsert` (not to be confused with the shared `upsert_batch` above —
+  see [Bulk loading](#bulk-loading-http-binary-wire) for how they differ),
+  `search_text`, `discover`, `mv_create_collection`, `mv_drop_collection`,
+  `mv_add`, `mv_search`, `mv_delete`, and the general composable `query`.
 - **TCP-only**: `r.kv.*` (see above).
 
 ```python
@@ -221,6 +222,13 @@ c.batch_upsert("docs", ids, vectors, metadatas=metas, upsert=True)  # -> count
 Prefer `bulk_stage` + `bulk_build` for initial loads; `batch_upsert` is for
 incremental writes, or for points that need content, sparse vectors, TTLs, or
 CAS — none of which the staging wire carries.
+
+`batch_upsert` (this section, HTTP-only, parallel `ids`/`vectors`/`metadatas`
+arrays over the binary bulk wire) is a different method from the shared
+`upsert_batch` (works on both transports, one dict per point — see
+[One client, flat vector API, either transport](#one-client-flat-vector-api-either-transport)).
+The names are easy to conflate; pick the one whose call shape and transport
+match what you need.
 
 ### Full-text and multi-vector (HTTP-only)
 

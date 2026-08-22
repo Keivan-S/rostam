@@ -314,6 +314,7 @@ from rostam import Rostam, filters as f
 
 c = Rostam("http://localhost:8080")   # REST, port 8080
 c.create_collection("docs", dim=768, full_text=True)
+vec = [0.0] * 768  # replace with a real embedding
 c.upsert("docs", 1, vec, content="hello", metadata={"tenant": "acme"})
 
 # Dense kNN, hybrid dense+sparse, or BM25 full text — one call each.
@@ -332,6 +333,7 @@ has no REST surface:
 r = Rostam("tcp://localhost:7000")    # or Rostam("localhost:7000") — bare host:port defaults to TCP
 
 r.create_collection("docs", dim=768, full_text=True)
+vec = [0.0] * 768  # replace with a real embedding
 r.upsert("docs", 1, vec, content="hello", metadata={"tenant": "acme"})
 hits = r.hybrid_text("docs", dense=vec, text="hello", k=5)
 

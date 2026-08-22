@@ -7,19 +7,43 @@ from ._kv import _KV, _KVUnavailable
 from ._types import TransportError
 
 
+def _validate_port(port: int, target: str) -> None:
+    """Every explicit port must be a real TCP port: 1..65535. ``urlsplit``
+    already rejects out-of-range/unparseable URL ports with ValueError (see
+    below), but it lets 0 through and a bare ``host:port`` target never goes
+    through urlsplit at all — so this is the one place both paths converge."""
+    if not (1 <= port <= 65535):
+        raise TransportError(f"invalid port {port} in target {target!r}; must be between 1 and 65535")
+
+
 def _parse_target(target: str) -> Tuple[str, str, int, str]:
     """Return (kind, host, port, base_url). kind is 'http' or 'tcp'.
     http/https scheme -> HTTP; tcp:// or no scheme -> TCP. A bare host with no
     port is an error (the HTTP vs TCP default ports differ, so guessing is unsafe)."""
     if "://" in target:
-        parts = urlsplit(target)
+        try:
+            parts = urlsplit(target)
+            port = parts.port
+        except ValueError as e:
+            # urlsplit(...).port raises ValueError for a malformed or
+            # out-of-range (>65535) port instead of returning None — normalize
+            # it to this client's error contract rather than let it leak out.
+            raise TransportError(f"invalid target {target!r}: {e}") from e
         scheme = parts.scheme.lower()
         if scheme in ("http", "https"):
-            return "http", parts.hostname or "", parts.port or (443 if scheme == "https" else 80), target
+            if port is None:
+                port = 443 if scheme == "https" else 80
+            else:
+                # `port or default` would silently turn an explicit :0 into
+                # the scheme default; check for None instead, and validate
+                # whatever was explicitly given.
+                _validate_port(port, target)
+            return "http", parts.hostname or "", port, target
         if scheme == "tcp":
-            host, port = parts.hostname or "", parts.port
+            host = parts.hostname or ""
             if not port:
                 raise TransportError("tcp:// target requires an explicit port, e.g. tcp://host:7000")
+            _validate_port(port, target)
             return "tcp", host, port, ""
         raise TransportError(f"unknown target scheme {scheme!r}; use http://, https://, or tcp://")
     # bare host:port -> TCP (the native protocol is the default path)
@@ -30,6 +54,7 @@ def _parse_target(target: str) -> Tuple[str, str, int, str]:
         port = int(port_s)
     except ValueError:
         raise TransportError(f"invalid port in target {target!r}")
+    _validate_port(port, target)
     return "tcp", host, port, ""
 
 

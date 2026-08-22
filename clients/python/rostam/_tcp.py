@@ -28,7 +28,7 @@ from __future__ import annotations
 import socket
 import struct
 import threading
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from . import _vecwire
 from ._types import (
@@ -78,16 +78,19 @@ class _SocketPool:
         s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         return s
 
-    def acquire(self) -> socket.socket:
+    def acquire(self) -> Tuple[socket.socket, bool]:
+        """Return (socket, reused). ``reused`` is True when the socket came
+        from the free list rather than a fresh connect() — only a reused
+        socket can be silently dead from a peer's idle-timeout close, so only
+        that case is a candidate for the stale-connection retry in `_call`."""
         with self._lock:
             if self._closed:
                 raise RostamError("client is closed")
             s = self._free.pop() if self._free else None
         if s is None:
-            s = self._connect()
-        else:
-            s.settimeout(self._timeout)
-        return s
+            return self._connect(), False
+        s.settimeout(self._timeout)
+        return s, True
 
     def release(self, s: socket.socket) -> None:
         with self._lock:
@@ -117,13 +120,35 @@ def _silent_close(s: socket.socket) -> None:
         pass
 
 
-def _recv_exactly(s: socket.socket, n: int) -> bytes:
-    """Read exactly n bytes or raise — a short read means the peer went away."""
+class _StaleConnection(Exception):
+    """Internal signal: a pooled socket failed before any response byte
+    arrived. Never raised for a freshly-connected socket, and never once a
+    response has started arriving — see `_call`."""
+
+
+def _recv_exactly(s: socket.socket, n: int, *, stale_ok: bool = False) -> bytes:
+    """Read exactly n bytes or raise — a short read means the peer went away.
+
+    When ``stale_ok`` is set and the peer closes before delivering a single
+    byte back (``got == 0`` — whether via a graceful empty read or the OS
+    surfacing it as ``ConnectionResetError``/``ConnectionError``), raises
+    ``_StaleConnection`` instead of ``RostamError``: that pattern is what a
+    pooled connection that died while idle looks like from here, and `_call`
+    may retry it. Any other short read or reset (some bytes already arrived)
+    means the peer vanished mid-response, which is a real failure and always
+    raises ``RostamError``/the original exception."""
     chunks = []
     got = 0
     while got < n:
-        b = s.recv(n - got)
+        try:
+            b = s.recv(n - got)
+        except (BrokenPipeError, ConnectionResetError, ConnectionError) as e:
+            if stale_ok and got == 0:
+                raise _StaleConnection(str(e)) from e
+            raise
         if not b:
+            if stale_ok and got == 0:
+                raise _StaleConnection("connection closed before any response arrived")
             raise RostamError("connection closed by server mid-response")
         chunks.append(b)
         got += len(b)
@@ -181,56 +206,97 @@ class TcpTransport:
         tok = self._token.encode("utf-8")
         return bytes([_PROTOCOL_V2, len(tok)]) + tok + v1
 
-    def _call(self, op: str, args: bytes) -> Optional[bytes]:
+    def _exchange(self, s: socket.socket, frame: bytes, *, stale_ok: bool) -> Tuple[int, bytes]:
+        """Send one frame and parse its response into (status, payload).
+
+        Send/read AND full parse happen here so a socket is only handed back
+        to `_call` after a well-formed response — a truncated or malformed
+        frame is always the caller's problem to discard, never pooled.
+
+        When ``stale_ok``, a failure before any response byte arrives (send
+        itself breaks, or the peer closes on the very first read) raises
+        `_StaleConnection` instead of the usual error, so `_call` can retry
+        once on a fresh connection. Any failure once bytes have started
+        arriving — even with ``stale_ok`` — raises normally: the server has
+        necessarily seen (and may have executed) the request by then, so a
+        retry is no longer just re-probing a dead idle socket.
+        """
+        try:
+            s.sendall(frame)
+        except (BrokenPipeError, ConnectionResetError, ConnectionError) as e:
+            if stale_ok:
+                raise _StaleConnection(str(e)) from e
+            raise
+        body_len = struct.unpack(">I", _recv_exactly(s, 4, stale_ok=stale_ok))[0]
+        if body_len < 5 or body_len > _MAX_FRAME:
+            raise RostamError(f"invalid response frame length {body_len}")
+        resp = _recv_exactly(s, body_len)
+        status = resp[0]
+        payload_len = struct.unpack(">I", resp[1:5])[0]
+        if 5 + payload_len != body_len:
+            raise RostamError("response payload length does not match frame")
+        payload = resp[5:5 + payload_len]
+        return status, payload
+
+    def _call(self, op: str, args: bytes, *, idempotent: bool = False) -> Optional[bytes]:
         """Send one op, return its payload. Raises RostamError on a non-OK status.
 
         A miss (StatusNotFound) is NOT an error here — it returns ``None`` — so
         read ops can distinguish "absent" from "empty value" without an
         exception. Every other non-OK status raises.
+
+        ``idempotent=True`` (read ops only — never vector_upsert/insert/
+        delete or kv put/del/incr/expire) allows ONE retry on a fresh
+        connection, but only when the failure happened on a *reused* pooled
+        socket AND before any response byte arrived. A server or middlebox
+        can close an idle pooled connection at any time; the next op to land
+        on it would otherwise fail with a confusing transport error even
+        though nothing about the request itself was wrong. A freshly
+        connected socket, or a failure after the response has started
+        arriving, is never retried.
         """
         body = self._encode_body(op, args)
         if 4 + len(body) > _MAX_FRAME:
             raise RostamError("request frame exceeds the server's frame limit")
         frame = struct.pack(">I", len(body)) + body
 
-        # Acquire may connect, and a failed connect raises OSError — convert it
-        # to the client's RostamError contract like every other transport failure.
-        try:
-            s = self._pool.acquire()
-        except OSError as e:
-            raise RostamError(f"connect failed: {e}") from e
+        retry_ok = idempotent
+        while True:
+            # Acquire may connect, and a failed connect raises OSError —
+            # convert it to the client's RostamError contract like every
+            # other transport failure.
+            try:
+                s, reused = self._pool.acquire()
+            except OSError as e:
+                raise RostamError(f"connect failed: {e}") from e
 
-        # Send, read, AND fully parse inside the try: a socket is returned to
-        # the pool only after a well-formed response, so a truncated or
-        # malformed frame discards the connection instead of poisoning the
-        # next caller.
-        try:
-            s.sendall(frame)
-            body_len = struct.unpack(">I", _recv_exactly(s, 4))[0]
-            if body_len < 5 or body_len > _MAX_FRAME:
-                raise RostamError(f"invalid response frame length {body_len}")
-            resp = _recv_exactly(s, body_len)
-            status = resp[0]
-            payload_len = struct.unpack(">I", resp[1:5])[0]
-            if 5 + payload_len != body_len:
-                raise RostamError("response payload length does not match frame")
-            payload = resp[5:5 + payload_len]
-        except (OSError, RostamError, struct.error) as e:
-            self._pool.discard(s)
-            if isinstance(e, RostamError):
-                raise
-            raise RostamError(f"transport error: {e}") from e
-        # Well-formed response: the connection is healthy even if the op failed
-        # at the application level (StatusError etc.), so keep it pooled.
-        self._pool.release(s)
+            try:
+                status, payload = self._exchange(s, frame, stale_ok=reused and retry_ok)
+            except _StaleConnection:
+                self._pool.discard(s)
+                if reused and retry_ok:
+                    retry_ok = False  # exactly one retry, on a fresh connection
+                    continue
+                raise RostamError("connection closed by server mid-response")
+            except (OSError, RostamError, struct.error) as e:
+                self._pool.discard(s)
+                if isinstance(e, RostamError):
+                    raise
+                raise RostamError(f"transport error: {e}") from e
 
-        if status == _STATUS_OK:
-            return payload
-        if status == _STATUS_NOT_FOUND:
-            return None
-        # _types.RostamError (unlike client.py's HTTP-status-carrying variant)
-        # takes no `status` kwarg — fold the status into the message instead.
-        raise RostamError(_status_message(status, payload))
+            # Well-formed response: the connection is healthy even if the op
+            # failed at the application level (StatusError etc.), so keep it
+            # pooled.
+            self._pool.release(s)
+
+            if status == _STATUS_OK:
+                return payload
+            if status == _STATUS_NOT_FOUND:
+                return None
+            # _types.RostamError (unlike client.py's HTTP-status-carrying
+            # variant) takes no `status` kwarg — fold the status into the
+            # message instead.
+            raise RostamError(_status_message(status, payload))
 
     def close(self) -> None:
         self._pool.close()
@@ -342,14 +408,16 @@ class TcpTransport:
         return bool(payload and payload[0])
 
     def exists(self, collection: str, id: int) -> bool:
-        payload = self._call("vector_exists", _vecwire.encode_exists_args(collection, int(id)))
+        payload = self._call("vector_exists", _vecwire.encode_exists_args(collection, int(id)),
+                              idempotent=True)
         return _vecwire.decode_exists_result(payload or b"\x00")
 
     def get(self, collection: str, id: int, *, with_vector: bool = True,
             with_payload: bool = True) -> Optional[Point]:
         """Fetch a point by id, or None if absent."""
         flags = (0x01 if with_vector else 0) | (0x02 if with_payload else 0)
-        payload = self._call("vector_get", _vecwire.encode_get_args(collection, int(id), flags))
+        payload = self._call("vector_get", _vecwire.encode_get_args(collection, int(id), flags),
+                             idempotent=True)
         if payload is None:
             return None
         got = _vecwire.decode_get_result(payload)
@@ -370,7 +438,8 @@ class TcpTransport:
         get_batch contract) — never raises on a partial miss."""
         flags = (0x01 if with_vector else 0) | (0x02 if with_payload else 0)
         payload = self._call("vector_get_batch",
-                              _vecwire.encode_vector_get_batch_args(collection, list(ids), flags))
+                              _vecwire.encode_vector_get_batch_args(collection, list(ids), flags),
+                              idempotent=True)
         rows = _vecwire.decode_get_batch_result(payload or b"\x00\x00\x00\x00")
         points: List[Point] = []
         for row in rows:
@@ -389,7 +458,7 @@ class TcpTransport:
         an empty ``next_cursor`` means the scroll is exhausted."""
         after_id, _has_after = _vecwire.decode_scroll_cursor(cursor)
         args = _vecwire.encode_scroll_args_order_bounded(collection, limit, filter=filter, after_id=after_id)
-        payload = self._call("vector_scroll", args)
+        payload = self._call("vector_scroll", args, idempotent=True)
         docs, _degraded, _missing, next_cursor = _vecwire.decode_scroll_result_raw(payload or b"\x00\x00\x00\x00")
         if not next_cursor and limit > 0 and len(docs) == limit:
             # This op's leaf handler returns a plain doc block with no wire
@@ -405,7 +474,8 @@ class TcpTransport:
         """k-nearest-neighbour search. Returns a SearchResults list of
         SearchResult (score defaults to 0.0 — plain kNN has no fusion score);
         .degraded/.missing report whether the read was partial."""
-        payload = self._call("vector_search", _vecwire.encode_search_args(collection, k, query, filter))
+        payload = self._call("vector_search", _vecwire.encode_search_args(collection, k, query, filter),
+                             idempotent=True)
         results, degraded, missing = _vecwire.decode_search_results_degraded(payload or b"\x00\x00\x00\x00")
         items = [SearchResult(id=r["id"], distance=r["distance"], score=0.0) for r in results]
         return SearchResults(items, degraded=degraded, missing=missing)
@@ -415,7 +485,7 @@ class TcpTransport:
         """k-nearest-neighbour search returning Document (content + metadata)
         instead of bare id/distance — the RAG-shaped counterpart of search()."""
         args = _vecwire.encode_search_docs_args_opts(collection, k, query, filter)
-        payload = self._call("vector_search_docs", args)
+        payload = self._call("vector_search_docs", args, idempotent=True)
         docs, degraded, missing = _vecwire.decode_docs_degraded_raw(payload or b"\x00\x00\x00\x00")
         return SearchResults([_to_document(d) for d in docs], degraded=degraded, missing=missing)
 
@@ -426,7 +496,7 @@ class TcpTransport:
         GroupResults list of Group(key, hits: List[Document])."""
         opts = {"group_by": group_by, "group_size": group_size, "fetch_k": fetch_k, "filter": filter}
         args = _vecwire.encode_group_search_args_opts(collection, k, query, opts)
-        payload = self._call("vector_search_groups", args)
+        payload = self._call("vector_search_groups", args, idempotent=True)
         groups, degraded, missing = _vecwire.decode_groups_degraded_raw(payload or b"\x00\x00\x00\x00")
         items = [Group(key=g["key"], hits=[_to_document(h) for h in g["hits"]]) for g in groups]
         return GroupResults(items, degraded=degraded, missing=missing)
@@ -442,7 +512,7 @@ class TcpTransport:
         opts = {"filter": filter, "method": method, "alpha": alpha, "rrf_k": rrf_k,
                 "dense_k": dense_k, "sparse_k": sparse_k}
         args = _vecwire.encode_hybrid_search_args_opts(collection, dense, k, sparse, opts)
-        payload = self._call("vector_hybrid_search", args)
+        payload = self._call("vector_hybrid_search", args, idempotent=True)
         results, degraded, missing = _vecwire.decode_hybrid_results_degraded(payload or b"\x00\x00\x00\x00")
         items = [SearchResult(id=r["id"], distance=r["distance"], score=r["score"]) for r in results]
         return SearchResults(items, degraded=degraded, missing=missing)
@@ -463,7 +533,7 @@ class TcpTransport:
                 "dense_k": dense_k, "sparse_k": sparse_k}
         args = _vecwire.encode_hybrid_text_args_global(collection, dense, text, k, opts,
                                                         global_idf=global_idf)
-        payload = self._call("vector_hybrid_text", args)
+        payload = self._call("vector_hybrid_text", args, idempotent=True)
         results, degraded, missing = _vecwire.decode_hybrid_results_degraded(payload or b"\x00\x00\x00\x00")
         items = [SearchResult(id=r["id"], distance=r["distance"], score=r["score"]) for r in results]
         return SearchResults(items, degraded=degraded, missing=missing)
@@ -476,10 +546,16 @@ class TcpTransport:
         dissimilar to the `negative` ones. `strategy`: "average_vector"
         (default, average the example vectors then kNN) or "best_score"
         (score by best per-example similarity)."""
-        strat = _vecwire.RECOMMEND_STRATEGY[strategy]
+        try:
+            strat = _vecwire.RECOMMEND_STRATEGY[strategy]
+        except KeyError:
+            raise ValueError(
+                f"unknown recommend strategy {strategy!r}; expected one of "
+                f"{sorted(_vecwire.RECOMMEND_STRATEGY)}"
+            ) from None
         args = _vecwire.encode_recommend_query(collection, positive=positive, negative=negative,
                                                 k=k, filter=filter, strategy=strat)
-        payload = self._call("vector_query", args)
+        payload = self._call("vector_query", args, idempotent=True)
         results, degraded, missing = _vecwire.decode_query_result_degraded(payload or b"\x01\x00\x00\x00\x00")
         items = [SearchResult(id=r["id"], distance=r["distance"], score=r["score"]) for r in results]
         return SearchResults(items, degraded=degraded, missing=missing)
