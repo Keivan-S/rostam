@@ -7,6 +7,7 @@ extra.
 """
 
 from . import filters
+from ._types import TransportError
 from .client import Document, Group, MultiResult, Point, RostamClient, RostamError, ScrollPage, SearchResult
 from .embeddings import Embedder, FunctionEmbedder, OpenAIEmbedder, TextStore
 from .kv import Rostam, RostamKV
@@ -16,6 +17,7 @@ __all__ = [
     "Rostam",
     "RostamKV",
     "RostamError",
+    "TransportError",
     "SearchResult",
     "Document",
     "Point",
