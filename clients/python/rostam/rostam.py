@@ -3,6 +3,7 @@ from typing import Optional, Tuple
 from urllib.parse import urlsplit
 
 from . import _http, _tcp
+from ._kv import _KV, _KVUnavailable
 from ._types import TransportError
 
 
@@ -43,9 +44,13 @@ class Rostam:
         kind, host, port, base_url = _parse_target(target)
         self._kind = kind
         token = auth_token if auth_token is not None else api_key
-        # Backends wired in Tasks 3 & 5; kv wired in Task 4.
         self._t = None  # set by _connect
         self._connect(kind, host, port, base_url, token, timeout)
+        #: Key-value operations (r.kv.get/put/delete/incr/expire/ping). Only
+        #: reachable over the native TCP protocol; on the HTTP backend this is
+        #: a _KVUnavailable sentinel that raises TransportError on any attribute
+        #: access, since the KV store has no REST surface.
+        self.kv = _KV(self._t) if kind == "tcp" else _KVUnavailable()
 
     def _connect(self, kind, host, port, base_url, token, timeout):
         if kind == "tcp":

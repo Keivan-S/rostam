@@ -148,10 +148,6 @@ class CrossStackVectorNativeTest(unittest.TestCase):
             self.assertTrue(r.exists(col, 1), col)
 
     def test_vector_ops_share_one_pooled_connection(self):
-        # r.kv (KV over the same pooled connection) isn't wired onto the
-        # facade until a later task; until then this exercises the same
-        # pooled-connection-reuse invariant the pre-unification client relied
-        # on, using only vector ops of different shapes back to back.
         r = self.r
         r.create_collection("mix", dim=4, metric="cosine")
         r.upsert("mix", 1, [0.1, 0.2, 0.3, 0.4], content="one")
@@ -159,6 +155,22 @@ class CrossStackVectorNativeTest(unittest.TestCase):
         got = r.get("mix", 1)
         self.assertEqual(got.content, "one")
         self.assertTrue(r.exists("mix", 1))
+
+    def test_kv_and_vector_ops_share_one_pooled_connection(self):
+        # r.kv and the flat vector API both call the same TcpTransport's
+        # _call, so they share one connection pool and auth token — interleave
+        # KV and vector ops on one client and confirm both work, proving the
+        # pool is genuinely shared rather than each namespace opening its own.
+        r = self.r
+        r.kv.put("kv:key", b"val")
+        self.assertEqual(r.kv.get("kv:key"), b"val")
+        self.assertEqual(r.kv.incr("kv:ctr", 5), 5)
+        # a vector op right after a KV op on the same pooled connection
+        r.create_collection("mix2", dim=4, metric="cosine")
+        r.upsert("mix2", 1, [0.1, 0.2, 0.3, 0.4])
+        self.assertTrue(r.exists("mix2", 1))
+        self.assertEqual(r.kv.get("kv:key"), b"val")
+        self.assertTrue(r.kv.delete("kv:key"))
 
     # ---- Phase C: batch / scroll / RAG-shaped search / hybrid / recommend ----
 
