@@ -5,6 +5,28 @@ Notable user-visible changes. Entries that alter existing behaviour are marked
 
 ## Unreleased
 
+- **The Python client unifies on a single `Rostam` class (Breaking).**
+  `RostamClient` (HTTP) and the native-TCP `Rostam`/`RostamKV` pair used to be
+  two classes with two different vocabularies for the same server — one flat,
+  one nesting vector ops under `.vector`. Both collapse into one
+  `Rostam(target)`: the transport is chosen from the target string —
+  `http://`/`https://` for REST, `tcp://host:port` or a bare `host:port` for
+  the native binary protocol — and the vector API is flat (`r.search`,
+  `r.upsert`, `r.hybrid_text`, ...) on both transports. Key-value operations
+  move to `r.kv.*` and stay TCP-only: on an HTTP-connected client `r.kv`
+  raises `TransportError`, as does any other op with no equivalent on the
+  connected transport (the general `query()` is HTTP-only; TCP callers use
+  `recommend()` instead). `RostamClient` and `RostamKV` are removed, not
+  deprecated — importing either now raises `ImportError`.
+
+  | Before | After |
+  | --- | --- |
+  | `RostamClient("http://host:8080")` | `Rostam("http://host:8080")` |
+  | `Rostam("host", 7000)` (native) | `Rostam("tcp://host:7000")` or `Rostam("host:7000")` |
+  | `r.vector.hybrid_text(...)` | `r.hybrid_text(...)` (flat) |
+  | `r.get("k")` / `RostamKV` | `r.kv.get("k")` |
+  | `query(prefetch=...)` on the native client | HTTP-only — raises `TransportError` on TCP; TCP callers use `recommend()` |
+
 - **Local ONNX embeddings (opt-in `-tags localembed`).** Rostam can now generate
   semantic embeddings in-process from a catalog of downloadable models
   (`minilm-l6-v2`, `bge-small-en-v1.5`, `gte-small`) with no cloud API. Select
