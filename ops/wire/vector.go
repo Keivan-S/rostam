@@ -630,7 +630,14 @@ func DecodeVectorInsertArgsKeyExpiresInto(dst []float32, args []byte) (collectio
 
 // EncodeVectorSearchArgs serializes vector_search args with no filter (flags=0).
 func EncodeVectorSearchArgs(collection string, k int, query []float32) []byte {
-	return EncodeVectorSearchArgsExt(collection, k, query, vector.Filter{})
+	return AppendVectorSearchArgsExt(nil, collection, k, query, vector.Filter{})
+}
+
+// AppendVectorSearchArgs is EncodeVectorSearchArgs appending into dst (reusing
+// its capacity when large enough), for a hot-loop caller that pools the buffer.
+// The returned slice may alias dst; the caller must store it back.
+func AppendVectorSearchArgs(dst []byte, collection string, k int, query []float32) []byte {
+	return AppendVectorSearchArgsExt(dst, collection, k, query, vector.Filter{})
 }
 
 // EncodeVectorSearchArgsExt serializes vector_search args, optionally carrying a
@@ -638,6 +645,15 @@ func EncodeVectorSearchArgs(collection string, k int, query []float32) []byte {
 //
 //	[flags:u8][colLen:u8][col][k:u32][dim:u32][query][?filterLen:u32][?filterJSON]
 func EncodeVectorSearchArgsExt(collection string, k int, query []float32, filter vector.Filter) []byte {
+	return AppendVectorSearchArgsExt(nil, collection, k, query, filter)
+}
+
+// AppendVectorSearchArgsExt is EncodeVectorSearchArgsExt appending into dst,
+// reusing dst's capacity when it is large enough and allocating only when it
+// must grow. Passing dst=nil yields the exact bytes EncodeVectorSearchArgsExt
+// returned before, so the wire format is unchanged. The returned slice may
+// alias dst; a caller that pools dst must store the result back.
+func AppendVectorSearchArgsExt(dst []byte, collection string, k int, query []float32, filter vector.Filter) []byte {
 	var flags uint8
 	var filterJSON []byte
 	if !filter.IsZero() {
@@ -649,7 +665,12 @@ func EncodeVectorSearchArgsExt(collection string, k int, query []float32, filter
 	if flags&VecFlagFilter != 0 {
 		n += 4 + len(filterJSON)
 	}
-	buf := make([]byte, n)
+	var buf []byte
+	if cap(dst) >= n {
+		buf = dst[:n]
+	} else {
+		buf = make([]byte, n)
+	}
 	buf[0] = flags
 	buf[1] = byte(len(collection))
 	off := 2 + copy(buf[2:], collection)

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cespare/xxhash/v2"
@@ -202,16 +203,27 @@ func (n *networkedStore) VectorSearch(ctx context.Context, collection string, qu
 	return ops.DecodeVectorSearchResults(body)
 }
 
+// vectorSearchArgsPool recycles the request-args buffer for VectorSearchInto so
+// the hot search path allocates nothing on the client: the buffer is filled by
+// AppendVectorSearchArgs, consumed by CallFunc (doCall writes+flushes it before
+// returning), then returned. Initial cap fits a ~128-dim query without growing.
+var vectorSearchArgsPool = sync.Pool{New: func() any { b := make([]byte, 0, 576); return &b }}
+
 // VectorSearchInto sends the search over the zero-copy CallFunc path: the wire
 // response is decoded straight into dst inside the callback (no defensive copy
-// of the payload, and no result-slice allocation when dst is reused).
+// of the payload, and no result-slice allocation when dst is reused). The
+// request-args buffer is pooled, so a reused dst yields a zero-allocation
+// client round-trip.
 func (n *networkedStore) VectorSearchInto(ctx context.Context, collection string, query []float32, k int, dst []VectorResult) ([]VectorResult, error) {
+	bp := vectorSearchArgsPool.Get().(*[]byte)
+	*bp = ops.AppendVectorSearchArgs((*bp)[:0], collection, k, query)
 	var out []VectorResult
-	err := n.c.CallFunc(ctx, "vector_search", ops.EncodeVectorSearchArgs(collection, k, query), func(payload []byte) error {
+	err := n.c.CallFunc(ctx, "vector_search", *bp, func(payload []byte) error {
 		var derr error
 		out, derr = ops.DecodeVectorSearchResultsInto(payload, dst)
 		return derr
 	})
+	vectorSearchArgsPool.Put(bp)
 	if err != nil {
 		return nil, mapErr(err)
 	}

@@ -400,6 +400,8 @@ var (
 	EncodeVectorInsertArgsVersioned           = wire.EncodeVectorInsertArgsVersioned
 	EncodeVectorInsertArgsVersionedKeyExpires = wire.EncodeVectorInsertArgsVersionedKeyExpires
 	EncodeVectorSearchArgs                    = wire.EncodeVectorSearchArgs
+	AppendVectorSearchArgs                    = wire.AppendVectorSearchArgs
+	AppendVectorSearchArgsExt                 = wire.AppendVectorSearchArgsExt
 	EncodeVectorSearchArgsExt                 = wire.EncodeVectorSearchArgsExt
 	EncodeVectorSearchArgsOpts                = wire.EncodeVectorSearchArgsOpts
 	EncodeVectorSearchResults                 = wire.EncodeVectorSearchResults
