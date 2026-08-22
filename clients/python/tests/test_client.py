@@ -4,6 +4,13 @@ These run a real loopback HTTP server, so they exercise the client's request
 construction (paths, JSON bodies, bearer auth, tagged-metadata encoding) and
 response parsing (tagged-metadata/group decoding) over an actual socket — no
 third-party deps required.
+
+Uses ``from rostam.rostam import Rostam`` (not ``from rostam import Rostam``,
+which still resolves to the pre-unification ``kv.Rostam`` until the old
+classes are removed in a later task) and calls the flat vector API through the
+facade, which delegates to ``rostam._http.HttpTransport``. Errors and result
+types come from ``rostam._types`` (the unified set), not ``rostam.client``'s
+now-superseded dataclasses.
 """
 
 import json
@@ -11,8 +18,9 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from rostam import RostamClient, RostamError
 from rostam import filters as f
+from rostam._types import Point, RostamError, ScrollPage
+from rostam.rostam import Rostam
 from _wire import read_body
 from _fakestore import FakeRostam
 
@@ -109,13 +117,15 @@ class ClientTest(unittest.TestCase):
 
     def setUp(self):
         REQUESTS.clear()
-        self.c = RostamClient(self.base, api_key="secret")
+        self.c = Rostam(self.base, api_key="secret")
 
     def test_health(self):
-        self.assertTrue(self.c.health())
+        # health() is HTTP-only; the facade wires + guards it in a later task
+        # (Task 6). Exercise it on the backend directly for now.
+        self.assertTrue(self.c._t.health())
 
     def test_auth_header_sent(self):
-        self.c.health()
+        self.c._t.health()
         self.assertEqual(REQUESTS[-1]["auth"], "Bearer secret")
 
     def test_create_collection_body(self):
@@ -165,7 +175,9 @@ class ClientTest(unittest.TestCase):
         self.assertEqual(REQUESTS[-1]["body"]["sparse"], {"indices": [3], "values": [0.7]})
 
     def test_search_text(self):
-        docs = self.c.search_text("docs", "quick fox", k=5)
+        # search_text() is HTTP-only and not part of the facade's flat vector
+        # surface (no TCP equivalent) — exercised on the backend directly.
+        docs = self.c._t.search_text("docs", "quick fox", k=5)
         self.assertEqual(docs[0].id, 4)
         self.assertEqual(docs[0].content, "the quick brown fox")
         self.assertEqual(docs[0].metadata, {"tag": "y"})
@@ -183,10 +195,10 @@ class ClientTest(unittest.TestCase):
 
     def test_search_text_global_idf(self):
         # Default omits the flag (byte-identical to the pre-global request body).
-        self.c.search_text("docs", "quick fox", k=5)
+        self.c._t.search_text("docs", "quick fox", k=5)
         self.assertNotIn("global_idf", REQUESTS[-1]["body"])
         # global_idf=True opts into the two-phase global-DF (dfs) path.
-        self.c.search_text("docs", "quick fox", k=5, global_idf=True)
+        self.c._t.search_text("docs", "quick fox", k=5, global_idf=True)
         self.assertIs(REQUESTS[-1]["body"]["global_idf"], True)
 
     def test_hybrid_text_global_idf(self):
@@ -276,7 +288,9 @@ class ClientTest(unittest.TestCase):
         self.assertFalse(self.c.delete("docs", "missing"))
 
     def test_delete_by_filter(self):
-        n = self.c.delete_by_filter("docs", f.eq("doc_id", 2))
+        # delete_by_filter() is HTTP-only; the facade wires + guards it in a
+        # later task (Task 6).
+        n = self.c._t.delete_by_filter("docs", f.eq("doc_id", 2))
         self.assertEqual(n, 2)
 
     def test_error_status(self):
@@ -294,10 +308,9 @@ class ClientTest(unittest.TestCase):
 
 
 def test_get_batch_returns_vectors_content_metadata_and_omits_missing():
-    from rostam import RostamClient, Point
     srv = FakeRostam()
     try:
-        c = RostamClient(srv.url)
+        c = Rostam(srv.url)
         c.create_collection("docs", dim=2, metric="l2")
         c.upsert("docs", 1, [1.0, 0.0], content="hello", metadata={"doc_id": 7})
         c.upsert("docs", 2, [0.0, 1.0], content="world", metadata={"doc_id": 8})
@@ -315,10 +328,9 @@ def test_get_batch_returns_vectors_content_metadata_and_omits_missing():
 
 
 def test_get_batch_without_vector_skips_vectors():
-    from rostam import RostamClient
     srv = FakeRostam()
     try:
-        c = RostamClient(srv.url)
+        c = Rostam(srv.url)
         c.create_collection("docs", dim=2)
         c.upsert("docs", 1, [1.0, 2.0], content="x", metadata={"a": 1})
         pts = c.get_batch("docs", [1], with_vector=False)
@@ -329,10 +341,9 @@ def test_get_batch_without_vector_skips_vectors():
 
 
 def test_scroll_paginates_with_cursor():
-    from rostam import RostamClient, ScrollPage
     srv = FakeRostam()
     try:
-        c = RostamClient(srv.url)
+        c = Rostam(srv.url)
         c.create_collection("docs", dim=2, metric="l2")
         for i in range(1, 6):  # ids 1..5
             c.upsert("docs", i, [float(i), 0.0], content=f"c{i}", metadata={"n": i})

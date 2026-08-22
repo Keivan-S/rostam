@@ -2,7 +2,7 @@
 from typing import Optional, Tuple
 from urllib.parse import urlsplit
 
-from . import _tcp
+from . import _http, _tcp
 from ._types import TransportError
 
 
@@ -51,7 +51,10 @@ class Rostam:
         if kind == "tcp":
             self._t = _tcp.TcpTransport(host, port, token, timeout)
             return
-        raise NotImplementedError  # HTTP backend: Task 5
+        if kind == "http":
+            self._t = _http.HttpTransport(base_url, token, timeout)
+            return
+        raise TransportError(f"unknown transport kind {kind!r}")
 
     # ---- flat vector API -----------------------------------------------
     #
@@ -66,6 +69,11 @@ class Rostam:
     def create_collection(self, *args, **kwargs):
         """See TcpTransport.create_collection / HttpTransport.create_collection."""
         return self._t.create_collection(*args, **kwargs)
+
+    def drop_collection(self, *args, **kwargs):
+        """See HttpTransport.drop_collection. (Not yet implemented on
+        TcpTransport — see Task 5 report concerns.)"""
+        return self._t.drop_collection(*args, **kwargs)
 
     def upsert(self, *args, **kwargs):
         """See TcpTransport.upsert / HttpTransport.upsert."""
