@@ -1,0 +1,428 @@
+"""TCP transport backend: Rostam's native binary protocol, over the ``-tcp``
+port.
+
+``TcpTransport`` owns the socket pool, the wire framing (``_call``), and the
+``_vecwire`` encode/decode calls for every vector op. It is the migration
+target for what used to be ``kv.py``'s ``_VectorAPI`` — same op names, same
+wire layouts, same auth/framing — but every method now returns one of the
+unified ``rostam._types`` result types instead of ad-hoc dicts/tuples, so
+callers get the same shapes regardless of which transport backend answered.
+
+Construction (``TcpTransport(host, port, ...)``) does **no** network I/O: the
+underlying ``_SocketPool`` connects lazily on the first call, exactly like the
+pre-unification native client. This matters for tests that build a client
+against a target with nothing listening yet.
+
+Wire, for reference (all big-endian) — unchanged from ``kv.py``:
+
+    frame     [len u32][body]
+    body v1   [opNameLen u8][opName][argsLen u32][args]
+    body v2   [0x02][tokenLen u8][token][opNameLen u8][opName][argsLen u32][args]
+    response  [bodyLen u32][status u8][payloadLen u32][payload]
+
+v2 is used when an auth token is set, v1 otherwise — mirroring the Go client.
+"""
+
+from __future__ import annotations
+
+import socket
+import struct
+import threading
+from typing import Any, Dict, List, Optional, Sequence
+
+from . import _vecwire
+from ._types import (
+    Document,
+    Group,
+    GroupResults,
+    Point,
+    RostamError,
+    SearchResult,
+    SearchResults,
+    ScrollPage,
+)
+
+_STATUS_OK = 0
+_STATUS_NOT_FOUND = 1
+_STATUS_NOT_LEADER = 2
+_STATUS_ERROR = 3
+_STATUS_UNAUTHORIZED = 4
+
+_PROTOCOL_V2 = 0x02
+# The server rejects a frame whose length prefix exceeds this; used only to
+# fail fast with a clear message rather than send a doomed frame.
+_MAX_FRAME = 64 * 1024 * 1024
+
+
+class _SocketPool:
+    """A tiny pool of connected sockets, safe to share across threads.
+
+    Hands a live socket to a caller, takes it back when they are done. A
+    socket that errored mid-call is discarded rather than returned, so a
+    broken connection never poisons the next request. Moved verbatim from
+    ``kv.py``.
+    """
+
+    def __init__(self, host: str, port: int, timeout: float, maxsize: int):
+        self._host = host
+        self._port = port
+        self._timeout = timeout
+        self._maxsize = maxsize
+        self._free: List[socket.socket] = []
+        self._lock = threading.Lock()
+        self._closed = False
+
+    def _connect(self) -> socket.socket:
+        s = socket.create_connection((self._host, self._port), timeout=self._timeout)
+        # Nagle off: these are small, latency-sensitive request/response frames.
+        s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        return s
+
+    def acquire(self) -> socket.socket:
+        with self._lock:
+            if self._closed:
+                raise RostamError("client is closed")
+            s = self._free.pop() if self._free else None
+        if s is None:
+            s = self._connect()
+        else:
+            s.settimeout(self._timeout)
+        return s
+
+    def release(self, s: socket.socket) -> None:
+        with self._lock:
+            if self._closed or len(self._free) >= self._maxsize:
+                drop = True
+            else:
+                self._free.append(s)
+                drop = False
+        if drop:
+            _silent_close(s)
+
+    def discard(self, s: socket.socket) -> None:
+        _silent_close(s)
+
+    def close(self) -> None:
+        with self._lock:
+            self._closed = True
+            socks, self._free = self._free, []
+        for s in socks:
+            _silent_close(s)
+
+
+def _silent_close(s: socket.socket) -> None:
+    try:
+        s.close()
+    except OSError:
+        pass
+
+
+def _recv_exactly(s: socket.socket, n: int) -> bytes:
+    """Read exactly n bytes or raise — a short read means the peer went away."""
+    chunks = []
+    got = 0
+    while got < n:
+        b = s.recv(n - got)
+        if not b:
+            raise RostamError("connection closed by server mid-response")
+        chunks.append(b)
+        got += len(b)
+    return b"".join(chunks)
+
+
+def _status_message(status: int, payload: bytes) -> str:
+    detail = payload.decode("utf-8", "replace") if payload else ""
+    name = {
+        _STATUS_NOT_LEADER: "not leader",
+        _STATUS_ERROR: "server error",
+        _STATUS_UNAUTHORIZED: "unauthorized (auth token missing or invalid)",
+    }.get(status, f"status {status}")
+    return f"{name}: {detail}" if detail else name
+
+
+def _to_document(d: Dict[str, Any]) -> Document:
+    return Document(id=d["id"], distance=d["distance"], score=d["score"],
+                     content=d["content"], metadata=d["metadata"])
+
+
+class TcpTransport:
+    """Vector-database operations over Rostam's native binary TCP protocol.
+
+    Shares one connection pool and auth token across every call. The binary
+    arg layouts live in ``rostam._vecwire`` and are differential-tested
+    byte-for-byte against the Go encoders; the JSON-carrying parts (metadata,
+    filter, content) round-trip through a real server.
+    """
+
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        token: Optional[str] = None,
+        timeout: float = 30.0,
+        *,
+        pool_maxsize: int = 8,
+    ):
+        self._token = token or ""
+        if len(self._token.encode("utf-8")) > 255:
+            raise ValueError("auth_token is longer than 255 bytes")
+        # No network I/O here: _SocketPool connects lazily on first acquire().
+        self._pool = _SocketPool(host, port, timeout, pool_maxsize)
+
+    # ---- framing -----------------------------------------------------------
+
+    def _encode_body(self, op: str, args: bytes) -> bytes:
+        op_b = op.encode("ascii")
+        if len(op_b) > 0xFF:
+            raise ValueError("op name too long")
+        v1 = bytes([len(op_b)]) + op_b + struct.pack(">I", len(args)) + args
+        if not self._token:
+            return v1
+        tok = self._token.encode("utf-8")
+        return bytes([_PROTOCOL_V2, len(tok)]) + tok + v1
+
+    def _call(self, op: str, args: bytes) -> Optional[bytes]:
+        """Send one op, return its payload. Raises RostamError on a non-OK status.
+
+        A miss (StatusNotFound) is NOT an error here — it returns ``None`` — so
+        read ops can distinguish "absent" from "empty value" without an
+        exception. Every other non-OK status raises.
+        """
+        body = self._encode_body(op, args)
+        if 4 + len(body) > _MAX_FRAME:
+            raise RostamError("request frame exceeds the server's frame limit")
+        frame = struct.pack(">I", len(body)) + body
+
+        # Acquire may connect, and a failed connect raises OSError — convert it
+        # to the client's RostamError contract like every other transport failure.
+        try:
+            s = self._pool.acquire()
+        except OSError as e:
+            raise RostamError(f"connect failed: {e}") from e
+
+        # Send, read, AND fully parse inside the try: a socket is returned to
+        # the pool only after a well-formed response, so a truncated or
+        # malformed frame discards the connection instead of poisoning the
+        # next caller.
+        try:
+            s.sendall(frame)
+            body_len = struct.unpack(">I", _recv_exactly(s, 4))[0]
+            if body_len < 5 or body_len > _MAX_FRAME:
+                raise RostamError(f"invalid response frame length {body_len}")
+            resp = _recv_exactly(s, body_len)
+            status = resp[0]
+            payload_len = struct.unpack(">I", resp[1:5])[0]
+            if 5 + payload_len != body_len:
+                raise RostamError("response payload length does not match frame")
+            payload = resp[5:5 + payload_len]
+        except (OSError, RostamError, struct.error) as e:
+            self._pool.discard(s)
+            if isinstance(e, RostamError):
+                raise
+            raise RostamError(f"transport error: {e}") from e
+        # Well-formed response: the connection is healthy even if the op failed
+        # at the application level (StatusError etc.), so keep it pooled.
+        self._pool.release(s)
+
+        if status == _STATUS_OK:
+            return payload
+        if status == _STATUS_NOT_FOUND:
+            return None
+        # _types.RostamError (unlike client.py's HTTP-status-carrying variant)
+        # takes no `status` kwarg — fold the status into the message instead.
+        raise RostamError(_status_message(status, payload))
+
+    def close(self) -> None:
+        self._pool.close()
+
+    # ---- vector ops ----------------------------------------------------
+    #
+    # search-family reads (search, search_docs, search_groups, hybrid_search,
+    # hybrid_text, recommend, query) surface each decoder's degraded/missing
+    # trailer via SearchResults/GroupResults; scroll() carries next_cursor via
+    # ScrollPage. get()/get_batch() return Point(s): only id/vector/content/
+    # metadata are cross-transport (the wire also carries ttl_ms/sparse/
+    # version, which the unified Point type does not expose — see _types.Point).
+
+    def create_collection(self, name: str, dim: int, *, metric: str = "cosine", **cfg: Any) -> None:
+        """Create a vector collection. Keyword config mirrors the HTTP client:
+        m, ef_construction, ef_search, seed, quant, persistent, index_type,
+        ivf_nlist, ivf_nprobe, vamana_r/l/alpha, full_text, ..."""
+        conf = dict(cfg); conf["dim"] = dim; conf["metric"] = metric
+        self._call("vector_create_collection", _vecwire.encode_create_collection_args(name, conf))
+
+    def upsert(self, collection: str, id: int, vector: Sequence[float], *, content: str = "",
+               metadata: Optional[Dict[str, Any]] = None, ttl_ms: int = 0,
+               sparse: Optional[Dict[str, Sequence]] = None) -> None:
+        """Insert or replace a point, optionally with stored content for RAG."""
+        self._call("vector_upsert", _vecwire.encode_upsert_args(
+            collection, int(id), vector, content=content, ttl_ms=ttl_ms,
+            metadata=metadata, sparse=sparse))
+
+    def insert(self, collection: str, id: int, vector: Sequence[float], *,
+               metadata: Optional[Dict[str, Any]] = None, ttl_ms: int = 0,
+               sparse: Optional[Dict[str, Sequence]] = None) -> None:
+        """Create-only insert (errors if the id is live)."""
+        self._call("vector_insert", _vecwire.encode_insert_args(
+            collection, int(id), vector, ttl_ms=ttl_ms, metadata=metadata, sparse=sparse))
+
+    def upsert_batch(self, collection: str, points: Sequence[Dict[str, Any]]) -> None:
+        """N sequential vector_upsert ops over one connection, each awaited
+        before the next is sent — there is no native-TCP batch-upsert wire op,
+        and this does not pipeline (matching the Go client). Each point dict:
+        {id, vector, content="", ttl_ms=0, metadata=None, sparse=None}."""
+        for args in _vecwire.encode_upsert_batch_args(collection, points):
+            self._call("vector_upsert", args)
+
+    def delete(self, collection: str, id: int) -> bool:
+        """Delete a point. Returns whether it existed."""
+        payload = self._call("vector_delete", _vecwire.encode_delete_args(collection, int(id)))
+        return bool(payload and payload[0])
+
+    def exists(self, collection: str, id: int) -> bool:
+        payload = self._call("vector_exists", _vecwire.encode_exists_args(collection, int(id)))
+        return _vecwire.decode_exists_result(payload or b"\x00")
+
+    def get(self, collection: str, id: int, *, with_vector: bool = True,
+            with_payload: bool = True) -> Optional[Point]:
+        """Fetch a point by id, or None if absent."""
+        flags = (0x01 if with_vector else 0) | (0x02 if with_payload else 0)
+        payload = self._call("vector_get", _vecwire.encode_get_args(collection, int(id), flags))
+        if payload is None:
+            return None
+        got = _vecwire.decode_get_result(payload)
+        if got is None:
+            # A miss comes back as StatusOK with a found=0 body (not
+            # StatusNotFound), so the payload is non-None but decodes to None.
+            return None
+        # Lift stored content out of the reserved $content key, mirroring the
+        # HTTP client's Point shape.
+        meta = got.get("metadata") or {}
+        content = meta.pop("$content", "")
+        return Point(id=int(id), vector=got.get("vector"), content=content, metadata=meta)
+
+    def get_batch(self, collection: str, ids: Sequence[int], *, with_vector: bool = True,
+                  with_payload: bool = True) -> List[Point]:
+        """Fetch multiple points by id in one round trip. Returns one Point per
+        PRESENT id (absent ids are omitted, matching the HTTP backend's
+        get_batch contract) — never raises on a partial miss."""
+        flags = (0x01 if with_vector else 0) | (0x02 if with_payload else 0)
+        payload = self._call("vector_get_batch",
+                              _vecwire.encode_vector_get_batch_args(collection, list(ids), flags))
+        rows = _vecwire.decode_get_batch_result(payload or b"\x00\x00\x00\x00")
+        points: List[Point] = []
+        for row in rows:
+            if not row.get("found"):
+                continue
+            meta = row.get("metadata") or {}
+            content = meta.pop("$content", "")
+            points.append(Point(id=row["id"], vector=row.get("vector"), content=content, metadata=meta))
+        return points
+
+    def scroll(self, collection: str, *, filter: Optional[Dict[str, Any]] = None,
+               limit: int = 0, cursor: str = "") -> ScrollPage:
+        """Page through a collection's points in id order. Returns a
+        ScrollPage of Document — iterate/len it like a list, and read
+        ``.next_cursor`` to fetch the next page (pass it back as ``cursor``);
+        an empty ``next_cursor`` means the scroll is exhausted."""
+        after_id, _has_after = _vecwire.decode_scroll_cursor(cursor)
+        args = _vecwire.encode_scroll_args_order_bounded(collection, limit, filter=filter, after_id=after_id)
+        payload = self._call("vector_scroll", args)
+        docs, _degraded, _missing, next_cursor = _vecwire.decode_scroll_result_raw(payload or b"\x00\x00\x00\x00")
+        if not next_cursor and limit > 0 and len(docs) == limit:
+            # This op's leaf handler returns a plain doc block with no wire
+            # cursor on an unpartitioned/single-node server — only a clustered
+            # coordinator's fan-out dispatcher supplies one. Derive it
+            # client-side in that case: a FULL page may have more, so resume
+            # after the last doc's id.
+            next_cursor = _vecwire.encode_scroll_cursor(docs[-1]["id"])
+        return ScrollPage([_to_document(d) for d in docs], next_cursor=next_cursor)
+
+    def search(self, collection: str, query: Sequence[float], k: int, *,
+               filter: Optional[Dict[str, Any]] = None) -> SearchResults:
+        """k-nearest-neighbour search. Returns a SearchResults list of
+        SearchResult (score defaults to 0.0 — plain kNN has no fusion score);
+        .degraded/.missing report whether the read was partial."""
+        payload = self._call("vector_search", _vecwire.encode_search_args(collection, k, query, filter))
+        results, degraded, missing = _vecwire.decode_search_results_degraded(payload or b"\x00\x00\x00\x00")
+        items = [SearchResult(id=r["id"], distance=r["distance"], score=0.0) for r in results]
+        return SearchResults(items, degraded=degraded, missing=missing)
+
+    def search_docs(self, collection: str, query: Sequence[float], k: int, *,
+                     filter: Optional[Dict[str, Any]] = None) -> SearchResults:
+        """k-nearest-neighbour search returning Document (content + metadata)
+        instead of bare id/distance — the RAG-shaped counterpart of search()."""
+        args = _vecwire.encode_search_docs_args_opts(collection, k, query, filter)
+        payload = self._call("vector_search_docs", args)
+        docs, degraded, missing = _vecwire.decode_docs_degraded_raw(payload or b"\x00\x00\x00\x00")
+        return SearchResults([_to_document(d) for d in docs], degraded=degraded, missing=missing)
+
+    def search_groups(self, collection: str, query: Sequence[float], k: int, group_by: str, *,
+                       group_size: int = 1, fetch_k: int = 0,
+                       filter: Optional[Dict[str, Any]] = None) -> GroupResults:
+        """k-nearest-neighbour search grouped by a payload field. Returns a
+        GroupResults list of Group(key, hits: List[Document])."""
+        opts = {"group_by": group_by, "group_size": group_size, "fetch_k": fetch_k, "filter": filter}
+        args = _vecwire.encode_group_search_args_opts(collection, k, query, opts)
+        payload = self._call("vector_search_groups", args)
+        groups, degraded, missing = _vecwire.decode_groups_degraded_raw(payload or b"\x00\x00\x00\x00")
+        items = [Group(key=g["key"], hits=[_to_document(h) for h in g["hits"]]) for g in groups]
+        return GroupResults(items, degraded=degraded, missing=missing)
+
+    def hybrid_search(self, collection: str, dense: Sequence[float], k: int, *,
+                       sparse: Optional[Dict[str, Sequence]] = None,
+                       filter: Optional[Dict[str, Any]] = None, method: str = "rrf",
+                       alpha: float = 0.0, rrf_k: int = 0, dense_k: int = 0,
+                       sparse_k: int = 0) -> SearchResults:
+        """Fuse a dense-KNN lane with an optional sparse lane. Returns a
+        SearchResults list of SearchResult fused by `method`
+        ("rrf"/"weighted"/"dbsf")."""
+        opts = {"filter": filter, "method": method, "alpha": alpha, "rrf_k": rrf_k,
+                "dense_k": dense_k, "sparse_k": sparse_k}
+        args = _vecwire.encode_hybrid_search_args_opts(collection, dense, k, sparse, opts)
+        payload = self._call("vector_hybrid_search", args)
+        results, degraded, missing = _vecwire.decode_hybrid_results_degraded(payload or b"\x00\x00\x00\x00")
+        items = [SearchResult(id=r["id"], distance=r["distance"], score=r["score"]) for r in results]
+        return SearchResults(items, degraded=degraded, missing=missing)
+
+    def hybrid_text(self, collection: str, dense: Sequence[float], text: str, k: int, *,
+                     filter: Optional[Dict[str, Any]] = None, method: str = "rrf",
+                     alpha: float = 0.0, rrf_k: int = 0, dense_k: int = 0,
+                     sparse_k: int = 0) -> SearchResults:
+        """Fuse a dense-KNN lane with a server-side BM25 full-text lane (the
+        collection must have been created with full_text=... for a full-text
+        analyzer to exist)."""
+        opts = {"filter": filter, "method": method, "alpha": alpha, "rrf_k": rrf_k,
+                "dense_k": dense_k, "sparse_k": sparse_k}
+        args = _vecwire.encode_hybrid_text_args_global(collection, dense, text, k, opts)
+        payload = self._call("vector_hybrid_text", args)
+        results, degraded, missing = _vecwire.decode_hybrid_results_degraded(payload or b"\x00\x00\x00\x00")
+        items = [SearchResult(id=r["id"], distance=r["distance"], score=r["score"]) for r in results]
+        return SearchResults(items, degraded=degraded, missing=missing)
+
+    def recommend(self, collection: str, positive: Sequence[int], *,
+                  negative: Optional[Sequence[int]] = None, k: int = 10,
+                  filter: Optional[Dict[str, Any]] = None,
+                  strategy: str = "average_vector") -> SearchResults:
+        """Recommend points similar to the `positive` example ids and
+        dissimilar to the `negative` ones. `strategy`: "average_vector"
+        (default, average the example vectors then kNN) or "best_score"
+        (score by best per-example similarity)."""
+        strat = _vecwire.RECOMMEND_STRATEGY[strategy]
+        args = _vecwire.encode_recommend_query(collection, positive=positive, negative=negative,
+                                                k=k, filter=filter, strategy=strat)
+        payload = self._call("vector_query", args)
+        results, degraded, missing = _vecwire.decode_query_result_degraded(payload or b"\x01\x00\x00\x00\x00")
+        items = [SearchResult(id=r["id"], distance=r["distance"], score=r["score"]) for r in results]
+        return SearchResults(items, degraded=degraded, missing=missing)
+
+    def query(self, collection: str, positive: Sequence[int], *,
+              negative: Optional[Sequence[int]] = None, k: int = 10,
+              filter: Optional[Dict[str, Any]] = None,
+              strategy: str = "average_vector") -> SearchResults:
+        """The unified Query API — RECOMMEND-shaped ONLY (this client's
+        stdlib-only QuerySpec encoder builds a single-leaf RECOMMEND spec, not
+        the general fusion/rerank/prefetch-tree QuerySpec). Makes the
+        identical call as recommend()."""
+        return self.recommend(collection, positive, negative=negative, k=k,
+                               filter=filter, strategy=strategy)

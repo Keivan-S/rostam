@@ -2,6 +2,7 @@
 from typing import Optional, Tuple
 from urllib.parse import urlsplit
 
+from . import _tcp
 from ._types import TransportError
 
 
@@ -47,4 +48,92 @@ class Rostam:
         self._connect(kind, host, port, base_url, token, timeout)
 
     def _connect(self, kind, host, port, base_url, token, timeout):
-        raise NotImplementedError  # replaced in Tasks 3/5
+        if kind == "tcp":
+            self._t = _tcp.TcpTransport(host, port, token, timeout)
+            return
+        raise NotImplementedError  # HTTP backend: Task 5
+
+    # ---- flat vector API -----------------------------------------------
+    #
+    # The union of what both transport backends serve (create_collection,
+    # upsert, insert, upsert_batch, delete, get, get_batch, scroll, search,
+    # search_docs, search_groups, hybrid_search, hybrid_text, recommend,
+    # query, exists) — each method just forwards to the active backend
+    # (self._t), which returns the unified rostam._types result objects.
+    # Transport-specific extras (health, mv_*, delete_by_filter, bulk_build,
+    # kv.*) are wired in later tasks (4 and 6).
+
+    def create_collection(self, *args, **kwargs):
+        """See TcpTransport.create_collection / HttpTransport.create_collection."""
+        return self._t.create_collection(*args, **kwargs)
+
+    def upsert(self, *args, **kwargs):
+        """See TcpTransport.upsert / HttpTransport.upsert."""
+        return self._t.upsert(*args, **kwargs)
+
+    def insert(self, *args, **kwargs):
+        """See TcpTransport.insert / HttpTransport.insert."""
+        return self._t.insert(*args, **kwargs)
+
+    def upsert_batch(self, *args, **kwargs):
+        """See TcpTransport.upsert_batch / HttpTransport.upsert_batch."""
+        return self._t.upsert_batch(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        """See TcpTransport.delete / HttpTransport.delete."""
+        return self._t.delete(*args, **kwargs)
+
+    def get(self, *args, **kwargs):
+        """See TcpTransport.get / HttpTransport.get."""
+        return self._t.get(*args, **kwargs)
+
+    def get_batch(self, *args, **kwargs):
+        """See TcpTransport.get_batch / HttpTransport.get_batch."""
+        return self._t.get_batch(*args, **kwargs)
+
+    def scroll(self, *args, **kwargs):
+        """See TcpTransport.scroll / HttpTransport.scroll."""
+        return self._t.scroll(*args, **kwargs)
+
+    def search(self, *args, **kwargs):
+        """See TcpTransport.search / HttpTransport.search."""
+        return self._t.search(*args, **kwargs)
+
+    def search_docs(self, *args, **kwargs):
+        """See TcpTransport.search_docs / HttpTransport.search_docs."""
+        return self._t.search_docs(*args, **kwargs)
+
+    def search_groups(self, *args, **kwargs):
+        """See TcpTransport.search_groups / HttpTransport.search_groups."""
+        return self._t.search_groups(*args, **kwargs)
+
+    def hybrid_search(self, *args, **kwargs):
+        """See TcpTransport.hybrid_search / HttpTransport.hybrid_search."""
+        return self._t.hybrid_search(*args, **kwargs)
+
+    def hybrid_text(self, *args, **kwargs):
+        """See TcpTransport.hybrid_text / HttpTransport.hybrid_text."""
+        return self._t.hybrid_text(*args, **kwargs)
+
+    def recommend(self, *args, **kwargs):
+        """See TcpTransport.recommend / HttpTransport.recommend."""
+        return self._t.recommend(*args, **kwargs)
+
+    def query(self, *args, **kwargs):
+        """See TcpTransport.query / HttpTransport.query."""
+        return self._t.query(*args, **kwargs)
+
+    def exists(self, *args, **kwargs):
+        """See TcpTransport.exists / HttpTransport.exists."""
+        return self._t.exists(*args, **kwargs)
+
+    # ---- lifecycle -------------------------------------------------------
+
+    def close(self) -> None:
+        self._t.close()
+
+    def __enter__(self) -> "Rostam":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
