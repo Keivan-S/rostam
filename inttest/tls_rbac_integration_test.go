@@ -22,6 +22,7 @@ import (
 	"github.com/rostamlabs/rostam"
 	"github.com/rostamlabs/rostam/authz"
 	"github.com/rostamlabs/rostam/client"
+	"github.com/rostamlabs/rostam/grpcapi/grpcsvc"
 	"github.com/rostamlabs/rostam/grpcapi/pb"
 	"github.com/rostamlabs/rostam/ops"
 	"github.com/rostamlabs/rostam/tlsutil"
@@ -322,13 +323,13 @@ func TestMTLSHTTPCertCNPrincipal(t *testing.T) {
 // gRPC TLS / mTLS
 // ---------------------------------------------------------------------------
 
-func dialGRPCTLS(t *testing.T, addr string, cfg *tls.Config) (pb.VectorServiceClient, func()) {
+func dialGRPCTLS(t *testing.T, addr string, cfg *tls.Config) (grpcsvc.VectorServiceClient, func()) {
 	t.Helper()
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(credentials.NewTLS(cfg)))
 	if err != nil {
 		t.Fatalf("grpc dial: %v", err)
 	}
-	return pb.NewVectorServiceClient(conn), func() { _ = conn.Close() }
+	return grpcsvc.NewVectorServiceClient(conn), func() { _ = conn.Close() }
 }
 
 // TestTLSGRPCWrongCAFails: a gRPC client trusting the wrong CA cannot complete a
