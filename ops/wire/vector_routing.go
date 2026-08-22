@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-package ops
+package wire
 
 import (
 	"bytes"
@@ -40,8 +40,8 @@ type routeExtractor struct {
 // routeAt1 / routeAt2 are the two vector-op routing layouts: [colLen:u8][col]...
 // and [flags:u8][colLen:u8][col]... respectively.
 var (
-	routeAt1 = routeExtractor{ke: vectorKeyColAt1, layout: RouteLayoutColAt1}
-	routeAt2 = routeExtractor{ke: vectorKeyColAt2, layout: RouteLayoutColAt2}
+	routeAt1 = routeExtractor{ke: VectorKeyColAt1, layout: RouteLayoutColAt1}
+	routeAt2 = routeExtractor{ke: VectorKeyColAt2, layout: RouteLayoutColAt2}
 )
 
 // RouteKeyInto extracts an op's routing key from args WITHOUT allocating: the key
@@ -73,10 +73,10 @@ func CanonicalName(collection string) string {
 	return string(vectorRouteKey(collection))
 }
 
-// vectorKeyColAt1 extracts the collection name from args laid out as
+// VectorKeyColAt1 extracts the collection name from args laid out as
 // [nameLen:u8][name]... (create/drop/delete/delete_by_filter/scroll/
 // search_groups and all vector_mv_* ops).
-func vectorKeyColAt1(args []byte) ([]byte, bool) {
+func VectorKeyColAt1(args []byte) ([]byte, bool) {
 	if len(args) < 1 {
 		return nil, false
 	}
@@ -88,9 +88,9 @@ func vectorKeyColAt1(args []byte) ([]byte, bool) {
 	return key, key != nil
 }
 
-// vectorKeyColAt2 extracts the collection name from args laid out as
+// VectorKeyColAt2 extracts the collection name from args laid out as
 // [flags:u8][colLen:u8][col]... (insert/upsert/search/search_docs/hybrid).
-func vectorKeyColAt2(args []byte) ([]byte, bool) {
+func VectorKeyColAt2(args []byte) ([]byte, bool) {
 	if len(args) < 2 {
 		return nil, false
 	}
@@ -109,7 +109,7 @@ func vectorKeyColAt2(args []byte) ([]byte, bool) {
 var _, _ KeyExtractorInto = vectorKeyColAt1Into, vectorKeyColAt2Into
 
 // vectorKeyColAt1Into / vectorKeyColAt2Into are the allocation-free forms of
-// vectorKeyColAt1 / vectorKeyColAt2 (see KeyExtractorInto): same offsets, same
+// VectorKeyColAt1 / VectorKeyColAt2 (see KeyExtractorInto): same offsets, same
 // canonicalization, but the key is either a window INTO args (an already-qualified
 // name needs no rewriting) or "default/" + name appended to the caller's scratch.
 // A nil return means "no key", exactly like the (nil, false) of the allocating
@@ -155,7 +155,7 @@ func appendRouteKey(scratch, name []byte) []byte {
 
 // CollectionNameFor cheaply extracts the canonical collection name from a vector
 // op's args without fully decoding the payload (no query-slice allocation). It
-// reuses the same offset logic the routing layer uses (vectorKeyColAt1/At2), so
+// reuses the same offset logic the routing layer uses (VectorKeyColAt1/At2), so
 // the wire-layout knowledge lives in exactly one place. The returned name is
 // canonicalized (bare "docs" -> "default/docs"), matching CanonicalName.
 //
@@ -178,10 +178,10 @@ func CollectionNameFor(op string, args []byte) (name string, ok bool) {
 		"vector_mv_hybrid_search", "vector_mv_hybrid_lanes",
 		// Full-text ops: EncodeSearchTextArgs / EncodeHybridTextArgs lead with
 		// [flags:u8][colLen:u8][col]... — the collection sits at offset 1 (behind the
-		// flags byte), so they route via vectorKeyColAt2 like vector_hybrid_search.
+		// flags byte), so they route via VectorKeyColAt2 like vector_hybrid_search.
 		// vector_hybrid_text_lanes shares the vector_hybrid_text wire (the fan-out leaf).
 		"vector_search_text", "vector_hybrid_text", "vector_hybrid_text_lanes":
-		ke = vectorKeyColAt2
+		ke = VectorKeyColAt2
 	// At1 layout: [colLen:u8][col]...
 	case "vector_search_groups", "vector_scroll", "vector_delete_by_filter",
 		"vector_delete", "vector_drop_collection", "vector_exists",
@@ -207,7 +207,7 @@ func CollectionNameFor(op string, args []byte) (name string, ok bool) {
 		// QuerySpec blob is opaque to routing, so the collection sits at offset 0.
 		// vector_named_query / vector_mv_query share the exact same arg wire (At1).
 		"vector_query", "vector_named_query", "vector_mv_query":
-		ke = vectorKeyColAt1
+		ke = VectorKeyColAt1
 	default:
 		return "", false
 	}
@@ -218,11 +218,11 @@ func CollectionNameFor(op string, args []byte) (name string, ok bool) {
 	return string(key), true
 }
 
-// collectionNameOffset returns the byte offset of the [len:u8][name] collection
+// CollectionNameOffset returns the byte offset of the [len:u8][name] collection
 // field within a vector op's args (0 for the At1 layout, 1 for At2). ok is false
 // for ops that are not collection-keyed vector ops. It mirrors the op→layout
 // switch in CollectionNameFor so the wire-layout knowledge stays in one place.
-func collectionNameOffset(op string) (off int, ok bool) {
+func CollectionNameOffset(op string) (off int, ok bool) {
 	switch op {
 	case "vector_search", "vector_search_docs", "vector_hybrid_search",
 		"vector_insert", "vector_upsert", "vector_insert_if_absent",
@@ -273,7 +273,7 @@ func collectionNameOffset(op string) (off int, ok bool) {
 // bytes (the length prefix is a u8 — the same bound CreateCollection enforces);
 // an over-long name yields ok=false.
 func RewriteCollectionName(op string, args []byte, newName string) (out []byte, ok bool) {
-	off, ok := collectionNameOffset(op)
+	off, ok := CollectionNameOffset(op)
 	if !ok {
 		return nil, false
 	}
@@ -301,7 +301,7 @@ func RewriteCollectionName(op string, args []byte, newName string) (out []byte, 
 // a big-endian u64 immediately following the length-prefixed collection-name
 // field — At2 ([flags:u8][colLen:u8][col][id:u64]) for insert/upsert, At1
 // ([colLen:u8][col][id:u64]) for everything else — so PointIDFor reuses
-// collectionNameOffset to skip past the name and read the next 8 bytes.
+// CollectionNameOffset to skip past the name and read the next 8 bytes.
 //
 // delete_by_filter is deliberately ABSENT: it has no single id (it fans the
 // delete across a predicate), so PointIDFor returns ok=false for it and the
@@ -338,7 +338,7 @@ var singlePointWriteOps = map[string]struct{}{
 // barrier targets the correct shard.
 //
 // The id sits at a fixed offset past the length-prefixed collection name, which
-// is identical across all single-point write ops: collectionNameOffset (0 for the
+// is identical across all single-point write ops: CollectionNameOffset (0 for the
 // At1 family, 1 for the At2 insert/upsert family) gives the start of the
 // [len:u8][name] field, the id follows immediately.
 //
@@ -349,7 +349,7 @@ func PointIDFor(op string, args []byte) (id uint64, ok bool) {
 	if _, isWrite := singlePointWriteOps[op]; !isWrite {
 		return 0, false
 	}
-	off, ok := collectionNameOffset(op)
+	off, ok := CollectionNameOffset(op)
 	if !ok {
 		return 0, false
 	}

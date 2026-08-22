@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-package ops
+package wire
 
 import (
 	"bytes"
@@ -10,37 +10,14 @@ import (
 	"fmt"
 	"math"
 	"slices"
-	"sync"
 	"time"
 
 	"github.com/rostamlabs/rostam/vector"
 )
 
-// vectorSearchScratch pools the per-search server-side buffers: the decoded
-// query and the result slice. Reused across requests so the hot kNN path
-// allocates only the (small) collection string and the response buffer.
-// vector_search is read-only and runs concurrently, so the pool is keyed per
-// goroutine via sync.Pool rather than hung off the (shared) TxContext.
-type vectorSearchScratch struct {
-	query   []float32
-	results []vector.Result
-}
-
-var vectorSearchPool = sync.Pool{New: func() any { return &vectorSearchScratch{} }}
-
-// vectorDenseBufPool recycles []float32 scratch backings for the dense vector on
-// the single-point insert and get handlers, so a hot vector_insert/vector_get no
-// longer allocates a throwaway []float32 per op. It pools a *[]float32 (not the
-// slice itself) so Put never boxes/allocates. The buffer is only ever handed to a
-// path that COPIES the floats out before the op returns (arena.Insert copies on
-// insert; EncodeVectorGetResultV serializes on get), so the recycled backing is
-// never retained past the handler. The BULK staging path does NOT use this: its
-// decoded vecs are retained in the collection's stage buffer until build.
-var vectorDenseBufPool = sync.Pool{New: func() any { s := make([]float32, 0); return &s }}
-
-// errVectorArgsTruncated is returned by Decode* when the args bytes are
+// ErrVectorArgsTruncated is returned by Decode* when the args bytes are
 // shorter than the layout requires.
-var errVectorArgsTruncated = errors.New("ops: vector args truncated")
+var ErrVectorArgsTruncated = errors.New("ops: vector args truncated")
 
 // ErrMalformedPayloadJSON marks a per-point payload blob that is well-FRAMED —
 // its length prefix is consistent with the body, so the transport streamed it
@@ -72,7 +49,7 @@ var ErrMalformedPayloadJSON = errors.New("ops: malformed per-point payload JSON"
 //
 // minBytesPerElem must be >= 1; a zero floor would divide by zero, and an element
 // that can legitimately occupy no bytes at all cannot be bounded this way (see
-// decodeMVGetResultAt, which handles its zero-width case explicitly).
+// DecodeMVGetResultAt, which handles its zero-width case explicitly).
 //
 // Exported because the HTTP binary bulk transport bounds its own declared counts
 // the same way. It calls THIS function rather than restating the arithmetic: a
@@ -120,7 +97,7 @@ const (
 	// relative keyTTL block). Additive: byte-identical to a plain insert when the
 	// map is empty (flag unset, no trailing bytes).
 	vecFlagKeyExpiresAbs uint8 = 1 << 6
-	vecFlagFilter        uint8 = 1 << 0 // vector_search: filter JSON present
+	VecFlagFilter        uint8 = 1 << 0 // vector_search: filter JSON present
 	vecFlagSearchOpts    uint8 = 1 << 1 // vector_search: consistency opts trailer present
 
 	hybridFlagFilter uint8 = 1 << 0 // vector_hybrid_search: filter JSON present
@@ -129,26 +106,17 @@ const (
 
 	// Get-op trailing-flags byte (shared by dense/named/MV get args). It rides at
 	// the END of the get args ([colLen][col][id:u64][getFlags:u8]) so the leading
-	// [colLen][col] layout stays compatible with vectorKeyColAt1 routing. The
+	// [colLen][col] layout stays compatible with VectorKeyColAt1 routing. The
 	// default (both projections on) is the byte 0x03 — a caller wanting both
 	// vector(s) AND payload sets both bits. The encoders always emit the flags byte
 	// (never absent), so a missing trailing byte is a truncation error.
-	getFlagWithVector  uint8 = 1 << 0 // include the vector(s)/tokens in the result
-	getFlagWithPayload uint8 = 1 << 1 // include the payload (+ sparse, dense only) in the result
+	GetFlagWithVector  uint8 = 1 << 0 // include the vector(s)/tokens in the result
+	GetFlagWithPayload uint8 = 1 << 1 // include the payload (+ sparse, dense only) in the result
 )
 
 // GetFlagsBoth is the default get projection: include both the vector(s) and the
 // payload. Callers pass it to Encode*GetArgs for the common "fetch everything" case.
-const GetFlagsBoth = getFlagWithVector | getFlagWithPayload
-
-// GetFlagWithVector and GetFlagWithPayload are the exported individual get-flag
-// bits, so a transport edge can compose a projection from the caller's
-// with_vector/with_payload booleans (e.g. vector-only or payload-only) rather
-// than only the all-or-nothing GetFlagsBoth.
-const (
-	GetFlagWithVector  = getFlagWithVector
-	GetFlagWithPayload = getFlagWithPayload
-)
+const GetFlagsBoth = GetFlagWithVector | GetFlagWithPayload
 
 // writeSparse appends [nnz:u32]{[dim:u32][value:f32]} to buf at off, returning
 // the new offset. Caller sizes buf to include 4 + 8*nnz bytes.
@@ -182,15 +150,15 @@ func writeSparseAppend(buf []byte, sv vector.SparseVector) []byte {
 }
 
 // readSparse decodes [nnz:u32]{[dim:u32][value:f32]} at args[off:], returning
-// the sparse vector and the new offset. Returns errVectorArgsTruncated if short.
+// the sparse vector and the new offset. Returns ErrVectorArgsTruncated if short.
 func readSparse(args []byte, off int) (vector.SparseVector, int, error) {
 	if len(args) < off+4 {
-		return vector.SparseVector{}, off, errVectorArgsTruncated
+		return vector.SparseVector{}, off, ErrVectorArgsTruncated
 	}
 	nnz := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
 	if len(args) < off+8*nnz {
-		return vector.SparseVector{}, off, errVectorArgsTruncated
+		return vector.SparseVector{}, off, ErrVectorArgsTruncated
 	}
 	sv := vector.SparseVector{
 		Indices: make([]uint32, nnz),
@@ -412,12 +380,12 @@ func DecodeVectorInsertArgsCAS(args []byte) (collection string, id uint64, vec [
 // returns it to the pool once Insert has COPIED the vector into the arena.
 func decodeVectorInsertArgsCASInto(dst []float32, args []byte) (collection string, id uint64, vec []float32, ttl time.Duration, meta vector.Metadata, sparse *vector.SparseVector, version uint64, expectedVersion uint64, hasExpected bool, err error) {
 	if len(args) < 2 {
-		return "", 0, nil, 0, nil, nil, 0, 0, false, errVectorArgsTruncated
+		return "", 0, nil, 0, nil, nil, 0, 0, false, ErrVectorArgsTruncated
 	}
 	flags := args[0]
 	colLen := int(args[1])
 	if len(args) < 2+colLen+8+4 {
-		return "", 0, nil, 0, nil, nil, 0, 0, false, errVectorArgsTruncated
+		return "", 0, nil, 0, nil, nil, 0, 0, false, ErrVectorArgsTruncated
 	}
 	collection = string(args[2 : 2+colLen])
 	off := 2 + colLen
@@ -432,7 +400,7 @@ func decodeVectorInsertArgsCASInto(dst []float32, args []byte) (collection strin
 	// panics on a negative bound. CountFitsIn rejects dim < 0 and does its bound
 	// by DIVISION, which cannot overflow.
 	if !CountFitsIn(dim, len(args)-off, 4) {
-		return "", 0, nil, 0, nil, nil, 0, 0, false, errVectorArgsTruncated
+		return "", 0, nil, 0, nil, nil, 0, 0, false, ErrVectorArgsTruncated
 	}
 	// Reuse the caller's scratch backing when it fits (zero-alloc on the pooled
 	// single-insert path); fall back to a fresh allocation otherwise so dst == nil
@@ -448,19 +416,19 @@ func decodeVectorInsertArgsCASInto(dst []float32, args []byte) (collection strin
 	}
 	if flags&vecFlagTTL != 0 {
 		if len(args) < off+8 {
-			return "", 0, nil, 0, nil, nil, 0, 0, false, errVectorArgsTruncated
+			return "", 0, nil, 0, nil, nil, 0, 0, false, ErrVectorArgsTruncated
 		}
 		ttl = time.Duration(binary.BigEndian.Uint64(args[off:])) * time.Millisecond
 		off += 8
 	}
 	if flags&vecFlagMetadata != 0 {
 		if len(args) < off+4 {
-			return "", 0, nil, 0, nil, nil, 0, 0, false, errVectorArgsTruncated
+			return "", 0, nil, 0, nil, nil, 0, 0, false, ErrVectorArgsTruncated
 		}
 		mlen := int(binary.BigEndian.Uint32(args[off:]))
 		off += 4
 		if len(args) < off+mlen {
-			return "", 0, nil, 0, nil, nil, 0, 0, false, errVectorArgsTruncated
+			return "", 0, nil, 0, nil, nil, 0, 0, false, ErrVectorArgsTruncated
 		}
 		meta = make(vector.Metadata)
 		if err := json.Unmarshal(args[off:off+mlen], &meta); err != nil {
@@ -478,14 +446,14 @@ func decodeVectorInsertArgsCASInto(dst []float32, args []byte) (collection strin
 	}
 	if flags&vecFlagVersion != 0 {
 		if len(args) < off+8 {
-			return "", 0, nil, 0, nil, nil, 0, 0, false, errVectorArgsTruncated
+			return "", 0, nil, 0, nil, nil, 0, 0, false, ErrVectorArgsTruncated
 		}
 		version = binary.BigEndian.Uint64(args[off:])
 		off += 8
 	}
 	if flags&vecFlagExpectedVersion != 0 {
 		if len(args) < off+8 {
-			return "", 0, nil, 0, nil, nil, 0, 0, false, errVectorArgsTruncated
+			return "", 0, nil, 0, nil, nil, 0, 0, false, ErrVectorArgsTruncated
 		}
 		expectedVersion = binary.BigEndian.Uint64(args[off:])
 		hasExpected = true
@@ -545,12 +513,12 @@ func decodeVectorInsertArgsKeyTTLInto(dst []float32, args []byte) (collection st
 		off += 8
 	}
 	if len(args) < off+4 {
-		return "", 0, nil, 0, nil, nil, 0, 0, false, nil, errVectorArgsTruncated
+		return "", 0, nil, 0, nil, nil, 0, 0, false, nil, ErrVectorArgsTruncated
 	}
 	klen := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
 	if len(args) < off+klen {
-		return "", 0, nil, 0, nil, nil, 0, 0, false, nil, errVectorArgsTruncated
+		return "", 0, nil, 0, nil, nil, 0, 0, false, nil, ErrVectorArgsTruncated
 	}
 	km := make(map[string]int64)
 	if uerr := json.Unmarshal(args[off:off+klen], &km); uerr != nil {
@@ -625,29 +593,29 @@ func DecodeVectorInsertArgsKeyExpiresInto(dst []float32, args []byte) (collectio
 	// Skip the relative keyTTL block if present (the absolute block rides after it).
 	if flags&vecFlagKeyTTL != 0 {
 		if len(args) < off+4 {
-			return "", 0, nil, 0, nil, nil, 0, 0, false, nil, nil, errVectorArgsTruncated
+			return "", 0, nil, 0, nil, nil, 0, 0, false, nil, nil, ErrVectorArgsTruncated
 		}
 		klen := int(binary.BigEndian.Uint32(args[off:]))
 		off += 4 + klen
 	}
 	if len(args) < off+4 {
-		return "", 0, nil, 0, nil, nil, 0, 0, false, nil, nil, errVectorArgsTruncated
+		return "", 0, nil, 0, nil, nil, 0, 0, false, nil, nil, ErrVectorArgsTruncated
 	}
 	cnt := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
 	// An entry costs >= 12 bytes ([klen:u32] with an empty key + [ttl:u64]).
 	if !CountFitsIn(cnt, len(args)-off, 12) {
-		return "", 0, nil, 0, nil, nil, 0, 0, false, nil, nil, errVectorArgsTruncated
+		return "", 0, nil, 0, nil, nil, 0, 0, false, nil, nil, ErrVectorArgsTruncated
 	}
 	ke := make(map[string]uint64, cnt)
 	for j := 0; j < cnt; j++ {
 		if len(args) < off+4 {
-			return "", 0, nil, 0, nil, nil, 0, 0, false, nil, nil, errVectorArgsTruncated
+			return "", 0, nil, 0, nil, nil, 0, 0, false, nil, nil, ErrVectorArgsTruncated
 		}
 		kl := int(binary.BigEndian.Uint32(args[off:]))
 		off += 4
 		if len(args) < off+kl+8 {
-			return "", 0, nil, 0, nil, nil, 0, 0, false, nil, nil, errVectorArgsTruncated
+			return "", 0, nil, 0, nil, nil, 0, 0, false, nil, nil, ErrVectorArgsTruncated
 		}
 		key := string(args[off : off+kl])
 		off += kl
@@ -673,12 +641,12 @@ func EncodeVectorSearchArgsExt(collection string, k int, query []float32, filter
 	var flags uint8
 	var filterJSON []byte
 	if !filter.IsZero() {
-		flags |= vecFlagFilter
+		flags |= VecFlagFilter
 		filterJSON, _ = json.Marshal(filter)
 	}
 
 	n := 1 + 1 + len(collection) + 4 + 4 + 4*len(query)
-	if flags&vecFlagFilter != 0 {
+	if flags&VecFlagFilter != 0 {
 		n += 4 + len(filterJSON)
 	}
 	buf := make([]byte, n)
@@ -693,7 +661,7 @@ func EncodeVectorSearchArgsExt(collection string, k int, query []float32, filter
 		binary.BigEndian.PutUint32(buf[off:], math.Float32bits(f))
 		off += 4
 	}
-	if flags&vecFlagFilter != 0 {
+	if flags&VecFlagFilter != 0 {
 		binary.BigEndian.PutUint32(buf[off:], uint32(len(filterJSON)))
 		off += 4
 		copy(buf[off:], filterJSON)
@@ -715,12 +683,12 @@ func DecodeVectorSearchArgs(args []byte) (collection string, k int, query []floa
 // the (small) collection string.
 func DecodeVectorSearchArgsInto(args []byte, dst []float32) (collection string, k int, query []float32, filter vector.Filter, err error) {
 	if len(args) < 2 {
-		return "", 0, nil, vector.Filter{}, errVectorArgsTruncated
+		return "", 0, nil, vector.Filter{}, ErrVectorArgsTruncated
 	}
 	flags := args[0]
 	colLen := int(args[1])
 	if len(args) < 2+colLen+4+4 {
-		return "", 0, nil, vector.Filter{}, errVectorArgsTruncated
+		return "", 0, nil, vector.Filter{}, ErrVectorArgsTruncated
 	}
 	collection = string(args[2 : 2+colLen])
 	off := 2 + colLen
@@ -732,7 +700,7 @@ func DecodeVectorSearchArgsInto(args []byte, dst []float32) (collection string, 
 	// negative dim (32-bit widening) makes 4*dim overflow to 0 and the comparison
 	// vacuous, after which the slice bound below panics.
 	if !CountFitsIn(dim, len(args)-off, 4) {
-		return "", 0, nil, vector.Filter{}, errVectorArgsTruncated
+		return "", 0, nil, vector.Filter{}, ErrVectorArgsTruncated
 	}
 	if cap(dst) >= dim {
 		query = dst[:dim]
@@ -743,14 +711,14 @@ func DecodeVectorSearchArgsInto(args []byte, dst []float32) (collection string, 
 		query[i] = math.Float32frombits(binary.BigEndian.Uint32(args[off:]))
 		off += 4
 	}
-	if flags&vecFlagFilter != 0 {
+	if flags&VecFlagFilter != 0 {
 		if len(args) < off+4 {
-			return "", 0, nil, vector.Filter{}, errVectorArgsTruncated
+			return "", 0, nil, vector.Filter{}, ErrVectorArgsTruncated
 		}
 		flen := int(binary.BigEndian.Uint32(args[off:]))
 		off += 4
 		if len(args) < off+flen {
-			return "", 0, nil, vector.Filter{}, errVectorArgsTruncated
+			return "", 0, nil, vector.Filter{}, ErrVectorArgsTruncated
 		}
 		if err := json.Unmarshal(args[off:off+flen], &filter); err != nil {
 			return "", 0, nil, vector.Filter{}, fmt.Errorf("ops: decode filter: %w", err)
@@ -767,7 +735,7 @@ func DecodeVectorSearchArgsInto(args []byte, dst []float32) (collection string, 
 // the flags byte. Wire (when opts present):
 //
 //	[flags:u8][colLen:u8][col][k:u32][dim:u32][query]
-//	  [?filterLen:u32][?filterJSON]        ← present when vecFlagFilter set
+//	  [?filterLen:u32][?filterJSON]        ← present when VecFlagFilter set
 //	  [readConsistency:u8][onPartitionUnavailable:u8]  ← present when vecFlagSearchOpts set
 //
 // readConsistency: 0=AnyReplica (default), 1=LeaderOnly.
@@ -790,12 +758,12 @@ func EncodeVectorSearchArgsOpts(collection string, k int, query []float32, filte
 // (without the opts trailer) decode with readConsistency=0, onPartitionUnavailable=0.
 func DecodeVectorSearchArgsOpts(args []byte) (collection string, k int, query []float32, filter vector.Filter, readConsistency, onPartitionUnavailable uint8, bound uint64, err error) {
 	if len(args) < 2 {
-		return "", 0, nil, vector.Filter{}, 0, 0, 0, errVectorArgsTruncated
+		return "", 0, nil, vector.Filter{}, 0, 0, 0, ErrVectorArgsTruncated
 	}
 	flags := args[0]
 	colLen := int(args[1])
 	if len(args) < 2+colLen+4+4 {
-		return "", 0, nil, vector.Filter{}, 0, 0, 0, errVectorArgsTruncated
+		return "", 0, nil, vector.Filter{}, 0, 0, 0, ErrVectorArgsTruncated
 	}
 	collection = string(args[2 : 2+colLen])
 	off := 2 + colLen
@@ -806,21 +774,21 @@ func DecodeVectorSearchArgsOpts(args []byte) (collection string, k int, query []
 	// See DecodeVectorInsertArgs: 4*dim overflows to 0 for a negative dim, and
 	// make([]float32, dim) then panics rather than erroring.
 	if !CountFitsIn(dim, len(args)-off, 4) {
-		return "", 0, nil, vector.Filter{}, 0, 0, 0, errVectorArgsTruncated
+		return "", 0, nil, vector.Filter{}, 0, 0, 0, ErrVectorArgsTruncated
 	}
 	query = make([]float32, dim)
 	for i := 0; i < dim; i++ {
 		query[i] = math.Float32frombits(binary.BigEndian.Uint32(args[off:]))
 		off += 4
 	}
-	if flags&vecFlagFilter != 0 {
+	if flags&VecFlagFilter != 0 {
 		if len(args) < off+4 {
-			return "", 0, nil, vector.Filter{}, 0, 0, 0, errVectorArgsTruncated
+			return "", 0, nil, vector.Filter{}, 0, 0, 0, ErrVectorArgsTruncated
 		}
 		flen := int(binary.BigEndian.Uint32(args[off:]))
 		off += 4
 		if len(args) < off+flen {
-			return "", 0, nil, vector.Filter{}, 0, 0, 0, errVectorArgsTruncated
+			return "", 0, nil, vector.Filter{}, 0, 0, 0, ErrVectorArgsTruncated
 		}
 		if uerr := json.Unmarshal(args[off:off+flen], &filter); uerr != nil {
 			return "", 0, nil, vector.Filter{}, 0, 0, 0, fmt.Errorf("ops: decode filter: %w", uerr)
@@ -833,7 +801,7 @@ func DecodeVectorSearchArgsOpts(args []byte) (collection string, k int, query []
 		// rather than silently downgrading to AnyReplica/Partial, which would
 		// quietly weaken an explicit LeaderOnly/Fail request.
 		if len(args) < off+2 {
-			return "", 0, nil, vector.Filter{}, 0, 0, 0, errVectorArgsTruncated
+			return "", 0, nil, vector.Filter{}, 0, 0, 0, ErrVectorArgsTruncated
 		}
 		readConsistency = args[off]
 		onPartitionUnavailable = args[off+1]
@@ -870,12 +838,12 @@ func DecodeVectorSearchResults(body []byte) ([]vector.Result, error) {
 // with zero allocations (no defensive payload copy, no result-slice alloc).
 func DecodeVectorSearchResultsInto(body []byte, dst []vector.Result) ([]vector.Result, error) {
 	if len(body) < 4 {
-		return nil, errVectorArgsTruncated
+		return nil, ErrVectorArgsTruncated
 	}
 	count := int(binary.BigEndian.Uint32(body[0:4]))
 	// See above: the multiplied form overflows for a negative count.
 	if !CountFitsIn(count, len(body)-4, 8+4) {
-		return nil, errVectorArgsTruncated
+		return nil, ErrVectorArgsTruncated
 	}
 	var results []vector.Result
 	if cap(dst) >= count {
@@ -1004,14 +972,14 @@ func EncodeVectorSearchResultsDegraded(results []vector.Result, degraded bool, m
 // count u32); any remaining bytes are interpreted as the degraded trailer.
 func DecodeVectorSearchResultsDegraded(body []byte) (results []vector.Result, degraded bool, missing []uint16, err error) {
 	if len(body) < 4 {
-		return nil, false, nil, errVectorArgsTruncated
+		return nil, false, nil, ErrVectorArgsTruncated
 	}
 	count := int(binary.BigEndian.Uint32(body[0:4]))
 	// See decodeHybridResultsN: the multiplied form overflows for a negative
 	// count, so the bound is taken by division first and baseEnd computed only
 	// once count is known to fit.
 	if !CountFitsIn(count, len(body)-4, 8+4) {
-		return nil, false, nil, errVectorArgsTruncated
+		return nil, false, nil, ErrVectorArgsTruncated
 	}
 	baseEnd := 4 + count*(8+4)
 	results = make([]vector.Result, count)
@@ -1098,13 +1066,13 @@ func DecodeHybridSearchArgs(args []byte) (collection string, dense []float32, k 
 // opts block). Trailing bytes beyond the base block are ignored here.
 func decodeHybridSearchArgsN(args []byte) (collection string, dense []float32, k int, sparse vector.SparseVector, opts vector.HybridOpts, n int, err error) {
 	if len(args) < 2 {
-		return "", nil, 0, sparse, opts, 0, errVectorArgsTruncated
+		return "", nil, 0, sparse, opts, 0, ErrVectorArgsTruncated
 	}
 	flags := args[0]
 	colLen := int(args[1])
 	// fixed: flags(1)+colLen(1)+col+k(4)+method(1)+alpha(8)+rrfK(4)+denseK(4)+sparseK(4)+dim(4)
 	if len(args) < 2+colLen+4+1+8+4+4+4+4 {
-		return "", nil, 0, sparse, opts, 0, errVectorArgsTruncated
+		return "", nil, 0, sparse, opts, 0, ErrVectorArgsTruncated
 	}
 	collection = string(args[2 : 2+colLen])
 	off := 2 + colLen
@@ -1125,7 +1093,7 @@ func decodeHybridSearchArgsN(args []byte) (collection string, dense []float32, k
 	// See DecodeVectorInsertArgs: 4*dim overflows to 0 for a negative dim, and
 	// make([]float32, dim) then panics rather than erroring.
 	if !CountFitsIn(dim, len(args)-off, 4) {
-		return "", nil, 0, sparse, opts, 0, errVectorArgsTruncated
+		return "", nil, 0, sparse, opts, 0, ErrVectorArgsTruncated
 	}
 	dense = make([]float32, dim)
 	for i := 0; i < dim; i++ {
@@ -1142,12 +1110,12 @@ func decodeHybridSearchArgsN(args []byte) (collection string, dense []float32, k
 	}
 	if flags&hybridFlagFilter != 0 {
 		if len(args) < off+4 {
-			return "", nil, 0, sparse, opts, 0, errVectorArgsTruncated
+			return "", nil, 0, sparse, opts, 0, ErrVectorArgsTruncated
 		}
 		flen := int(binary.BigEndian.Uint32(args[off:]))
 		off += 4
 		if len(args) < off+flen {
-			return "", nil, 0, sparse, opts, 0, errVectorArgsTruncated
+			return "", nil, 0, sparse, opts, 0, ErrVectorArgsTruncated
 		}
 		if uerr := json.Unmarshal(args[off:off+flen], &opts.Filter); uerr != nil {
 			return "", nil, 0, sparse, opts, 0, fmt.Errorf("ops: decode filter: %w", uerr)
@@ -1188,7 +1156,7 @@ func DecodeHybridSearchArgsOpts(args []byte) (collection string, dense []float32
 		// follows; a missing trailer means corruption/truncation. Fail loud
 		// rather than silently downgrading an explicit LeaderOnly/Fail request.
 		if len(args) < n+2 {
-			return "", nil, 0, sparse, opts, 0, 0, 0, errVectorArgsTruncated
+			return "", nil, 0, sparse, opts, 0, 0, 0, ErrVectorArgsTruncated
 		}
 		readConsistency = args[n]
 		onPartitionUnavailable = args[n+1]
@@ -1222,14 +1190,14 @@ func EncodeHybridResults(results []vector.Result) []byte {
 // plus the number of bytes consumed (so callers can decode back-to-back blocks).
 func decodeHybridResultsN(body []byte) ([]vector.Result, int, error) {
 	if len(body) < 4 {
-		return nil, 0, errVectorArgsTruncated
+		return nil, 0, ErrVectorArgsTruncated
 	}
 	count := int(binary.BigEndian.Uint32(body[0:4]))
 	// CountFitsIn rather than `len(body) < 4+count*16`: a negative count (32-bit
 	// widening) makes that product overflow and the comparison vacuous. The
 	// division form cannot overflow and rejects the sign.
 	if !CountFitsIn(count, len(body)-4, 8+4+4) {
-		return nil, 0, errVectorArgsTruncated
+		return nil, 0, ErrVectorArgsTruncated
 	}
 	// Safe to compute only AFTER the bound above: count is now known non-negative
 	// and small enough that this product cannot overflow.
@@ -1341,11 +1309,11 @@ func DecodeVectorDeleteArgs(args []byte) (string, uint64, error) {
 // trailer is fail-loud.
 func DecodeVectorDeleteArgsCAS(args []byte) (collection string, id uint64, expectedVersion uint64, hasExpected bool, err error) {
 	if len(args) < 1 {
-		return "", 0, 0, false, errVectorArgsTruncated
+		return "", 0, 0, false, ErrVectorArgsTruncated
 	}
 	colLen := int(args[0])
 	if len(args) < 1+colLen+8 {
-		return "", 0, 0, false, errVectorArgsTruncated
+		return "", 0, 0, false, ErrVectorArgsTruncated
 	}
 	collection = string(args[1 : 1+colLen])
 	off := 1 + colLen + 8
@@ -1360,7 +1328,7 @@ func DecodeVectorDeleteArgsCAS(args []byte) (collection string, id uint64, expec
 		return collection, id, 0, false, nil
 	}
 	if len(args) < off+8 {
-		return "", 0, 0, false, errVectorArgsTruncated
+		return "", 0, 0, false, ErrVectorArgsTruncated
 	}
 	expectedVersion = binary.BigEndian.Uint64(args[off:])
 	return collection, id, expectedVersion, true, nil
@@ -1380,13 +1348,13 @@ func EncodeIfAbsentResult(inserted bool) []byte {
 // DecodeIfAbsentResult reads the byte produced by EncodeIfAbsentResult.
 func DecodeIfAbsentResult(body []byte) (bool, error) {
 	if len(body) < 1 {
-		return false, errVectorArgsTruncated
+		return false, ErrVectorArgsTruncated
 	}
 	return body[0] == 1, nil
 }
 
 // EncodeExistsArgs serializes a vector_exists request. Wire: [colLen:u8][col][id:u64]
-// — byte-identical to the delete-args shape (vectorKeyColAt1 reads the leading
+// — byte-identical to the delete-args shape (VectorKeyColAt1 reads the leading
 // collection name for routing). Used by the dense liveness probe.
 func EncodeExistsArgs(collection string, id uint64) []byte {
 	return EncodeVectorDeleteArgs(collection, id)
@@ -1409,7 +1377,7 @@ func EncodeExistsResult(exists bool) []byte {
 // DecodeExistsResult reads the byte produced by EncodeExistsResult.
 func DecodeExistsResult(body []byte) (bool, error) {
 	if len(body) < 1 {
-		return false, errVectorArgsTruncated
+		return false, ErrVectorArgsTruncated
 	}
 	return body[0] == 1, nil
 }
@@ -1806,12 +1774,12 @@ func EncodeCreateCollectionArgs(name string, cfg vector.Config) []byte {
 
 func DecodeCreateCollectionArgs(args []byte) (string, vector.Config, error) {
 	if len(args) < 1 {
-		return "", vector.Config{}, errVectorArgsTruncated
+		return "", vector.Config{}, ErrVectorArgsTruncated
 	}
 	nameLen := int(args[0])
 	need := 1 + nameLen + 4 + 1 + 4 + 4 + 4 + 8
 	if len(args) < need {
-		return "", vector.Config{}, errVectorArgsTruncated
+		return "", vector.Config{}, ErrVectorArgsTruncated
 	}
 	name := string(args[1 : 1+nameLen])
 	off := 1 + nameLen
@@ -2069,11 +2037,11 @@ func EncodeDropCollectionArgs(name string) []byte {
 
 func DecodeDropCollectionArgs(args []byte) (string, error) {
 	if len(args) < 1 {
-		return "", errVectorArgsTruncated
+		return "", ErrVectorArgsTruncated
 	}
 	nameLen := int(args[0])
 	if len(args) < 1+nameLen {
-		return "", errVectorArgsTruncated
+		return "", ErrVectorArgsTruncated
 	}
 	return string(args[1 : 1+nameLen]), nil
 }
@@ -2098,11 +2066,11 @@ func EncodeResplitArgs(collection string, newP int) []byte {
 // DecodeResplitArgs reads args produced by EncodeResplitArgs.
 func DecodeResplitArgs(args []byte) (string, int, error) {
 	if len(args) < 1 {
-		return "", 0, errVectorArgsTruncated
+		return "", 0, ErrVectorArgsTruncated
 	}
 	colLen := int(args[0])
 	if len(args) < 1+colLen+4 {
-		return "", 0, errVectorArgsTruncated
+		return "", 0, ErrVectorArgsTruncated
 	}
 	collection := string(args[1 : 1+colLen])
 	newP := int(binary.BigEndian.Uint32(args[1+colLen:]))
@@ -2159,7 +2127,7 @@ func EncodeResplitCleanupResult(dropped int) []byte {
 // DecodeResplitCleanupResult reads the count returned by a resplit cleanup.
 func DecodeResplitCleanupResult(body []byte) (int, error) {
 	if len(body) < 4 {
-		return 0, errVectorArgsTruncated
+		return 0, ErrVectorArgsTruncated
 	}
 	return int(binary.BigEndian.Uint32(body[0:4])), nil
 }
@@ -2242,18 +2210,18 @@ func DecodeVectorDocsRaw(body []byte) ([]vector.RawDocument, error) {
 // the cheaper side of that trade.
 func frameVectorDocsN(body []byte) ([]vector.RawDocument, int, error) {
 	if len(body) < 4 {
-		return nil, 0, errVectorArgsTruncated
+		return nil, 0, ErrVectorArgsTruncated
 	}
 	count := int(binary.BigEndian.Uint32(body[0:4]))
 	off := 4
 	// A document costs >= 20 bytes ([id:u64][dist:u32][score:u32][contentLen:u32]).
 	if !CountFitsIn(count, len(body)-off, 20) {
-		return nil, 0, errVectorArgsTruncated
+		return nil, 0, ErrVectorArgsTruncated
 	}
 	docs := make([]vector.RawDocument, 0, count)
 	for i := 0; i < count; i++ {
 		if len(body) < off+8+4+4+4 {
-			return nil, 0, errVectorArgsTruncated
+			return nil, 0, ErrVectorArgsTruncated
 		}
 		var d vector.RawDocument
 		d.ID = binary.BigEndian.Uint64(body[off:])
@@ -2265,14 +2233,14 @@ func frameVectorDocsN(body []byte) ([]vector.RawDocument, int, error) {
 		clen := int(binary.BigEndian.Uint32(body[off:]))
 		off += 4
 		if len(body) < off+clen+4 {
-			return nil, 0, errVectorArgsTruncated
+			return nil, 0, ErrVectorArgsTruncated
 		}
 		d.Content = string(body[off : off+clen])
 		off += clen
 		mlen := int(binary.BigEndian.Uint32(body[off:]))
 		off += 4
 		if len(body) < off+mlen {
-			return nil, 0, errVectorArgsTruncated
+			return nil, 0, ErrVectorArgsTruncated
 		}
 		if mlen > 0 {
 			d.Metadata = body[off : off+mlen]
@@ -2579,11 +2547,11 @@ func EncodeScanVectorsArgs(collection string) []byte {
 // DecodeScanVectorsArgs reads args produced by EncodeScanVectorsArgs.
 func DecodeScanVectorsArgs(args []byte) (string, error) {
 	if len(args) < 1 {
-		return "", errVectorArgsTruncated
+		return "", ErrVectorArgsTruncated
 	}
 	colLen := int(args[0])
 	if len(args) < 1+colLen {
-		return "", errVectorArgsTruncated
+		return "", ErrVectorArgsTruncated
 	}
 	return string(args[1 : 1+colLen]), nil
 }
@@ -2680,18 +2648,18 @@ func EncodeScanVectorsResult(recs []vector.ScanRecord) []byte {
 // DecodeScanVectorsResult reads records produced by EncodeScanVectorsResult.
 func DecodeScanVectorsResult(body []byte) ([]vector.ScanRecord, error) {
 	if len(body) < 4 {
-		return nil, errVectorArgsTruncated
+		return nil, ErrVectorArgsTruncated
 	}
 	count := int(binary.BigEndian.Uint32(body[0:4]))
 	off := 4
 	// A record costs >= 12 bytes ([id:u64][dim:u32]).
 	if !CountFitsIn(count, len(body)-off, 12) {
-		return nil, errVectorArgsTruncated
+		return nil, ErrVectorArgsTruncated
 	}
 	recs := make([]vector.ScanRecord, 0, count)
 	for i := 0; i < count; i++ {
 		if len(body) < off+8+4 {
-			return nil, errVectorArgsTruncated
+			return nil, ErrVectorArgsTruncated
 		}
 		var r vector.ScanRecord
 		r.ID = binary.BigEndian.Uint64(body[off:])
@@ -2699,7 +2667,7 @@ func DecodeScanVectorsResult(body []byte) ([]vector.ScanRecord, error) {
 		dim := int(binary.BigEndian.Uint32(body[off:]))
 		off += 4
 		if len(body) < off+4*dim+8+4 {
-			return nil, errVectorArgsTruncated
+			return nil, ErrVectorArgsTruncated
 		}
 		r.Vec = make([]float32, dim)
 		for j := 0; j < dim; j++ {
@@ -2712,7 +2680,7 @@ func DecodeScanVectorsResult(body []byte) ([]vector.ScanRecord, error) {
 		mlen := int(binary.BigEndian.Uint32(body[off:]))
 		off += 4
 		if len(body) < off+mlen {
-			return nil, errVectorArgsTruncated
+			return nil, ErrVectorArgsTruncated
 		}
 		if mlen > 0 {
 			m := make(vector.Metadata)
@@ -2734,7 +2702,7 @@ func DecodeScanVectorsResult(body []byte) ([]vector.ScanRecord, error) {
 		// Trailing per-point CAS version. It is always written by the current encoder
 		// (scan results are transient, never a stored artifact), so it is required.
 		if len(body) < off+8 {
-			return nil, errVectorArgsTruncated
+			return nil, ErrVectorArgsTruncated
 		}
 		r.Version = binary.BigEndian.Uint64(body[off:])
 		off += 8
@@ -2747,23 +2715,23 @@ func DecodeScanVectorsResult(body []byte) ([]vector.ScanRecord, error) {
 			off++
 			if present != 0 {
 				if len(body) < off+4 {
-					return nil, errVectorArgsTruncated
+					return nil, ErrVectorArgsTruncated
 				}
 				cnt := int(binary.BigEndian.Uint32(body[off:]))
 				off += 4
 				// An entry costs >= 12 bytes ([klen:u32] empty key + [ttl:u64]).
 				if !CountFitsIn(cnt, len(body)-off, 12) {
-					return nil, errVectorArgsTruncated
+					return nil, ErrVectorArgsTruncated
 				}
 				ke := make(map[string]uint64, cnt)
 				for j := 0; j < cnt; j++ {
 					if len(body) < off+4 {
-						return nil, errVectorArgsTruncated
+						return nil, ErrVectorArgsTruncated
 					}
 					klen := int(binary.BigEndian.Uint32(body[off:]))
 					off += 4
 					if len(body) < off+klen+8 {
-						return nil, errVectorArgsTruncated
+						return nil, ErrVectorArgsTruncated
 					}
 					key := string(body[off : off+klen])
 					off += klen
@@ -2803,7 +2771,7 @@ func DecodeGetConfigArgs(args []byte) (string, error) {
 // rc==0 && opa==0 (AnyReplica default unchanged); a non-zero rc rides the trailer
 // so a Linearizable get_config arms the shard barrier (via ops.ReadConsistencyOf).
 func EncodeGetConfigArgsOpts(collection string, readConsistency, onPartitionUnavailable uint8, bound uint64) []byte {
-	return appendReadOptsTrailerBounded(EncodeGetConfigArgs(collection), readConsistency, onPartitionUnavailable, bound)
+	return AppendReadOptsTrailerBounded(EncodeGetConfigArgs(collection), readConsistency, onPartitionUnavailable, bound)
 }
 
 // DecodeGetConfigArgsOpts decodes a get_config request that may carry the rc/opa
@@ -2814,7 +2782,7 @@ func DecodeGetConfigArgsOpts(args []byte) (collection string, readConsistency, o
 	if err != nil {
 		return "", 0, 0, 0, err
 	}
-	readConsistency, onPartitionUnavailable, bound, err = decodeReadOptsTrailerBounded(args, n)
+	readConsistency, onPartitionUnavailable, bound, err = DecodeReadOptsTrailerBounded(args, n)
 	if err != nil {
 		return "", 0, 0, 0, err
 	}
@@ -2826,11 +2794,11 @@ func DecodeGetConfigArgsOpts(args []byte) (collection string, readConsistency, o
 // consumed so the *Opts decoders can read a trailing self-delimiting opts block.
 func decodeNameArgsN(args []byte) (name string, n int, err error) {
 	if len(args) < 1 {
-		return "", 0, errVectorArgsTruncated
+		return "", 0, ErrVectorArgsTruncated
 	}
 	nameLen := int(args[0])
 	if len(args) < 1+nameLen {
-		return "", 0, errVectorArgsTruncated
+		return "", 0, ErrVectorArgsTruncated
 	}
 	return string(args[1 : 1+nameLen]), 1 + nameLen, nil
 }
@@ -2885,11 +2853,11 @@ func DecodeScrollArgs(args []byte) (string, vector.Filter, int, error) {
 // (see EncodeScrollArgsOpts).
 func decodeScrollArgsN(args []byte) (collection string, filter vector.Filter, limit int, n int, err error) {
 	if len(args) < 1 {
-		return "", vector.Filter{}, 0, 0, errVectorArgsTruncated
+		return "", vector.Filter{}, 0, 0, ErrVectorArgsTruncated
 	}
 	colLen := int(args[0])
 	if len(args) < 1+colLen+4+4 {
-		return "", vector.Filter{}, 0, 0, errVectorArgsTruncated
+		return "", vector.Filter{}, 0, 0, ErrVectorArgsTruncated
 	}
 	collection = string(args[1 : 1+colLen])
 	off := 1 + colLen
@@ -2898,7 +2866,7 @@ func decodeScrollArgsN(args []byte) (collection string, filter vector.Filter, li
 	flen := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
 	if len(args) < off+flen {
-		return "", vector.Filter{}, 0, 0, errVectorArgsTruncated
+		return "", vector.Filter{}, 0, 0, ErrVectorArgsTruncated
 	}
 	if flen > 0 {
 		if uerr := json.Unmarshal(args[off:off+flen], &filter); uerr != nil {
@@ -2992,7 +2960,7 @@ func DecodeScrollArgsCursor(args []byte) (collection string, filter vector.Filte
 		// Presence flag set is the contract that [rc:u8][opa:u8] follows; a
 		// missing trailer means corruption/truncation. Fail loud.
 		if len(args) < n+3 {
-			return "", vector.Filter{}, 0, 0, 0, 0, false, 0, errVectorArgsTruncated
+			return "", vector.Filter{}, 0, 0, 0, 0, false, 0, ErrVectorArgsTruncated
 		}
 		readConsistency = args[n+1]
 		onPartitionUnavailable = args[n+2]
@@ -3006,7 +2974,7 @@ func DecodeScrollArgsCursor(args []byte) (collection string, filter vector.Filte
 		// Optional cursorPresent byte (absent in the pre-cursor opts-only form).
 		if len(args) > off && args[off] != 0 {
 			if len(args) < off+1+8 {
-				return "", vector.Filter{}, 0, 0, 0, 0, false, 0, errVectorArgsTruncated
+				return "", vector.Filter{}, 0, 0, 0, 0, false, 0, ErrVectorArgsTruncated
 			}
 			afterID = binary.BigEndian.Uint64(args[off+1:])
 			hasAfter = true
@@ -3275,12 +3243,12 @@ func readScrollOrderBlock(args []byte, off int) (order *ScrollOrder, newOff int,
 	off++ // orderPresent=1
 	o := &ScrollOrder{}
 	if len(args) < off+4 {
-		return nil, off, errVectorArgsTruncated
+		return nil, off, ErrVectorArgsTruncated
 	}
 	kl := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
 	if len(args) < off+kl+1 {
-		return nil, off, errVectorArgsTruncated
+		return nil, off, ErrVectorArgsTruncated
 	}
 	o.Key = string(args[off : off+kl])
 	off += kl
@@ -3301,11 +3269,11 @@ func readScrollOrderBlock(args []byte, off int) (order *ScrollOrder, newOff int,
 	}
 	// startPresent[+start]
 	if len(args) < off+1 {
-		return nil, off, errVectorArgsTruncated
+		return nil, off, ErrVectorArgsTruncated
 	}
 	if args[off] != 0 {
 		if len(args) < off+1+8 {
-			return nil, off, errVectorArgsTruncated
+			return nil, off, ErrVectorArgsTruncated
 		}
 		o.StartFrom = math.Float64frombits(binary.BigEndian.Uint64(args[off+1:]))
 		o.HasStart = true
@@ -3315,11 +3283,11 @@ func readScrollOrderBlock(args []byte, off int) (order *ScrollOrder, newOff int,
 	}
 	// resumePresent[+resumeKey]
 	if len(args) < off+1 {
-		return nil, off, errVectorArgsTruncated
+		return nil, off, ErrVectorArgsTruncated
 	}
 	if args[off] != 0 {
 		if len(args) < off+1+8 {
-			return nil, off, errVectorArgsTruncated
+			return nil, off, ErrVectorArgsTruncated
 		}
 		o.ResumeKey = math.Float64frombits(binary.BigEndian.Uint64(args[off+1:]))
 		o.HasResume = true
@@ -3331,17 +3299,17 @@ func readScrollOrderBlock(args []byte, off int) (order *ScrollOrder, newOff int,
 	// numeric/datetime block stops above; off==len there and this branch is skipped.
 	if isString {
 		if len(args) < off+1 {
-			return nil, off, errVectorArgsTruncated
+			return nil, off, ErrVectorArgsTruncated
 		}
 		if args[off] != 0 {
 			off++
 			if len(args) < off+4 {
-				return nil, off, errVectorArgsTruncated
+				return nil, off, ErrVectorArgsTruncated
 			}
 			sl := int(binary.BigEndian.Uint32(args[off:]))
 			off += 4
 			if sl < 0 || len(args) < off+sl {
-				return nil, off, errVectorArgsTruncated
+				return nil, off, ErrVectorArgsTruncated
 			}
 			o.ResumeStr = string(args[off : off+sl])
 			o.HasResumeStr = true
@@ -3356,23 +3324,23 @@ func readScrollOrderBlock(args []byte, off int) (order *ScrollOrder, newOff int,
 	// truncation, an out-of-range arity, or an oversized strLen (no panic / no OOB).
 	if isMultiKey {
 		if len(args) < off+1 {
-			return nil, off, errVectorArgsTruncated
+			return nil, off, ErrVectorArgsTruncated
 		}
 		numTail := int(args[off])
 		off++
 		// Full key count = primary + numTail; bound by the cursor codec's max-keys cap.
-		if numTail < 1 || 1+numTail > scrollCursorMaxKeys {
-			return nil, off, errVectorArgsTruncated
+		if numTail < 1 || 1+numTail > ScrollCursorMaxKeys {
+			return nil, off, ErrVectorArgsTruncated
 		}
 		o.Tail = make([]ScrollOrderKey, numTail)
 		for i := 0; i < numTail; i++ {
 			if len(args) < off+4 {
-				return nil, off, errVectorArgsTruncated
+				return nil, off, ErrVectorArgsTruncated
 			}
 			kl2 := int(binary.BigEndian.Uint32(args[off:]))
 			off += 4
 			if kl2 < 0 || len(args) < off+kl2+1 {
-				return nil, off, errVectorArgsTruncated
+				return nil, off, ErrVectorArgsTruncated
 			}
 			tk := ScrollOrderKey{Key: string(args[off : off+kl2])}
 			off += kl2
@@ -3389,7 +3357,7 @@ func readScrollOrderBlock(args []byte, off int) (order *ScrollOrder, newOff int,
 		}
 		// resumeTuplePresent[+ per-FULL-key kind+value]
 		if len(args) < off+1 {
-			return nil, off, errVectorArgsTruncated
+			return nil, off, ErrVectorArgsTruncated
 		}
 		if args[off] != 0 {
 			off++
@@ -3397,24 +3365,24 @@ func readScrollOrderBlock(args []byte, off int) (order *ScrollOrder, newOff int,
 			o.ResumeKeys = make([]ScrollOrderVal, nKeys)
 			for i := 0; i < nKeys; i++ {
 				if len(args) < off+1 {
-					return nil, off, errVectorArgsTruncated
+					return nil, off, ErrVectorArgsTruncated
 				}
 				kind := args[off]
 				off++
 				if kind == scrollOrderValKindString {
 					if len(args) < off+4 {
-						return nil, off, errVectorArgsTruncated
+						return nil, off, ErrVectorArgsTruncated
 					}
 					sl := int(binary.BigEndian.Uint32(args[off:]))
 					off += 4
 					if sl < 0 || sl > scrollCursorStringMaxLen || len(args) < off+sl {
-						return nil, off, errVectorArgsTruncated
+						return nil, off, ErrVectorArgsTruncated
 					}
 					o.ResumeKeys[i] = ScrollOrderVal{Str: string(args[off : off+sl]), Kind: vector.OrderString}
 					off += sl
 				} else {
 					if len(args) < off+8 {
-						return nil, off, errVectorArgsTruncated
+						return nil, off, ErrVectorArgsTruncated
 					}
 					o.ResumeKeys[i] = ScrollOrderVal{Num: math.Float64frombits(binary.BigEndian.Uint64(args[off:])), Kind: vector.OrderKind(kind)}
 					off += 8
@@ -3445,7 +3413,7 @@ func DecodeScrollArgsOrder(args []byte) (collection string, filter vector.Filter
 	off := n
 	if len(args) > off && args[off] != 0 {
 		if len(args) < off+3 {
-			return "", vector.Filter{}, 0, 0, 0, 0, false, nil, errVectorArgsTruncated
+			return "", vector.Filter{}, 0, 0, 0, 0, false, nil, ErrVectorArgsTruncated
 		}
 		readConsistency = args[off+1]
 		onPartitionUnavailable = args[off+2]
@@ -3459,7 +3427,7 @@ func DecodeScrollArgsOrder(args []byte) (collection string, filter vector.Filter
 		// Optional cursorPresent byte (absent in the pre-cursor opts-only form).
 		if len(args) > off && args[off] != 0 {
 			if len(args) < off+1+8 {
-				return "", vector.Filter{}, 0, 0, 0, 0, false, nil, errVectorArgsTruncated
+				return "", vector.Filter{}, 0, 0, 0, 0, false, nil, ErrVectorArgsTruncated
 			}
 			afterID = binary.BigEndian.Uint64(args[off+1:])
 			hasAfter = true
@@ -3492,18 +3460,18 @@ func EncodeDeleteByFilterArgs(collection string, filter vector.Filter) []byte {
 // DecodeDeleteByFilterArgs reads args produced by EncodeDeleteByFilterArgs.
 func DecodeDeleteByFilterArgs(args []byte) (string, vector.Filter, error) {
 	if len(args) < 1 {
-		return "", vector.Filter{}, errVectorArgsTruncated
+		return "", vector.Filter{}, ErrVectorArgsTruncated
 	}
 	colLen := int(args[0])
 	if len(args) < 1+colLen+4 {
-		return "", vector.Filter{}, errVectorArgsTruncated
+		return "", vector.Filter{}, ErrVectorArgsTruncated
 	}
 	collection := string(args[1 : 1+colLen])
 	off := 1 + colLen
 	flen := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
 	if len(args) < off+flen {
-		return "", vector.Filter{}, errVectorArgsTruncated
+		return "", vector.Filter{}, ErrVectorArgsTruncated
 	}
 	var filter vector.Filter
 	if err := json.Unmarshal(args[off:off+flen], &filter); err != nil {
@@ -3660,11 +3628,11 @@ func DecodeBulkStageArgs(args []byte) (collection string, ids []uint64, vecs [][
 // rather than as a test.
 func decodeBulkStageRows(args []byte) (collection string, ids []uint64, vecs [][]float32, off int, err error) {
 	if len(args) < 1 {
-		return "", nil, nil, 0, errVectorArgsTruncated
+		return "", nil, nil, 0, ErrVectorArgsTruncated
 	}
 	colLen := int(args[0])
 	if len(args) < 1+colLen+8 {
-		return "", nil, nil, 0, errVectorArgsTruncated
+		return "", nil, nil, 0, ErrVectorArgsTruncated
 	}
 	collection = string(args[1 : 1+colLen])
 	off = 1 + colLen
@@ -3680,19 +3648,19 @@ func decodeBulkStageRows(args []byte) (collection string, ids []uint64, vecs [][
 	// every row must fit in remaining, so reject when perRow > remaining/count.
 	remaining := len(args) - off
 	if dim < 0 || count < 0 {
-		return "", nil, nil, 0, errVectorArgsTruncated
+		return "", nil, nil, 0, ErrVectorArgsTruncated
 	}
 	if count > 0 {
 		// dim ≤ (remaining-8)/4 keeps perRow from overflowing before countFitsIn
 		// can divide by it.
 		if dim > (remaining-8)/4 {
-			return "", nil, nil, 0, errVectorArgsTruncated
+			return "", nil, nil, 0, ErrVectorArgsTruncated
 		}
 		// CountFitsIn, not a fourth hand-rolled copy of it. A restated bound drifts
 		// from the original silently, and a drifted bound fails as an OOM rather
 		// than as a test.
 		if !CountFitsIn(count, remaining, BulkStageRowLen(dim)) {
-			return "", nil, nil, 0, errVectorArgsTruncated
+			return "", nil, nil, 0, ErrVectorArgsTruncated
 		}
 	}
 	ids = make([]uint64, count)
@@ -3809,14 +3777,14 @@ func DecodeBulkStagePayloadArgs(args []byte) (collection string, ids []uint64, v
 	// loop. Both checks stay: this one guards the allocation, the one below guards
 	// the read.
 	if !CountFitsIn(count, len(args)-off, 4) {
-		return "", nil, nil, nil, errVectorArgsTruncated
+		return "", nil, nil, nil, ErrVectorArgsTruncated
 	}
 	metas = make([]vector.Metadata, count)
 	for i := 0; i < count; i++ {
 		// The length prefix itself must be proven present before it is READ — see
 		// the asymmetry note above. This is the check whose absence panicked.
 		if len(args)-off < 4 {
-			return "", nil, nil, nil, errVectorArgsTruncated
+			return "", nil, nil, nil, ErrVectorArgsTruncated
 		}
 		blobLen := int(binary.BigEndian.Uint32(args[off:]))
 		off += 4
@@ -3824,7 +3792,7 @@ func DecodeBulkStagePayloadArgs(args []byte) (collection string, ids []uint64, v
 		// int(uint32) is only negative on a 32-bit build, where a length near 2^32
 		// lands negative and would sail past the `>` bound.
 		if blobLen < 0 || blobLen > len(args)-off {
-			return "", nil, nil, nil, errVectorArgsTruncated
+			return "", nil, nil, nil, ErrVectorArgsTruncated
 		}
 		if blobLen == 0 {
 			continue // no payload for this point
@@ -3849,7 +3817,7 @@ func DecodeBulkStagePayloadArgs(args []byte) (collection string, ids []uint64, v
 	// just read, so accepting the prefix would stage points against payloads that
 	// belong to other points. The HTTP binary framing is equally strict (expectEOF).
 	if off != len(args) {
-		return "", nil, nil, nil, errVectorArgsTruncated
+		return "", nil, nil, nil, ErrVectorArgsTruncated
 	}
 	return collection, ids, vecs, metas, nil
 }
@@ -3867,11 +3835,11 @@ func EncodeBulkBuildArgs(collection string, workers int) []byte {
 // DecodeBulkBuildArgs reads args produced by EncodeBulkBuildArgs.
 func DecodeBulkBuildArgs(args []byte) (collection string, workers int, err error) {
 	if len(args) < 1 {
-		return "", 0, errVectorArgsTruncated
+		return "", 0, ErrVectorArgsTruncated
 	}
 	colLen := int(args[0])
 	if len(args) < 1+colLen+4 {
-		return "", 0, errVectorArgsTruncated
+		return "", 0, ErrVectorArgsTruncated
 	}
 	collection = string(args[1 : 1+colLen])
 	workers = int(binary.BigEndian.Uint32(args[1+colLen:])) //nolint:gosec
@@ -3881,7 +3849,7 @@ func DecodeBulkBuildArgs(args []byte) (collection string, workers int, err error
 // DecodeDeleteByFilterResult reads the count returned by vector_delete_by_filter.
 func DecodeDeleteByFilterResult(body []byte) (int, error) {
 	if len(body) < 4 {
-		return 0, errVectorArgsTruncated
+		return 0, ErrVectorArgsTruncated
 	}
 	return int(binary.BigEndian.Uint32(body[0:4])), nil
 }
@@ -3937,7 +3905,7 @@ func DecodeGroupSearchArgs(args []byte) (collection string, k int, query []float
 // self-delimiting (see EncodeGroupSearchArgsOpts).
 func decodeGroupSearchArgsN(args []byte) (collection string, k int, query []float32, opts vector.GroupOpts, n int, err error) {
 	fail := func() (string, int, []float32, vector.GroupOpts, int, error) {
-		return "", 0, nil, vector.GroupOpts{}, 0, errVectorArgsTruncated
+		return "", 0, nil, vector.GroupOpts{}, 0, ErrVectorArgsTruncated
 	}
 	if len(args) < 1 {
 		return fail()
@@ -4014,7 +3982,7 @@ func DecodeGroupSearchArgsOpts(args []byte) (collection string, k int, query []f
 		// missing trailer means corruption/truncation. Fail loud rather than
 		// silently downgrading an explicit LeaderOnly/Fail request.
 		if len(args) < n+3 {
-			return "", 0, nil, vector.GroupOpts{}, 0, 0, 0, errVectorArgsTruncated
+			return "", 0, nil, vector.GroupOpts{}, 0, 0, 0, ErrVectorArgsTruncated
 		}
 		readConsistency = args[n+1]
 		onPartitionUnavailable = args[n+2]
@@ -4125,23 +4093,23 @@ type framedGroup struct {
 // disagree about group boundaries, only about how a key and its hits are decoded.
 func frameGroupsN(body []byte) ([]framedGroup, int, error) {
 	if len(body) < 4 {
-		return nil, 0, errVectorArgsTruncated
+		return nil, 0, ErrVectorArgsTruncated
 	}
 	count := int(binary.BigEndian.Uint32(body[0:4]))
 	off := 4
 	// A group costs >= 4 bytes (its own leading length field).
 	if !CountFitsIn(count, len(body)-off, 4) {
-		return nil, 0, errVectorArgsTruncated
+		return nil, 0, ErrVectorArgsTruncated
 	}
 	groups := make([]framedGroup, 0, count)
 	for i := 0; i < count; i++ {
 		if len(body) < off+4 {
-			return nil, 0, errVectorArgsTruncated
+			return nil, 0, ErrVectorArgsTruncated
 		}
 		klen := int(binary.BigEndian.Uint32(body[off:]))
 		off += 4
 		if len(body) < off+klen+4 {
-			return nil, 0, errVectorArgsTruncated
+			return nil, 0, ErrVectorArgsTruncated
 		}
 		var g framedGroup
 		g.Key = body[off : off+klen]
@@ -4149,7 +4117,7 @@ func frameGroupsN(body []byte) ([]framedGroup, int, error) {
 		dlen := int(binary.BigEndian.Uint32(body[off:]))
 		off += 4
 		if len(body) < off+dlen {
-			return nil, 0, errVectorArgsTruncated
+			return nil, 0, ErrVectorArgsTruncated
 		}
 		g.hits = body[off : off+dlen]
 		off += dlen
@@ -4191,15 +4159,15 @@ func DecodeGroupsDegradedRaw(body []byte) (groups []vector.RawGroup, degraded bo
 // --- get + payload-update codecs (dense) ---
 //
 // These wire the point-retrieve and in-place payload-mutation ops. ALL args lead
-// with [colLen:u8][col][id:u64] so vectorKeyColAt1 routes them by collection name
+// with [colLen:u8][col][id:u64] so VectorKeyColAt1 routes them by collection name
 // (the dense vector_delete routing template). The named/MV families mirror these
 // shapes in named.go / multivector.go.
 
 // EncodeVectorGetArgs serializes a vector_get / vector_named_get / vector_mv_get
 // request. Wire: [colLen:u8][col][id:u64][getFlags:u8] where getFlags is a bit
-// field (getFlagWithVector|getFlagWithPayload). Pass GetFlagsBoth for the common
+// field (GetFlagWithVector|GetFlagWithPayload). Pass GetFlagsBoth for the common
 // "fetch vector(s)+payload" case. The flags byte is ALWAYS present (the leading
-// [colLen][col] keeps vectorKeyColAt1 routing intact).
+// [colLen][col] keeps VectorKeyColAt1 routing intact).
 func EncodeVectorGetArgs(collection string, id uint64, flags uint8) []byte {
 	buf := make([]byte, 1+len(collection)+8+1)
 	buf[0] = byte(len(collection))
@@ -4226,11 +4194,11 @@ func DecodeVectorGetArgs(args []byte) (collection string, id uint64, flags uint8
 // is fixed-length, so a trailing marker byte is unambiguous.
 func decodeVectorGetArgsN(args []byte) (collection string, id uint64, flags uint8, n int, err error) {
 	if len(args) < 1 {
-		return "", 0, 0, 0, errVectorArgsTruncated
+		return "", 0, 0, 0, ErrVectorArgsTruncated
 	}
 	colLen := int(args[0])
 	if len(args) < 1+colLen+8+1 {
-		return "", 0, 0, 0, errVectorArgsTruncated
+		return "", 0, 0, 0, ErrVectorArgsTruncated
 	}
 	collection = string(args[1 : 1+colLen])
 	off := 1 + colLen
@@ -4248,7 +4216,7 @@ func decodeVectorGetArgsN(args []byte) (collection string, id uint64, flags uint
 // default path is wire-unchanged); a non-zero rc rides the trailer so the shard
 // can arm the readIndex barrier (via ops.ReadConsistencyOf) for a Linearizable get.
 func EncodeVectorGetArgsOpts(collection string, id uint64, flags, readConsistency, onPartitionUnavailable uint8, bound uint64) []byte {
-	return appendReadOptsTrailerBounded(EncodeVectorGetArgs(collection, id, flags), readConsistency, onPartitionUnavailable, bound)
+	return AppendReadOptsTrailerBounded(EncodeVectorGetArgs(collection, id, flags), readConsistency, onPartitionUnavailable, bound)
 }
 
 // DecodeVectorGetArgsOpts decodes a get request that may carry the rc/opa opts
@@ -4261,7 +4229,7 @@ func DecodeVectorGetArgsOpts(args []byte) (collection string, id uint64, flags, 
 	if err != nil {
 		return "", 0, 0, 0, 0, 0, err
 	}
-	readConsistency, onPartitionUnavailable, bound, err = decodeReadOptsTrailerBounded(args, n)
+	readConsistency, onPartitionUnavailable, bound, err = DecodeReadOptsTrailerBounded(args, n)
 	if err != nil {
 		return "", 0, 0, 0, 0, 0, err
 	}
@@ -4427,21 +4395,21 @@ func decodeGetResultAt(body []byte, off int, versionFramed bool) (found bool, ve
 // DecodeVectorGetBatchResultInto).
 func decodeGetResultAtArena(body []byte, off int, versionFramed bool, arena []float32) (found bool, vec []float32, meta vector.Metadata, ttl time.Duration, sparse *vector.SparseVector, version uint64, next int, arenaOut []float32, err error) {
 	if len(body) < off+1 {
-		return false, nil, nil, 0, nil, 0, off, arena, errVectorArgsTruncated
+		return false, nil, nil, 0, nil, 0, off, arena, ErrVectorArgsTruncated
 	}
 	if body[off] == 0 {
 		return false, nil, nil, 0, nil, 0, off + 1, arena, nil
 	}
 	off++
 	if len(body) < off+4 {
-		return false, nil, nil, 0, nil, 0, off, arena, errVectorArgsTruncated
+		return false, nil, nil, 0, nil, 0, off, arena, ErrVectorArgsTruncated
 	}
 	dim := int(binary.BigEndian.Uint32(body[off:]))
 	off += 4
 	// See DecodeVectorInsertArgs: 4*dim overflows for a negative dim. The 9 is
 	// the fixed ttl+metaPresent tail this record still needs after the vector.
 	if !CountFitsIn(dim, len(body)-off-9, 4) {
-		return false, nil, nil, 0, nil, 0, off, arena, errVectorArgsTruncated
+		return false, nil, nil, 0, nil, 0, off, arena, ErrVectorArgsTruncated
 	}
 	if dim > 0 {
 		base := len(arena)
@@ -4458,12 +4426,12 @@ func decodeGetResultAtArena(body []byte, off int, versionFramed bool, arena []fl
 	off++
 	if metaPresent == 1 {
 		if len(body) < off+4 {
-			return false, nil, nil, 0, nil, 0, off, arena, errVectorArgsTruncated
+			return false, nil, nil, 0, nil, 0, off, arena, ErrVectorArgsTruncated
 		}
 		mlen := int(binary.BigEndian.Uint32(body[off:]))
 		off += 4
 		if len(body) < off+mlen {
-			return false, nil, nil, 0, nil, 0, off, arena, errVectorArgsTruncated
+			return false, nil, nil, 0, nil, 0, off, arena, ErrVectorArgsTruncated
 		}
 		m := make(vector.Metadata)
 		if err := json.Unmarshal(body[off:off+mlen], &m); err != nil {
@@ -4473,7 +4441,7 @@ func decodeGetResultAtArena(body []byte, off int, versionFramed bool, arena []fl
 		off += mlen
 	}
 	if len(body) < off+1 {
-		return false, nil, nil, 0, nil, 0, off, arena, errVectorArgsTruncated
+		return false, nil, nil, 0, nil, 0, off, arena, ErrVectorArgsTruncated
 	}
 	sparsePresent := body[off]
 	off++
@@ -4491,13 +4459,13 @@ func decodeGetResultAtArena(body []byte, off int, versionFramed bool, arena []fl
 	// Trailing version block.
 	if versionFramed {
 		if len(body) < off+1 {
-			return false, nil, nil, 0, nil, 0, off, arena, errVectorArgsTruncated
+			return false, nil, nil, 0, nil, 0, off, arena, ErrVectorArgsTruncated
 		}
 		verPresent := body[off]
 		off++
 		if verPresent == 1 {
 			if len(body) < off+8 {
-				return false, nil, nil, 0, nil, 0, off, arena, errVectorArgsTruncated
+				return false, nil, nil, 0, nil, 0, off, arena, ErrVectorArgsTruncated
 			}
 			version = binary.BigEndian.Uint64(body[off:])
 			off += 8
@@ -4508,7 +4476,7 @@ func decodeGetResultAtArena(body []byte, off int, versionFramed bool, arena []fl
 		off++
 		if verPresent == 1 {
 			if len(body) < off+8 {
-				return false, nil, nil, 0, nil, 0, off, arena, errVectorArgsTruncated
+				return false, nil, nil, 0, nil, 0, off, arena, ErrVectorArgsTruncated
 			}
 			version = binary.BigEndian.Uint64(body[off:])
 			off += 8
@@ -4533,8 +4501,8 @@ type GetBatchRow struct {
 
 // EncodeVectorGetBatchArgs serializes a vector_get_batch request. Wire:
 // [colLen:u8][col][flags:u8][n:u32][id:u64 × n] where flags is the same
-// getFlagWithVector|getFlagWithPayload bit field as single get. The leading
-// [colLen][col] keeps vectorKeyColAt1 routing/auth intact; the flags byte sits
+// GetFlagWithVector|GetFlagWithPayload bit field as single get. The leading
+// [colLen][col] keeps VectorKeyColAt1 routing/auth intact; the flags byte sits
 // before the id list so it is at a fixed offset regardless of n.
 func EncodeVectorGetBatchArgs(collection string, ids []uint64, flags uint8) []byte {
 	buf := make([]byte, 1+len(collection)+1+4+8*len(ids))
@@ -4556,11 +4524,11 @@ func EncodeVectorGetBatchArgs(collection string, ids []uint64, flags uint8) []by
 // request (n=0) is valid and yields an empty ids slice.
 func DecodeVectorGetBatchArgs(args []byte) (collection string, ids []uint64, flags uint8, err error) {
 	if len(args) < 1 {
-		return "", nil, 0, errVectorArgsTruncated
+		return "", nil, 0, ErrVectorArgsTruncated
 	}
 	colLen := int(args[0])
 	if len(args) < 1+colLen+1+4 {
-		return "", nil, 0, errVectorArgsTruncated
+		return "", nil, 0, ErrVectorArgsTruncated
 	}
 	collection = string(args[1 : 1+colLen])
 	off := 1 + colLen
@@ -4569,7 +4537,7 @@ func DecodeVectorGetBatchArgs(args []byte) (collection string, ids []uint64, fla
 	n := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
 	if n < 0 || len(args) < off+8*n {
-		return "", nil, 0, errVectorArgsTruncated
+		return "", nil, 0, ErrVectorArgsTruncated
 	}
 	ids = make([]uint64, n)
 	for i := 0; i < n; i++ {
@@ -4677,7 +4645,7 @@ func DecodeVectorGetBatchResult(body []byte) ([]GetBatchRow, error) {
 // a previous caller still holds.
 func DecodeVectorGetBatchResultInto(body []byte, rows []GetBatchRow, arena []float32) ([]GetBatchRow, []float32, error) {
 	if len(body) < 4 {
-		return nil, arena, errVectorArgsTruncated
+		return nil, arena, ErrVectorArgsTruncated
 	}
 	n := int(binary.BigEndian.Uint32(body))
 	off := 4
@@ -4690,7 +4658,7 @@ func DecodeVectorGetBatchResultInto(body []byte, rows []GetBatchRow, arena []flo
 	// truncation checks alone are too late: they run after the reservation.
 	// DecodeVectorGetBatchArgs bounds its id count the same way (len(args) >= 8n).
 	if !CountFitsIn(n, len(body)-off, 9) {
-		return nil, arena, errVectorArgsTruncated
+		return nil, arena, ErrVectorArgsTruncated
 	}
 	rows = slices.Grow(rows[:0], n)
 	if rows == nil {
@@ -4701,7 +4669,7 @@ func DecodeVectorGetBatchResultInto(body []byte, rows []GetBatchRow, arena []flo
 	arena = growArenaForBatch(body, n, arena)
 	for i := 0; i < n; i++ {
 		if len(body) < off+8 {
-			return nil, arena, errVectorArgsTruncated
+			return nil, arena, ErrVectorArgsTruncated
 		}
 		id := binary.BigEndian.Uint64(body[off:])
 		off += 8
@@ -4793,12 +4761,12 @@ func readKeyTTLBlock(args []byte, off int) (keyTTLMs map[string]int64, next int,
 		return nil, off, nil
 	}
 	if len(args) < off+4 {
-		return nil, off, errVectorArgsTruncated
+		return nil, off, ErrVectorArgsTruncated
 	}
 	klen := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
 	if len(args) < off+klen {
-		return nil, off, errVectorArgsTruncated
+		return nil, off, ErrVectorArgsTruncated
 	}
 	km := make(map[string]int64)
 	if uerr := json.Unmarshal(args[off:off+klen], &km); uerr != nil {
@@ -4931,11 +4899,11 @@ func DecodeSetPayloadArgs(args []byte) (collection string, id uint64, meta vecto
 // relative-ms map, exactly as encoded). A truncated trailing block is fail-loud.
 func DecodeSetPayloadArgsOpts(args []byte) (collection string, id uint64, meta vector.Metadata, keyTTLMs map[string]int64, err error) {
 	if len(args) < 1 {
-		return "", 0, nil, nil, errVectorArgsTruncated
+		return "", 0, nil, nil, ErrVectorArgsTruncated
 	}
 	colLen := int(args[0])
 	if len(args) < 1+colLen+8+4 {
-		return "", 0, nil, nil, errVectorArgsTruncated
+		return "", 0, nil, nil, ErrVectorArgsTruncated
 	}
 	collection = string(args[1 : 1+colLen])
 	off := 1 + colLen
@@ -4944,7 +4912,7 @@ func DecodeSetPayloadArgsOpts(args []byte) (collection string, id uint64, meta v
 	mlen := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
 	if len(args) < off+mlen {
-		return "", 0, nil, nil, errVectorArgsTruncated
+		return "", 0, nil, nil, ErrVectorArgsTruncated
 	}
 	if mlen > 0 {
 		m := make(vector.Metadata)
@@ -4965,12 +4933,12 @@ func DecodeSetPayloadArgsOpts(args []byte) (collection string, id uint64, meta v
 		return collection, id, meta, nil, nil
 	}
 	if len(args) < off+4 {
-		return "", 0, nil, nil, errVectorArgsTruncated
+		return "", 0, nil, nil, ErrVectorArgsTruncated
 	}
 	klen := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
 	if len(args) < off+klen {
-		return "", 0, nil, nil, errVectorArgsTruncated
+		return "", 0, nil, nil, ErrVectorArgsTruncated
 	}
 	km := make(map[string]int64)
 	if err := json.Unmarshal(args[off:off+klen], &km); err != nil {
@@ -4991,11 +4959,11 @@ func DecodeSetPayloadArgsOpts(args []byte) (collection string, id uint64, meta v
 // present-but-truncated CAS block is fail-loud.
 func DecodeSetPayloadArgsCAS(args []byte) (collection string, id uint64, meta vector.Metadata, keyTTLMs map[string]int64, expectedVersion uint64, hasExpected bool, err error) {
 	if len(args) < 1 {
-		return "", 0, nil, nil, 0, false, errVectorArgsTruncated
+		return "", 0, nil, nil, 0, false, ErrVectorArgsTruncated
 	}
 	colLen := int(args[0])
 	if len(args) < 1+colLen+8+4 {
-		return "", 0, nil, nil, 0, false, errVectorArgsTruncated
+		return "", 0, nil, nil, 0, false, ErrVectorArgsTruncated
 	}
 	collection = string(args[1 : 1+colLen])
 	off := 1 + colLen
@@ -5004,7 +4972,7 @@ func DecodeSetPayloadArgsCAS(args []byte) (collection string, id uint64, meta ve
 	mlen := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
 	if len(args) < off+mlen {
-		return "", 0, nil, nil, 0, false, errVectorArgsTruncated
+		return "", 0, nil, nil, 0, false, ErrVectorArgsTruncated
 	}
 	if mlen > 0 {
 		m := make(vector.Metadata)
@@ -5022,12 +4990,12 @@ func DecodeSetPayloadArgsCAS(args []byte) (collection string, id uint64, meta ve
 	off++
 	if present == 1 {
 		if len(args) < off+4 {
-			return "", 0, nil, nil, 0, false, errVectorArgsTruncated
+			return "", 0, nil, nil, 0, false, ErrVectorArgsTruncated
 		}
 		klen := int(binary.BigEndian.Uint32(args[off:]))
 		off += 4
 		if len(args) < off+klen {
-			return "", 0, nil, nil, 0, false, errVectorArgsTruncated
+			return "", 0, nil, nil, 0, false, ErrVectorArgsTruncated
 		}
 		km := make(map[string]int64)
 		if uerr := json.Unmarshal(args[off:off+klen], &km); uerr != nil {
@@ -5048,7 +5016,7 @@ func DecodeSetPayloadArgsCAS(args []byte) (collection string, id uint64, meta ve
 		return collection, id, meta, keyTTLMs, 0, false, nil
 	}
 	if len(args) < off+8 {
-		return "", 0, nil, nil, 0, false, errVectorArgsTruncated
+		return "", 0, nil, nil, 0, false, ErrVectorArgsTruncated
 	}
 	expectedVersion = binary.BigEndian.Uint64(args[off:])
 	return collection, id, meta, keyTTLMs, expectedVersion, true, nil
@@ -5107,11 +5075,11 @@ func DecodeDeletePayloadKeysArgs(args []byte) (collection string, id uint64, key
 // is fail-loud.
 func DecodeDeletePayloadKeysArgsCAS(args []byte) (collection string, id uint64, keys []string, expectedVersion uint64, hasExpected bool, err error) {
 	if len(args) < 1 {
-		return "", 0, nil, 0, false, errVectorArgsTruncated
+		return "", 0, nil, 0, false, ErrVectorArgsTruncated
 	}
 	colLen := int(args[0])
 	if len(args) < 1+colLen+8+4 {
-		return "", 0, nil, 0, false, errVectorArgsTruncated
+		return "", 0, nil, 0, false, ErrVectorArgsTruncated
 	}
 	collection = string(args[1 : 1+colLen])
 	off := 1 + colLen
@@ -5124,12 +5092,12 @@ func DecodeDeletePayloadKeysArgsCAS(args []byte) (collection string, id uint64, 
 	}
 	for i := 0; i < nKeys; i++ {
 		if len(args) < off+2 {
-			return "", 0, nil, 0, false, errVectorArgsTruncated
+			return "", 0, nil, 0, false, ErrVectorArgsTruncated
 		}
 		klen := int(binary.BigEndian.Uint16(args[off:]))
 		off += 2
 		if len(args) < off+klen {
-			return "", 0, nil, 0, false, errVectorArgsTruncated
+			return "", 0, nil, 0, false, ErrVectorArgsTruncated
 		}
 		keys = append(keys, string(args[off:off+klen]))
 		off += klen
@@ -5144,7 +5112,7 @@ func DecodeDeletePayloadKeysArgsCAS(args []byte) (collection string, id uint64, 
 		return collection, id, keys, 0, false, nil
 	}
 	if len(args) < off+8 {
-		return "", 0, nil, 0, false, errVectorArgsTruncated
+		return "", 0, nil, 0, false, ErrVectorArgsTruncated
 	}
 	expectedVersion = binary.BigEndian.Uint64(args[off:])
 	return collection, id, keys, expectedVersion, true, nil
@@ -5190,7 +5158,7 @@ func EncodePayloadResult(applied bool) []byte {
 // DecodePayloadResult reads the byte produced by EncodePayloadResult.
 func DecodePayloadResult(body []byte) (bool, error) {
 	if len(body) < 1 {
-		return false, errVectorArgsTruncated
+		return false, ErrVectorArgsTruncated
 	}
 	return body[0] == 1, nil
 }

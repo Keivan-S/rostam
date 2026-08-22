@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/rostamlabs/rostam/ops"
+	"github.com/rostamlabs/rostam/ops/wire"
 )
 
 // Collection is a typed, name-scoped handle for vector operations against a
@@ -37,8 +37,8 @@ const defaultTopologyRefreshInterval = 5 * time.Second
 // nil Ops to disable client-side routing. Do not move this wiring into New.
 func NewRouted(cfg Config) (*Client, error) {
 	if cfg.Ops == nil {
-		reg := ops.NewRegistry()
-		if err := ops.RegisterBuiltins(reg); err != nil {
+		reg := wire.NewRegistry()
+		if err := wire.RegisterRoutableBuiltins(reg); err != nil {
 			return nil, fmt.Errorf("client: wire routing registry: %w", err)
 		}
 		cfg.Ops = reg

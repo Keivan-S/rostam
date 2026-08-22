@@ -4,7 +4,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.0
 // - protoc             v3.21.12
-// source: grpcapi/pb/rostam.proto
+// source: grpcapi/pb/service.proto
 
 // Package rostam.v1 is the gRPC surface over Rostam's vector/RAG operations.
 // It mirrors the REST API (httpapi) and dispatches into the same op registry —
@@ -12,11 +12,18 @@
 // the tagged metadata Value union are carried as JSON strings (filter_json /
 // metadata_json / key_json) rather than re-modeled in protobuf, reusing the
 // same JSON contract the binary wire codecs already use.
+//
+// The service is split into its own file/package (grpcsvc) from the message
+// definitions in rostam.proto (package pb) so that a caller who only needs
+// the protobuf MESSAGES (e.g. the Go client, which speaks the binary TCP
+// protocol and only borrows QuerySpec's wire encoding) does not transitively
+// pull in google.golang.org/grpc.
 
-package pb
+package grpcsvc
 
 import (
 	context "context"
+	pb "github.com/rostamlabs/rostam/grpcapi/pb"
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
@@ -100,11 +107,11 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type VectorServiceClient interface {
-	Health(ctx context.Context, in *HealthRequest, opts ...grpc.CallOption) (*HealthResponse, error)
-	CreateCollection(ctx context.Context, in *CreateCollectionRequest, opts ...grpc.CallOption) (*CreateCollectionResponse, error)
-	DropCollection(ctx context.Context, in *DropCollectionRequest, opts ...grpc.CallOption) (*DropCollectionResponse, error)
-	Upsert(ctx context.Context, in *UpsertRequest, opts ...grpc.CallOption) (*UpsertResponse, error)
-	Delete(ctx context.Context, in *DeleteRequest, opts ...grpc.CallOption) (*DeleteResponse, error)
+	Health(ctx context.Context, in *pb.HealthRequest, opts ...grpc.CallOption) (*pb.HealthResponse, error)
+	CreateCollection(ctx context.Context, in *pb.CreateCollectionRequest, opts ...grpc.CallOption) (*pb.CreateCollectionResponse, error)
+	DropCollection(ctx context.Context, in *pb.DropCollectionRequest, opts ...grpc.CallOption) (*pb.DropCollectionResponse, error)
+	Upsert(ctx context.Context, in *pb.UpsertRequest, opts ...grpc.CallOption) (*pb.UpsertResponse, error)
+	Delete(ctx context.Context, in *pb.DeleteRequest, opts ...grpc.CallOption) (*pb.DeleteResponse, error)
 	// Get-by-id retrieves a dense point: its vector + payload + remaining TTL.
 	// found=false is the not-found flag (absent/tombstoned/expired) — NOT a gRPC
 	// error — so a partitioned point-op can distinguish "not in this partition".
@@ -113,36 +120,36 @@ type VectorServiceClient interface {
 	// re-insert): SetPayload merges, OverwritePayload replaces the whole payload,
 	// DeletePayloadKeys removes listed keys, ClearPayload empties it. applied=false
 	// means the point was absent (→ NotFound at the edge).
-	Get(ctx context.Context, in *GetRequest, opts ...grpc.CallOption) (*GetResponse, error)
+	Get(ctx context.Context, in *pb.GetRequest, opts ...grpc.CallOption) (*pb.GetResponse, error)
 	// GetBatch retrieves MANY dense points by id in ONE op (the coordinator
 	// scatters the ids to their owning partitions, asks each only for its subset,
 	// and merges). A partial miss is NORMAL — absent ids come back in the missing
 	// list, NEVER a NotFound error (unlike single Get). points carry their id so a
 	// caller knows which point is which; with_vector/with_payload gate projections.
-	GetBatch(ctx context.Context, in *GetBatchRequest, opts ...grpc.CallOption) (*GetBatchResponse, error)
-	SetPayload(ctx context.Context, in *SetPayloadRequest, opts ...grpc.CallOption) (*PayloadResponse, error)
-	OverwritePayload(ctx context.Context, in *SetPayloadRequest, opts ...grpc.CallOption) (*PayloadResponse, error)
-	DeletePayloadKeys(ctx context.Context, in *DeletePayloadKeysRequest, opts ...grpc.CallOption) (*PayloadResponse, error)
-	ClearPayload(ctx context.Context, in *ClearPayloadRequest, opts ...grpc.CallOption) (*PayloadResponse, error)
-	Search(ctx context.Context, in *SearchRequest, opts ...grpc.CallOption) (*SearchResponse, error)
-	SearchDocs(ctx context.Context, in *SearchRequest, opts ...grpc.CallOption) (*SearchDocsResponse, error)
-	SearchGroups(ctx context.Context, in *SearchGroupsRequest, opts ...grpc.CallOption) (*SearchGroupsResponse, error)
-	HybridSearch(ctx context.Context, in *HybridRequest, opts ...grpc.CallOption) (*SearchResponse, error)
+	GetBatch(ctx context.Context, in *pb.GetBatchRequest, opts ...grpc.CallOption) (*pb.GetBatchResponse, error)
+	SetPayload(ctx context.Context, in *pb.SetPayloadRequest, opts ...grpc.CallOption) (*pb.PayloadResponse, error)
+	OverwritePayload(ctx context.Context, in *pb.SetPayloadRequest, opts ...grpc.CallOption) (*pb.PayloadResponse, error)
+	DeletePayloadKeys(ctx context.Context, in *pb.DeletePayloadKeysRequest, opts ...grpc.CallOption) (*pb.PayloadResponse, error)
+	ClearPayload(ctx context.Context, in *pb.ClearPayloadRequest, opts ...grpc.CallOption) (*pb.PayloadResponse, error)
+	Search(ctx context.Context, in *pb.SearchRequest, opts ...grpc.CallOption) (*pb.SearchResponse, error)
+	SearchDocs(ctx context.Context, in *pb.SearchRequest, opts ...grpc.CallOption) (*pb.SearchDocsResponse, error)
+	SearchGroups(ctx context.Context, in *pb.SearchGroupsRequest, opts ...grpc.CallOption) (*pb.SearchGroupsResponse, error)
+	HybridSearch(ctx context.Context, in *pb.HybridRequest, opts ...grpc.CallOption) (*pb.SearchResponse, error)
 	// TextSearch runs a BM25 full-text search over a FullText collection: the server
 	// tokenizes + scores the raw query text and returns enriched documents (content +
 	// metadata), so it reuses SearchDocsResponse (like SearchDocs).
-	TextSearch(ctx context.Context, in *TextSearchRequest, opts ...grpc.CallOption) (*SearchDocsResponse, error)
+	TextSearch(ctx context.Context, in *pb.TextSearchRequest, opts ...grpc.CallOption) (*pb.SearchDocsResponse, error)
 	// HybridTextSearch fuses a dense KNN lane with a BM25 full-text lane (raw query
 	// text analyzed server-side). Results carry the fused score + dense distance plus
 	// the degraded/missing partition trailer — so it reuses SearchResponse (like
 	// HybridSearch).
-	HybridTextSearch(ctx context.Context, in *HybridTextRequest, opts ...grpc.CallOption) (*SearchResponse, error)
+	HybridTextSearch(ctx context.Context, in *pb.HybridTextRequest, opts ...grpc.CallOption) (*pb.SearchResponse, error)
 	// VectorQuery runs the unified Query API (Qdrant-parity): a QuerySpec carries a
 	// root leaf + N prefetch leaves + a combine mode (FUSION/RERANK) + fusion
 	// config. v1 = the dense family, single-level. Results carry the fused/reranked
 	// score + dense distance, plus the degraded/missing partition trailer — so it
 	// reuses SearchResponse (like HybridSearch).
-	VectorQuery(ctx context.Context, in *VectorQueryRequest, opts ...grpc.CallOption) (*SearchResponse, error)
+	VectorQuery(ctx context.Context, in *pb.VectorQueryRequest, opts ...grpc.CallOption) (*pb.SearchResponse, error)
 	// NamedVectorQuery runs the unified Query API over a NAMED collection: the same
 	// QuerySpec (root + N prefetch leaves + FUSION/RERANK mode + fusion config), but
 	// EVERY leaf targets a named vector SPACE (NamedDenseLeaf / NamedSparseLeaf), so
@@ -151,7 +158,7 @@ type VectorServiceClient interface {
 	// (fused/reranked score + dense distance + the degraded/missing partition
 	// trailer) and rides the vector_named_query op. Distinct RPC from VectorQuery
 	// exactly as NamedHybridSearch is distinct from HybridSearch.
-	NamedVectorQuery(ctx context.Context, in *NamedVectorQueryRequest, opts ...grpc.CallOption) (*SearchResponse, error)
+	NamedVectorQuery(ctx context.Context, in *pb.NamedVectorQueryRequest, opts ...grpc.CallOption) (*pb.SearchResponse, error)
 	// MVVectorQuery runs the unified Query API over a MULTI-VECTOR (late-interaction)
 	// collection: the same QuerySpec (root + N prefetch leaves + FUSION/RERANK mode +
 	// fusion config), but the leaves are MV-family leaves — a MaxSim leaf (MVMaxSimLeaf,
@@ -160,84 +167,84 @@ type VectorServiceClient interface {
 	// NamedVectorQuery: it reuses SearchResponse (fused/reranked score + the
 	// degraded/missing partition trailer) and rides the vector_mv_query op. Distinct
 	// RPC exactly as MVHybridSearch is distinct from HybridSearch.
-	MVVectorQuery(ctx context.Context, in *MVVectorQueryRequest, opts ...grpc.CallOption) (*SearchResponse, error)
-	DeleteByFilter(ctx context.Context, in *DeleteByFilterRequest, opts ...grpc.CallOption) (*DeleteByFilterResponse, error)
+	MVVectorQuery(ctx context.Context, in *pb.MVVectorQueryRequest, opts ...grpc.CallOption) (*pb.SearchResponse, error)
+	DeleteByFilter(ctx context.Context, in *pb.DeleteByFilterRequest, opts ...grpc.CallOption) (*pb.DeleteByFilterResponse, error)
 	// Resplit re-partitions a collection offline (synchronous; quiesce writes
 	// first). ResplitCleanup drops the orphaned pre-resplit partitions.
-	Resplit(ctx context.Context, in *ResplitRequest, opts ...grpc.CallOption) (*ResplitResponse, error)
-	ResplitCleanup(ctx context.Context, in *ResplitCleanupRequest, opts ...grpc.CallOption) (*ResplitCleanupResponse, error)
+	Resplit(ctx context.Context, in *pb.ResplitRequest, opts ...grpc.CallOption) (*pb.ResplitResponse, error)
+	ResplitCleanup(ctx context.Context, in *pb.ResplitCleanupRequest, opts ...grpc.CallOption) (*pb.ResplitCleanupResponse, error)
 	// Reshard re-partitions a collection ONLINE (synchronous, but reads AND
 	// writes stay live for the duration — no quiesce). The orchestrator dual-
 	// writes to old+new gen during a streamed if-absent copy, then flips the
 	// catalog at cutover. ReshardAbort aborts an in-flight reshard pre-cutover.
-	Reshard(ctx context.Context, in *ReshardRequest, opts ...grpc.CallOption) (*ReshardResponse, error)
-	ReshardAbort(ctx context.Context, in *ReshardAbortRequest, opts ...grpc.CallOption) (*ReshardAbortResponse, error)
+	Reshard(ctx context.Context, in *pb.ReshardRequest, opts ...grpc.CallOption) (*pb.ReshardResponse, error)
+	ReshardAbort(ctx context.Context, in *pb.ReshardAbortRequest, opts ...grpc.CallOption) (*pb.ReshardAbortResponse, error)
 	// Late interaction (multi-vector / ColBERT MaxSim).
-	MVCreateCollection(ctx context.Context, in *MVCreateRequest, opts ...grpc.CallOption) (*MVCreateResponse, error)
-	MVDropCollection(ctx context.Context, in *MVDropRequest, opts ...grpc.CallOption) (*MVDropResponse, error)
-	MVAdd(ctx context.Context, in *MVAddRequest, opts ...grpc.CallOption) (*MVAddResponse, error)
-	MVSearch(ctx context.Context, in *MVSearchRequest, opts ...grpc.CallOption) (*MVSearchResponse, error)
+	MVCreateCollection(ctx context.Context, in *pb.MVCreateRequest, opts ...grpc.CallOption) (*pb.MVCreateResponse, error)
+	MVDropCollection(ctx context.Context, in *pb.MVDropRequest, opts ...grpc.CallOption) (*pb.MVDropResponse, error)
+	MVAdd(ctx context.Context, in *pb.MVAddRequest, opts ...grpc.CallOption) (*pb.MVAddResponse, error)
+	MVSearch(ctx context.Context, in *pb.MVSearchRequest, opts ...grpc.CallOption) (*pb.MVSearchResponse, error)
 	// MVHybridSearch fuses an MV collection's MaxSim (late-interaction dense) lane
 	// and its per-doc sparse lane into the top-k (cross-modality hybrid). Results
 	// carry the fused score + dense distance, mirroring NamedHybridSearch — so it
 	// reuses NamedSearchResponse.
-	MVHybridSearch(ctx context.Context, in *MVHybridRequest, opts ...grpc.CallOption) (*NamedSearchResponse, error)
+	MVHybridSearch(ctx context.Context, in *pb.MVHybridRequest, opts ...grpc.CallOption) (*pb.NamedSearchResponse, error)
 	// MVScroll lists live multi-vector documents (id + payload, no token matrix)
 	// with cursor pagination. Mirrors the dense Scroll / NamedScroll surface.
-	MVScroll(ctx context.Context, in *MVScrollRequest, opts ...grpc.CallOption) (*MVScrollResponse, error)
-	MVDelete(ctx context.Context, in *MVDeleteRequest, opts ...grpc.CallOption) (*MVDeleteResponse, error)
+	MVScroll(ctx context.Context, in *pb.MVScrollRequest, opts ...grpc.CallOption) (*pb.MVScrollResponse, error)
+	MVDelete(ctx context.Context, in *pb.MVDeleteRequest, opts ...grpc.CallOption) (*pb.MVDeleteResponse, error)
 	// MV get-by-id + in-place payload mutation (see Get/SetPayload/.../ClearPayload
 	// for the dense equivalents; MVGet returns the doc's token matrix instead of a
 	// single vector). found/applied carry the not-found flag as above.
-	MVGet(ctx context.Context, in *MVGetRequest, opts ...grpc.CallOption) (*MVGetResponse, error)
+	MVGet(ctx context.Context, in *pb.MVGetRequest, opts ...grpc.CallOption) (*pb.MVGetResponse, error)
 	// MVGetBatch retrieves MANY multi-vector documents by id in ONE op (the
 	// coordinator scatters the ids to their owning partitions, asks each only for
 	// its subset, and merges). A partial miss is NORMAL — absent ids come back in
 	// the missing list, NEVER a NotFound error (unlike single MVGet). The MV clone
 	// of NamedGetBatch; each point carries its token matrix + payload (MV has NO
 	// ttl).
-	MVGetBatch(ctx context.Context, in *MVGetBatchRequest, opts ...grpc.CallOption) (*MVGetBatchResponse, error)
-	MVSetPayload(ctx context.Context, in *SetPayloadRequest, opts ...grpc.CallOption) (*PayloadResponse, error)
-	MVOverwritePayload(ctx context.Context, in *SetPayloadRequest, opts ...grpc.CallOption) (*PayloadResponse, error)
-	MVDeletePayloadKeys(ctx context.Context, in *DeletePayloadKeysRequest, opts ...grpc.CallOption) (*PayloadResponse, error)
-	MVClearPayload(ctx context.Context, in *ClearPayloadRequest, opts ...grpc.CallOption) (*PayloadResponse, error)
-	MVResplit(ctx context.Context, in *ResplitRequest, opts ...grpc.CallOption) (*ResplitResponse, error)
-	MVResplitCleanup(ctx context.Context, in *ResplitCleanupRequest, opts ...grpc.CallOption) (*ResplitCleanupResponse, error)
+	MVGetBatch(ctx context.Context, in *pb.MVGetBatchRequest, opts ...grpc.CallOption) (*pb.MVGetBatchResponse, error)
+	MVSetPayload(ctx context.Context, in *pb.SetPayloadRequest, opts ...grpc.CallOption) (*pb.PayloadResponse, error)
+	MVOverwritePayload(ctx context.Context, in *pb.SetPayloadRequest, opts ...grpc.CallOption) (*pb.PayloadResponse, error)
+	MVDeletePayloadKeys(ctx context.Context, in *pb.DeletePayloadKeysRequest, opts ...grpc.CallOption) (*pb.PayloadResponse, error)
+	MVClearPayload(ctx context.Context, in *pb.ClearPayloadRequest, opts ...grpc.CallOption) (*pb.PayloadResponse, error)
+	MVResplit(ctx context.Context, in *pb.ResplitRequest, opts ...grpc.CallOption) (*pb.ResplitResponse, error)
+	MVResplitCleanup(ctx context.Context, in *pb.ResplitCleanupRequest, opts ...grpc.CallOption) (*pb.ResplitCleanupResponse, error)
 	// Online reshard for multi-vector collections (see Reshard/ReshardAbort).
-	MVReshard(ctx context.Context, in *ReshardRequest, opts ...grpc.CallOption) (*ReshardResponse, error)
-	MVReshardAbort(ctx context.Context, in *ReshardAbortRequest, opts ...grpc.CallOption) (*ReshardAbortResponse, error)
+	MVReshard(ctx context.Context, in *pb.ReshardRequest, opts ...grpc.CallOption) (*pb.ReshardResponse, error)
+	MVReshardAbort(ctx context.Context, in *pb.ReshardAbortRequest, opts ...grpc.CallOption) (*pb.ReshardAbortResponse, error)
 	// Named vectors (Qdrant-style per-point multi-vector-space collections): a
 	// collection holds a MAP of named dense vector spaces, each its own HNSW
 	// index, sharing one per-point payload + id namespace. A point provides a map
 	// of named vectors; a search selects which named space to query. Mirrors the
 	// dense/MV transport surface; filter/metadata ride as JSON strings.
-	NamedCreate(ctx context.Context, in *NamedCreateRequest, opts ...grpc.CallOption) (*NamedCreateResponse, error)
-	NamedDrop(ctx context.Context, in *NamedDropRequest, opts ...grpc.CallOption) (*NamedDropResponse, error)
-	NamedUpsert(ctx context.Context, in *NamedUpsertRequest, opts ...grpc.CallOption) (*NamedUpsertResponse, error)
-	NamedSearch(ctx context.Context, in *NamedSearchRequest, opts ...grpc.CallOption) (*NamedSearchResponse, error)
-	NamedSparseSearch(ctx context.Context, in *NamedSparseSearchRequest, opts ...grpc.CallOption) (*NamedSearchResponse, error)
-	NamedHybridSearch(ctx context.Context, in *NamedHybridRequest, opts ...grpc.CallOption) (*NamedSearchResponse, error)
-	NamedSearchDocs(ctx context.Context, in *NamedSearchRequest, opts ...grpc.CallOption) (*NamedSearchDocsResponse, error)
-	NamedDelete(ctx context.Context, in *NamedDeleteRequest, opts ...grpc.CallOption) (*NamedDeleteResponse, error)
+	NamedCreate(ctx context.Context, in *pb.NamedCreateRequest, opts ...grpc.CallOption) (*pb.NamedCreateResponse, error)
+	NamedDrop(ctx context.Context, in *pb.NamedDropRequest, opts ...grpc.CallOption) (*pb.NamedDropResponse, error)
+	NamedUpsert(ctx context.Context, in *pb.NamedUpsertRequest, opts ...grpc.CallOption) (*pb.NamedUpsertResponse, error)
+	NamedSearch(ctx context.Context, in *pb.NamedSearchRequest, opts ...grpc.CallOption) (*pb.NamedSearchResponse, error)
+	NamedSparseSearch(ctx context.Context, in *pb.NamedSparseSearchRequest, opts ...grpc.CallOption) (*pb.NamedSearchResponse, error)
+	NamedHybridSearch(ctx context.Context, in *pb.NamedHybridRequest, opts ...grpc.CallOption) (*pb.NamedSearchResponse, error)
+	NamedSearchDocs(ctx context.Context, in *pb.NamedSearchRequest, opts ...grpc.CallOption) (*pb.NamedSearchDocsResponse, error)
+	NamedDelete(ctx context.Context, in *pb.NamedDeleteRequest, opts ...grpc.CallOption) (*pb.NamedDeleteResponse, error)
 	// Named get-by-id + in-place payload mutation (see Get/SetPayload/.../
 	// ClearPayload for the dense equivalents; NamedGet returns the per-point map of
 	// named-space -> vector instead of a single vector). found/applied carry the
 	// not-found flag as above. The payload is shared per point across spaces.
-	NamedGet(ctx context.Context, in *NamedGetRequest, opts ...grpc.CallOption) (*NamedGetResponse, error)
+	NamedGet(ctx context.Context, in *pb.NamedGetRequest, opts ...grpc.CallOption) (*pb.NamedGetResponse, error)
 	// NamedGetBatch retrieves MANY named-vector points by id in ONE op (the
 	// coordinator scatters the ids to their owning partitions, asks each only for
 	// its subset, and merges). A partial miss is NORMAL — absent ids come back in
 	// the missing list, NEVER a NotFound error (unlike single NamedGet). The named
 	// clone of GetBatch; each point carries its per-space vectors map + payload +
 	// ttl_ms.
-	NamedGetBatch(ctx context.Context, in *NamedGetBatchRequest, opts ...grpc.CallOption) (*NamedGetBatchResponse, error)
-	NamedSetPayload(ctx context.Context, in *SetPayloadRequest, opts ...grpc.CallOption) (*PayloadResponse, error)
-	NamedOverwritePayload(ctx context.Context, in *SetPayloadRequest, opts ...grpc.CallOption) (*PayloadResponse, error)
-	NamedDeletePayloadKeys(ctx context.Context, in *DeletePayloadKeysRequest, opts ...grpc.CallOption) (*PayloadResponse, error)
-	NamedClearPayload(ctx context.Context, in *ClearPayloadRequest, opts ...grpc.CallOption) (*PayloadResponse, error)
-	NamedScroll(ctx context.Context, in *NamedScrollRequest, opts ...grpc.CallOption) (*NamedScrollResponse, error)
-	Scroll(ctx context.Context, in *ScrollRequest, opts ...grpc.CallOption) (*ScrollResponse, error)
-	NamedGetConfig(ctx context.Context, in *NamedGetConfigRequest, opts ...grpc.CallOption) (*NamedGetConfigResponse, error)
+	NamedGetBatch(ctx context.Context, in *pb.NamedGetBatchRequest, opts ...grpc.CallOption) (*pb.NamedGetBatchResponse, error)
+	NamedSetPayload(ctx context.Context, in *pb.SetPayloadRequest, opts ...grpc.CallOption) (*pb.PayloadResponse, error)
+	NamedOverwritePayload(ctx context.Context, in *pb.SetPayloadRequest, opts ...grpc.CallOption) (*pb.PayloadResponse, error)
+	NamedDeletePayloadKeys(ctx context.Context, in *pb.DeletePayloadKeysRequest, opts ...grpc.CallOption) (*pb.PayloadResponse, error)
+	NamedClearPayload(ctx context.Context, in *pb.ClearPayloadRequest, opts ...grpc.CallOption) (*pb.PayloadResponse, error)
+	NamedScroll(ctx context.Context, in *pb.NamedScrollRequest, opts ...grpc.CallOption) (*pb.NamedScrollResponse, error)
+	Scroll(ctx context.Context, in *pb.ScrollRequest, opts ...grpc.CallOption) (*pb.ScrollResponse, error)
+	NamedGetConfig(ctx context.Context, in *pb.NamedGetConfigRequest, opts ...grpc.CallOption) (*pb.NamedGetConfigResponse, error)
 	// Collection aliases (alias -> collection resolution + atomic swap). An alias
 	// is a name that resolves to a real collection, so data-plane RPCs on the
 	// alias transparently route to the target (resolution is in the engine). These
@@ -247,10 +254,10 @@ type VectorServiceClient interface {
 	// window. CreateAlias/DeleteAlias are single-action conveniences. ListAliases
 	// is a local read (optional collection filter). Validation errors (target
 	// missing / shadow / reserved char / target-is-alias) map to InvalidArgument.
-	CreateAlias(ctx context.Context, in *CreateAliasRequest, opts ...grpc.CallOption) (*CreateAliasResponse, error)
-	DeleteAlias(ctx context.Context, in *DeleteAliasRequest, opts ...grpc.CallOption) (*DeleteAliasResponse, error)
-	ListAliases(ctx context.Context, in *ListAliasesRequest, opts ...grpc.CallOption) (*ListAliasesResponse, error)
-	AliasBatch(ctx context.Context, in *AliasBatchRequest, opts ...grpc.CallOption) (*AliasBatchResponse, error)
+	CreateAlias(ctx context.Context, in *pb.CreateAliasRequest, opts ...grpc.CallOption) (*pb.CreateAliasResponse, error)
+	DeleteAlias(ctx context.Context, in *pb.DeleteAliasRequest, opts ...grpc.CallOption) (*pb.DeleteAliasResponse, error)
+	ListAliases(ctx context.Context, in *pb.ListAliasesRequest, opts ...grpc.CallOption) (*pb.ListAliasesResponse, error)
+	AliasBatch(ctx context.Context, in *pb.AliasBatchRequest, opts ...grpc.CallOption) (*pb.AliasBatchResponse, error)
 	// Online key-admin (add/revoke/list API keys at RUNTIME, no restart). These are
 	// admin-scope-gated coordinator virtual-ops (__keys_add__/__keys_revoke__/
 	// __keys_list__) intercepted at the dispatcher and applied to the node's live
@@ -259,9 +266,9 @@ type VectorServiceClient interface {
 	// is touched. SECURITY: KeysList returns ONLY the redacted view (fingerprint +
 	// tenant + scopes + cert_cn) — the raw token is NEVER serialized at any edge;
 	// KeysAdd/KeysRevoke return an empty ack and never echo the token.
-	KeysAdd(ctx context.Context, in *KeysAddRequest, opts ...grpc.CallOption) (*KeysAck, error)
-	KeysRevoke(ctx context.Context, in *KeysRevokeRequest, opts ...grpc.CallOption) (*KeysAck, error)
-	KeysList(ctx context.Context, in *KeysListRequest, opts ...grpc.CallOption) (*KeysListResponse, error)
+	KeysAdd(ctx context.Context, in *pb.KeysAddRequest, opts ...grpc.CallOption) (*pb.KeysAck, error)
+	KeysRevoke(ctx context.Context, in *pb.KeysRevokeRequest, opts ...grpc.CallOption) (*pb.KeysAck, error)
+	KeysList(ctx context.Context, in *pb.KeysListRequest, opts ...grpc.CallOption) (*pb.KeysListResponse, error)
 }
 
 type vectorServiceClient struct {
@@ -272,9 +279,9 @@ func NewVectorServiceClient(cc grpc.ClientConnInterface) VectorServiceClient {
 	return &vectorServiceClient{cc}
 }
 
-func (c *vectorServiceClient) Health(ctx context.Context, in *HealthRequest, opts ...grpc.CallOption) (*HealthResponse, error) {
+func (c *vectorServiceClient) Health(ctx context.Context, in *pb.HealthRequest, opts ...grpc.CallOption) (*pb.HealthResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(HealthResponse)
+	out := new(pb.HealthResponse)
 	err := c.cc.Invoke(ctx, VectorService_Health_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -282,9 +289,9 @@ func (c *vectorServiceClient) Health(ctx context.Context, in *HealthRequest, opt
 	return out, nil
 }
 
-func (c *vectorServiceClient) CreateCollection(ctx context.Context, in *CreateCollectionRequest, opts ...grpc.CallOption) (*CreateCollectionResponse, error) {
+func (c *vectorServiceClient) CreateCollection(ctx context.Context, in *pb.CreateCollectionRequest, opts ...grpc.CallOption) (*pb.CreateCollectionResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(CreateCollectionResponse)
+	out := new(pb.CreateCollectionResponse)
 	err := c.cc.Invoke(ctx, VectorService_CreateCollection_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -292,9 +299,9 @@ func (c *vectorServiceClient) CreateCollection(ctx context.Context, in *CreateCo
 	return out, nil
 }
 
-func (c *vectorServiceClient) DropCollection(ctx context.Context, in *DropCollectionRequest, opts ...grpc.CallOption) (*DropCollectionResponse, error) {
+func (c *vectorServiceClient) DropCollection(ctx context.Context, in *pb.DropCollectionRequest, opts ...grpc.CallOption) (*pb.DropCollectionResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(DropCollectionResponse)
+	out := new(pb.DropCollectionResponse)
 	err := c.cc.Invoke(ctx, VectorService_DropCollection_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -302,9 +309,9 @@ func (c *vectorServiceClient) DropCollection(ctx context.Context, in *DropCollec
 	return out, nil
 }
 
-func (c *vectorServiceClient) Upsert(ctx context.Context, in *UpsertRequest, opts ...grpc.CallOption) (*UpsertResponse, error) {
+func (c *vectorServiceClient) Upsert(ctx context.Context, in *pb.UpsertRequest, opts ...grpc.CallOption) (*pb.UpsertResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(UpsertResponse)
+	out := new(pb.UpsertResponse)
 	err := c.cc.Invoke(ctx, VectorService_Upsert_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -312,9 +319,9 @@ func (c *vectorServiceClient) Upsert(ctx context.Context, in *UpsertRequest, opt
 	return out, nil
 }
 
-func (c *vectorServiceClient) Delete(ctx context.Context, in *DeleteRequest, opts ...grpc.CallOption) (*DeleteResponse, error) {
+func (c *vectorServiceClient) Delete(ctx context.Context, in *pb.DeleteRequest, opts ...grpc.CallOption) (*pb.DeleteResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(DeleteResponse)
+	out := new(pb.DeleteResponse)
 	err := c.cc.Invoke(ctx, VectorService_Delete_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -322,9 +329,9 @@ func (c *vectorServiceClient) Delete(ctx context.Context, in *DeleteRequest, opt
 	return out, nil
 }
 
-func (c *vectorServiceClient) Get(ctx context.Context, in *GetRequest, opts ...grpc.CallOption) (*GetResponse, error) {
+func (c *vectorServiceClient) Get(ctx context.Context, in *pb.GetRequest, opts ...grpc.CallOption) (*pb.GetResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(GetResponse)
+	out := new(pb.GetResponse)
 	err := c.cc.Invoke(ctx, VectorService_Get_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -332,9 +339,9 @@ func (c *vectorServiceClient) Get(ctx context.Context, in *GetRequest, opts ...g
 	return out, nil
 }
 
-func (c *vectorServiceClient) GetBatch(ctx context.Context, in *GetBatchRequest, opts ...grpc.CallOption) (*GetBatchResponse, error) {
+func (c *vectorServiceClient) GetBatch(ctx context.Context, in *pb.GetBatchRequest, opts ...grpc.CallOption) (*pb.GetBatchResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(GetBatchResponse)
+	out := new(pb.GetBatchResponse)
 	err := c.cc.Invoke(ctx, VectorService_GetBatch_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -342,9 +349,9 @@ func (c *vectorServiceClient) GetBatch(ctx context.Context, in *GetBatchRequest,
 	return out, nil
 }
 
-func (c *vectorServiceClient) SetPayload(ctx context.Context, in *SetPayloadRequest, opts ...grpc.CallOption) (*PayloadResponse, error) {
+func (c *vectorServiceClient) SetPayload(ctx context.Context, in *pb.SetPayloadRequest, opts ...grpc.CallOption) (*pb.PayloadResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(PayloadResponse)
+	out := new(pb.PayloadResponse)
 	err := c.cc.Invoke(ctx, VectorService_SetPayload_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -352,9 +359,9 @@ func (c *vectorServiceClient) SetPayload(ctx context.Context, in *SetPayloadRequ
 	return out, nil
 }
 
-func (c *vectorServiceClient) OverwritePayload(ctx context.Context, in *SetPayloadRequest, opts ...grpc.CallOption) (*PayloadResponse, error) {
+func (c *vectorServiceClient) OverwritePayload(ctx context.Context, in *pb.SetPayloadRequest, opts ...grpc.CallOption) (*pb.PayloadResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(PayloadResponse)
+	out := new(pb.PayloadResponse)
 	err := c.cc.Invoke(ctx, VectorService_OverwritePayload_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -362,9 +369,9 @@ func (c *vectorServiceClient) OverwritePayload(ctx context.Context, in *SetPaylo
 	return out, nil
 }
 
-func (c *vectorServiceClient) DeletePayloadKeys(ctx context.Context, in *DeletePayloadKeysRequest, opts ...grpc.CallOption) (*PayloadResponse, error) {
+func (c *vectorServiceClient) DeletePayloadKeys(ctx context.Context, in *pb.DeletePayloadKeysRequest, opts ...grpc.CallOption) (*pb.PayloadResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(PayloadResponse)
+	out := new(pb.PayloadResponse)
 	err := c.cc.Invoke(ctx, VectorService_DeletePayloadKeys_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -372,9 +379,9 @@ func (c *vectorServiceClient) DeletePayloadKeys(ctx context.Context, in *DeleteP
 	return out, nil
 }
 
-func (c *vectorServiceClient) ClearPayload(ctx context.Context, in *ClearPayloadRequest, opts ...grpc.CallOption) (*PayloadResponse, error) {
+func (c *vectorServiceClient) ClearPayload(ctx context.Context, in *pb.ClearPayloadRequest, opts ...grpc.CallOption) (*pb.PayloadResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(PayloadResponse)
+	out := new(pb.PayloadResponse)
 	err := c.cc.Invoke(ctx, VectorService_ClearPayload_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -382,9 +389,9 @@ func (c *vectorServiceClient) ClearPayload(ctx context.Context, in *ClearPayload
 	return out, nil
 }
 
-func (c *vectorServiceClient) Search(ctx context.Context, in *SearchRequest, opts ...grpc.CallOption) (*SearchResponse, error) {
+func (c *vectorServiceClient) Search(ctx context.Context, in *pb.SearchRequest, opts ...grpc.CallOption) (*pb.SearchResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(SearchResponse)
+	out := new(pb.SearchResponse)
 	err := c.cc.Invoke(ctx, VectorService_Search_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -392,9 +399,9 @@ func (c *vectorServiceClient) Search(ctx context.Context, in *SearchRequest, opt
 	return out, nil
 }
 
-func (c *vectorServiceClient) SearchDocs(ctx context.Context, in *SearchRequest, opts ...grpc.CallOption) (*SearchDocsResponse, error) {
+func (c *vectorServiceClient) SearchDocs(ctx context.Context, in *pb.SearchRequest, opts ...grpc.CallOption) (*pb.SearchDocsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(SearchDocsResponse)
+	out := new(pb.SearchDocsResponse)
 	err := c.cc.Invoke(ctx, VectorService_SearchDocs_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -402,9 +409,9 @@ func (c *vectorServiceClient) SearchDocs(ctx context.Context, in *SearchRequest,
 	return out, nil
 }
 
-func (c *vectorServiceClient) SearchGroups(ctx context.Context, in *SearchGroupsRequest, opts ...grpc.CallOption) (*SearchGroupsResponse, error) {
+func (c *vectorServiceClient) SearchGroups(ctx context.Context, in *pb.SearchGroupsRequest, opts ...grpc.CallOption) (*pb.SearchGroupsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(SearchGroupsResponse)
+	out := new(pb.SearchGroupsResponse)
 	err := c.cc.Invoke(ctx, VectorService_SearchGroups_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -412,9 +419,9 @@ func (c *vectorServiceClient) SearchGroups(ctx context.Context, in *SearchGroups
 	return out, nil
 }
 
-func (c *vectorServiceClient) HybridSearch(ctx context.Context, in *HybridRequest, opts ...grpc.CallOption) (*SearchResponse, error) {
+func (c *vectorServiceClient) HybridSearch(ctx context.Context, in *pb.HybridRequest, opts ...grpc.CallOption) (*pb.SearchResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(SearchResponse)
+	out := new(pb.SearchResponse)
 	err := c.cc.Invoke(ctx, VectorService_HybridSearch_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -422,9 +429,9 @@ func (c *vectorServiceClient) HybridSearch(ctx context.Context, in *HybridReques
 	return out, nil
 }
 
-func (c *vectorServiceClient) TextSearch(ctx context.Context, in *TextSearchRequest, opts ...grpc.CallOption) (*SearchDocsResponse, error) {
+func (c *vectorServiceClient) TextSearch(ctx context.Context, in *pb.TextSearchRequest, opts ...grpc.CallOption) (*pb.SearchDocsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(SearchDocsResponse)
+	out := new(pb.SearchDocsResponse)
 	err := c.cc.Invoke(ctx, VectorService_TextSearch_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -432,9 +439,9 @@ func (c *vectorServiceClient) TextSearch(ctx context.Context, in *TextSearchRequ
 	return out, nil
 }
 
-func (c *vectorServiceClient) HybridTextSearch(ctx context.Context, in *HybridTextRequest, opts ...grpc.CallOption) (*SearchResponse, error) {
+func (c *vectorServiceClient) HybridTextSearch(ctx context.Context, in *pb.HybridTextRequest, opts ...grpc.CallOption) (*pb.SearchResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(SearchResponse)
+	out := new(pb.SearchResponse)
 	err := c.cc.Invoke(ctx, VectorService_HybridTextSearch_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -442,9 +449,9 @@ func (c *vectorServiceClient) HybridTextSearch(ctx context.Context, in *HybridTe
 	return out, nil
 }
 
-func (c *vectorServiceClient) VectorQuery(ctx context.Context, in *VectorQueryRequest, opts ...grpc.CallOption) (*SearchResponse, error) {
+func (c *vectorServiceClient) VectorQuery(ctx context.Context, in *pb.VectorQueryRequest, opts ...grpc.CallOption) (*pb.SearchResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(SearchResponse)
+	out := new(pb.SearchResponse)
 	err := c.cc.Invoke(ctx, VectorService_VectorQuery_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -452,9 +459,9 @@ func (c *vectorServiceClient) VectorQuery(ctx context.Context, in *VectorQueryRe
 	return out, nil
 }
 
-func (c *vectorServiceClient) NamedVectorQuery(ctx context.Context, in *NamedVectorQueryRequest, opts ...grpc.CallOption) (*SearchResponse, error) {
+func (c *vectorServiceClient) NamedVectorQuery(ctx context.Context, in *pb.NamedVectorQueryRequest, opts ...grpc.CallOption) (*pb.SearchResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(SearchResponse)
+	out := new(pb.SearchResponse)
 	err := c.cc.Invoke(ctx, VectorService_NamedVectorQuery_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -462,9 +469,9 @@ func (c *vectorServiceClient) NamedVectorQuery(ctx context.Context, in *NamedVec
 	return out, nil
 }
 
-func (c *vectorServiceClient) MVVectorQuery(ctx context.Context, in *MVVectorQueryRequest, opts ...grpc.CallOption) (*SearchResponse, error) {
+func (c *vectorServiceClient) MVVectorQuery(ctx context.Context, in *pb.MVVectorQueryRequest, opts ...grpc.CallOption) (*pb.SearchResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(SearchResponse)
+	out := new(pb.SearchResponse)
 	err := c.cc.Invoke(ctx, VectorService_MVVectorQuery_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -472,9 +479,9 @@ func (c *vectorServiceClient) MVVectorQuery(ctx context.Context, in *MVVectorQue
 	return out, nil
 }
 
-func (c *vectorServiceClient) DeleteByFilter(ctx context.Context, in *DeleteByFilterRequest, opts ...grpc.CallOption) (*DeleteByFilterResponse, error) {
+func (c *vectorServiceClient) DeleteByFilter(ctx context.Context, in *pb.DeleteByFilterRequest, opts ...grpc.CallOption) (*pb.DeleteByFilterResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(DeleteByFilterResponse)
+	out := new(pb.DeleteByFilterResponse)
 	err := c.cc.Invoke(ctx, VectorService_DeleteByFilter_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -482,9 +489,9 @@ func (c *vectorServiceClient) DeleteByFilter(ctx context.Context, in *DeleteByFi
 	return out, nil
 }
 
-func (c *vectorServiceClient) Resplit(ctx context.Context, in *ResplitRequest, opts ...grpc.CallOption) (*ResplitResponse, error) {
+func (c *vectorServiceClient) Resplit(ctx context.Context, in *pb.ResplitRequest, opts ...grpc.CallOption) (*pb.ResplitResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ResplitResponse)
+	out := new(pb.ResplitResponse)
 	err := c.cc.Invoke(ctx, VectorService_Resplit_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -492,9 +499,9 @@ func (c *vectorServiceClient) Resplit(ctx context.Context, in *ResplitRequest, o
 	return out, nil
 }
 
-func (c *vectorServiceClient) ResplitCleanup(ctx context.Context, in *ResplitCleanupRequest, opts ...grpc.CallOption) (*ResplitCleanupResponse, error) {
+func (c *vectorServiceClient) ResplitCleanup(ctx context.Context, in *pb.ResplitCleanupRequest, opts ...grpc.CallOption) (*pb.ResplitCleanupResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ResplitCleanupResponse)
+	out := new(pb.ResplitCleanupResponse)
 	err := c.cc.Invoke(ctx, VectorService_ResplitCleanup_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -502,9 +509,9 @@ func (c *vectorServiceClient) ResplitCleanup(ctx context.Context, in *ResplitCle
 	return out, nil
 }
 
-func (c *vectorServiceClient) Reshard(ctx context.Context, in *ReshardRequest, opts ...grpc.CallOption) (*ReshardResponse, error) {
+func (c *vectorServiceClient) Reshard(ctx context.Context, in *pb.ReshardRequest, opts ...grpc.CallOption) (*pb.ReshardResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ReshardResponse)
+	out := new(pb.ReshardResponse)
 	err := c.cc.Invoke(ctx, VectorService_Reshard_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -512,9 +519,9 @@ func (c *vectorServiceClient) Reshard(ctx context.Context, in *ReshardRequest, o
 	return out, nil
 }
 
-func (c *vectorServiceClient) ReshardAbort(ctx context.Context, in *ReshardAbortRequest, opts ...grpc.CallOption) (*ReshardAbortResponse, error) {
+func (c *vectorServiceClient) ReshardAbort(ctx context.Context, in *pb.ReshardAbortRequest, opts ...grpc.CallOption) (*pb.ReshardAbortResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ReshardAbortResponse)
+	out := new(pb.ReshardAbortResponse)
 	err := c.cc.Invoke(ctx, VectorService_ReshardAbort_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -522,9 +529,9 @@ func (c *vectorServiceClient) ReshardAbort(ctx context.Context, in *ReshardAbort
 	return out, nil
 }
 
-func (c *vectorServiceClient) MVCreateCollection(ctx context.Context, in *MVCreateRequest, opts ...grpc.CallOption) (*MVCreateResponse, error) {
+func (c *vectorServiceClient) MVCreateCollection(ctx context.Context, in *pb.MVCreateRequest, opts ...grpc.CallOption) (*pb.MVCreateResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(MVCreateResponse)
+	out := new(pb.MVCreateResponse)
 	err := c.cc.Invoke(ctx, VectorService_MVCreateCollection_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -532,9 +539,9 @@ func (c *vectorServiceClient) MVCreateCollection(ctx context.Context, in *MVCrea
 	return out, nil
 }
 
-func (c *vectorServiceClient) MVDropCollection(ctx context.Context, in *MVDropRequest, opts ...grpc.CallOption) (*MVDropResponse, error) {
+func (c *vectorServiceClient) MVDropCollection(ctx context.Context, in *pb.MVDropRequest, opts ...grpc.CallOption) (*pb.MVDropResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(MVDropResponse)
+	out := new(pb.MVDropResponse)
 	err := c.cc.Invoke(ctx, VectorService_MVDropCollection_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -542,9 +549,9 @@ func (c *vectorServiceClient) MVDropCollection(ctx context.Context, in *MVDropRe
 	return out, nil
 }
 
-func (c *vectorServiceClient) MVAdd(ctx context.Context, in *MVAddRequest, opts ...grpc.CallOption) (*MVAddResponse, error) {
+func (c *vectorServiceClient) MVAdd(ctx context.Context, in *pb.MVAddRequest, opts ...grpc.CallOption) (*pb.MVAddResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(MVAddResponse)
+	out := new(pb.MVAddResponse)
 	err := c.cc.Invoke(ctx, VectorService_MVAdd_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -552,9 +559,9 @@ func (c *vectorServiceClient) MVAdd(ctx context.Context, in *MVAddRequest, opts 
 	return out, nil
 }
 
-func (c *vectorServiceClient) MVSearch(ctx context.Context, in *MVSearchRequest, opts ...grpc.CallOption) (*MVSearchResponse, error) {
+func (c *vectorServiceClient) MVSearch(ctx context.Context, in *pb.MVSearchRequest, opts ...grpc.CallOption) (*pb.MVSearchResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(MVSearchResponse)
+	out := new(pb.MVSearchResponse)
 	err := c.cc.Invoke(ctx, VectorService_MVSearch_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -562,9 +569,9 @@ func (c *vectorServiceClient) MVSearch(ctx context.Context, in *MVSearchRequest,
 	return out, nil
 }
 
-func (c *vectorServiceClient) MVHybridSearch(ctx context.Context, in *MVHybridRequest, opts ...grpc.CallOption) (*NamedSearchResponse, error) {
+func (c *vectorServiceClient) MVHybridSearch(ctx context.Context, in *pb.MVHybridRequest, opts ...grpc.CallOption) (*pb.NamedSearchResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(NamedSearchResponse)
+	out := new(pb.NamedSearchResponse)
 	err := c.cc.Invoke(ctx, VectorService_MVHybridSearch_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -572,9 +579,9 @@ func (c *vectorServiceClient) MVHybridSearch(ctx context.Context, in *MVHybridRe
 	return out, nil
 }
 
-func (c *vectorServiceClient) MVScroll(ctx context.Context, in *MVScrollRequest, opts ...grpc.CallOption) (*MVScrollResponse, error) {
+func (c *vectorServiceClient) MVScroll(ctx context.Context, in *pb.MVScrollRequest, opts ...grpc.CallOption) (*pb.MVScrollResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(MVScrollResponse)
+	out := new(pb.MVScrollResponse)
 	err := c.cc.Invoke(ctx, VectorService_MVScroll_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -582,9 +589,9 @@ func (c *vectorServiceClient) MVScroll(ctx context.Context, in *MVScrollRequest,
 	return out, nil
 }
 
-func (c *vectorServiceClient) MVDelete(ctx context.Context, in *MVDeleteRequest, opts ...grpc.CallOption) (*MVDeleteResponse, error) {
+func (c *vectorServiceClient) MVDelete(ctx context.Context, in *pb.MVDeleteRequest, opts ...grpc.CallOption) (*pb.MVDeleteResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(MVDeleteResponse)
+	out := new(pb.MVDeleteResponse)
 	err := c.cc.Invoke(ctx, VectorService_MVDelete_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -592,9 +599,9 @@ func (c *vectorServiceClient) MVDelete(ctx context.Context, in *MVDeleteRequest,
 	return out, nil
 }
 
-func (c *vectorServiceClient) MVGet(ctx context.Context, in *MVGetRequest, opts ...grpc.CallOption) (*MVGetResponse, error) {
+func (c *vectorServiceClient) MVGet(ctx context.Context, in *pb.MVGetRequest, opts ...grpc.CallOption) (*pb.MVGetResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(MVGetResponse)
+	out := new(pb.MVGetResponse)
 	err := c.cc.Invoke(ctx, VectorService_MVGet_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -602,9 +609,9 @@ func (c *vectorServiceClient) MVGet(ctx context.Context, in *MVGetRequest, opts 
 	return out, nil
 }
 
-func (c *vectorServiceClient) MVGetBatch(ctx context.Context, in *MVGetBatchRequest, opts ...grpc.CallOption) (*MVGetBatchResponse, error) {
+func (c *vectorServiceClient) MVGetBatch(ctx context.Context, in *pb.MVGetBatchRequest, opts ...grpc.CallOption) (*pb.MVGetBatchResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(MVGetBatchResponse)
+	out := new(pb.MVGetBatchResponse)
 	err := c.cc.Invoke(ctx, VectorService_MVGetBatch_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -612,9 +619,9 @@ func (c *vectorServiceClient) MVGetBatch(ctx context.Context, in *MVGetBatchRequ
 	return out, nil
 }
 
-func (c *vectorServiceClient) MVSetPayload(ctx context.Context, in *SetPayloadRequest, opts ...grpc.CallOption) (*PayloadResponse, error) {
+func (c *vectorServiceClient) MVSetPayload(ctx context.Context, in *pb.SetPayloadRequest, opts ...grpc.CallOption) (*pb.PayloadResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(PayloadResponse)
+	out := new(pb.PayloadResponse)
 	err := c.cc.Invoke(ctx, VectorService_MVSetPayload_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -622,9 +629,9 @@ func (c *vectorServiceClient) MVSetPayload(ctx context.Context, in *SetPayloadRe
 	return out, nil
 }
 
-func (c *vectorServiceClient) MVOverwritePayload(ctx context.Context, in *SetPayloadRequest, opts ...grpc.CallOption) (*PayloadResponse, error) {
+func (c *vectorServiceClient) MVOverwritePayload(ctx context.Context, in *pb.SetPayloadRequest, opts ...grpc.CallOption) (*pb.PayloadResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(PayloadResponse)
+	out := new(pb.PayloadResponse)
 	err := c.cc.Invoke(ctx, VectorService_MVOverwritePayload_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -632,9 +639,9 @@ func (c *vectorServiceClient) MVOverwritePayload(ctx context.Context, in *SetPay
 	return out, nil
 }
 
-func (c *vectorServiceClient) MVDeletePayloadKeys(ctx context.Context, in *DeletePayloadKeysRequest, opts ...grpc.CallOption) (*PayloadResponse, error) {
+func (c *vectorServiceClient) MVDeletePayloadKeys(ctx context.Context, in *pb.DeletePayloadKeysRequest, opts ...grpc.CallOption) (*pb.PayloadResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(PayloadResponse)
+	out := new(pb.PayloadResponse)
 	err := c.cc.Invoke(ctx, VectorService_MVDeletePayloadKeys_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -642,9 +649,9 @@ func (c *vectorServiceClient) MVDeletePayloadKeys(ctx context.Context, in *Delet
 	return out, nil
 }
 
-func (c *vectorServiceClient) MVClearPayload(ctx context.Context, in *ClearPayloadRequest, opts ...grpc.CallOption) (*PayloadResponse, error) {
+func (c *vectorServiceClient) MVClearPayload(ctx context.Context, in *pb.ClearPayloadRequest, opts ...grpc.CallOption) (*pb.PayloadResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(PayloadResponse)
+	out := new(pb.PayloadResponse)
 	err := c.cc.Invoke(ctx, VectorService_MVClearPayload_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -652,9 +659,9 @@ func (c *vectorServiceClient) MVClearPayload(ctx context.Context, in *ClearPaylo
 	return out, nil
 }
 
-func (c *vectorServiceClient) MVResplit(ctx context.Context, in *ResplitRequest, opts ...grpc.CallOption) (*ResplitResponse, error) {
+func (c *vectorServiceClient) MVResplit(ctx context.Context, in *pb.ResplitRequest, opts ...grpc.CallOption) (*pb.ResplitResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ResplitResponse)
+	out := new(pb.ResplitResponse)
 	err := c.cc.Invoke(ctx, VectorService_MVResplit_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -662,9 +669,9 @@ func (c *vectorServiceClient) MVResplit(ctx context.Context, in *ResplitRequest,
 	return out, nil
 }
 
-func (c *vectorServiceClient) MVResplitCleanup(ctx context.Context, in *ResplitCleanupRequest, opts ...grpc.CallOption) (*ResplitCleanupResponse, error) {
+func (c *vectorServiceClient) MVResplitCleanup(ctx context.Context, in *pb.ResplitCleanupRequest, opts ...grpc.CallOption) (*pb.ResplitCleanupResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ResplitCleanupResponse)
+	out := new(pb.ResplitCleanupResponse)
 	err := c.cc.Invoke(ctx, VectorService_MVResplitCleanup_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -672,9 +679,9 @@ func (c *vectorServiceClient) MVResplitCleanup(ctx context.Context, in *ResplitC
 	return out, nil
 }
 
-func (c *vectorServiceClient) MVReshard(ctx context.Context, in *ReshardRequest, opts ...grpc.CallOption) (*ReshardResponse, error) {
+func (c *vectorServiceClient) MVReshard(ctx context.Context, in *pb.ReshardRequest, opts ...grpc.CallOption) (*pb.ReshardResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ReshardResponse)
+	out := new(pb.ReshardResponse)
 	err := c.cc.Invoke(ctx, VectorService_MVReshard_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -682,9 +689,9 @@ func (c *vectorServiceClient) MVReshard(ctx context.Context, in *ReshardRequest,
 	return out, nil
 }
 
-func (c *vectorServiceClient) MVReshardAbort(ctx context.Context, in *ReshardAbortRequest, opts ...grpc.CallOption) (*ReshardAbortResponse, error) {
+func (c *vectorServiceClient) MVReshardAbort(ctx context.Context, in *pb.ReshardAbortRequest, opts ...grpc.CallOption) (*pb.ReshardAbortResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ReshardAbortResponse)
+	out := new(pb.ReshardAbortResponse)
 	err := c.cc.Invoke(ctx, VectorService_MVReshardAbort_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -692,9 +699,9 @@ func (c *vectorServiceClient) MVReshardAbort(ctx context.Context, in *ReshardAbo
 	return out, nil
 }
 
-func (c *vectorServiceClient) NamedCreate(ctx context.Context, in *NamedCreateRequest, opts ...grpc.CallOption) (*NamedCreateResponse, error) {
+func (c *vectorServiceClient) NamedCreate(ctx context.Context, in *pb.NamedCreateRequest, opts ...grpc.CallOption) (*pb.NamedCreateResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(NamedCreateResponse)
+	out := new(pb.NamedCreateResponse)
 	err := c.cc.Invoke(ctx, VectorService_NamedCreate_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -702,9 +709,9 @@ func (c *vectorServiceClient) NamedCreate(ctx context.Context, in *NamedCreateRe
 	return out, nil
 }
 
-func (c *vectorServiceClient) NamedDrop(ctx context.Context, in *NamedDropRequest, opts ...grpc.CallOption) (*NamedDropResponse, error) {
+func (c *vectorServiceClient) NamedDrop(ctx context.Context, in *pb.NamedDropRequest, opts ...grpc.CallOption) (*pb.NamedDropResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(NamedDropResponse)
+	out := new(pb.NamedDropResponse)
 	err := c.cc.Invoke(ctx, VectorService_NamedDrop_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -712,9 +719,9 @@ func (c *vectorServiceClient) NamedDrop(ctx context.Context, in *NamedDropReques
 	return out, nil
 }
 
-func (c *vectorServiceClient) NamedUpsert(ctx context.Context, in *NamedUpsertRequest, opts ...grpc.CallOption) (*NamedUpsertResponse, error) {
+func (c *vectorServiceClient) NamedUpsert(ctx context.Context, in *pb.NamedUpsertRequest, opts ...grpc.CallOption) (*pb.NamedUpsertResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(NamedUpsertResponse)
+	out := new(pb.NamedUpsertResponse)
 	err := c.cc.Invoke(ctx, VectorService_NamedUpsert_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -722,9 +729,9 @@ func (c *vectorServiceClient) NamedUpsert(ctx context.Context, in *NamedUpsertRe
 	return out, nil
 }
 
-func (c *vectorServiceClient) NamedSearch(ctx context.Context, in *NamedSearchRequest, opts ...grpc.CallOption) (*NamedSearchResponse, error) {
+func (c *vectorServiceClient) NamedSearch(ctx context.Context, in *pb.NamedSearchRequest, opts ...grpc.CallOption) (*pb.NamedSearchResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(NamedSearchResponse)
+	out := new(pb.NamedSearchResponse)
 	err := c.cc.Invoke(ctx, VectorService_NamedSearch_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -732,9 +739,9 @@ func (c *vectorServiceClient) NamedSearch(ctx context.Context, in *NamedSearchRe
 	return out, nil
 }
 
-func (c *vectorServiceClient) NamedSparseSearch(ctx context.Context, in *NamedSparseSearchRequest, opts ...grpc.CallOption) (*NamedSearchResponse, error) {
+func (c *vectorServiceClient) NamedSparseSearch(ctx context.Context, in *pb.NamedSparseSearchRequest, opts ...grpc.CallOption) (*pb.NamedSearchResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(NamedSearchResponse)
+	out := new(pb.NamedSearchResponse)
 	err := c.cc.Invoke(ctx, VectorService_NamedSparseSearch_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -742,9 +749,9 @@ func (c *vectorServiceClient) NamedSparseSearch(ctx context.Context, in *NamedSp
 	return out, nil
 }
 
-func (c *vectorServiceClient) NamedHybridSearch(ctx context.Context, in *NamedHybridRequest, opts ...grpc.CallOption) (*NamedSearchResponse, error) {
+func (c *vectorServiceClient) NamedHybridSearch(ctx context.Context, in *pb.NamedHybridRequest, opts ...grpc.CallOption) (*pb.NamedSearchResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(NamedSearchResponse)
+	out := new(pb.NamedSearchResponse)
 	err := c.cc.Invoke(ctx, VectorService_NamedHybridSearch_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -752,9 +759,9 @@ func (c *vectorServiceClient) NamedHybridSearch(ctx context.Context, in *NamedHy
 	return out, nil
 }
 
-func (c *vectorServiceClient) NamedSearchDocs(ctx context.Context, in *NamedSearchRequest, opts ...grpc.CallOption) (*NamedSearchDocsResponse, error) {
+func (c *vectorServiceClient) NamedSearchDocs(ctx context.Context, in *pb.NamedSearchRequest, opts ...grpc.CallOption) (*pb.NamedSearchDocsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(NamedSearchDocsResponse)
+	out := new(pb.NamedSearchDocsResponse)
 	err := c.cc.Invoke(ctx, VectorService_NamedSearchDocs_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -762,9 +769,9 @@ func (c *vectorServiceClient) NamedSearchDocs(ctx context.Context, in *NamedSear
 	return out, nil
 }
 
-func (c *vectorServiceClient) NamedDelete(ctx context.Context, in *NamedDeleteRequest, opts ...grpc.CallOption) (*NamedDeleteResponse, error) {
+func (c *vectorServiceClient) NamedDelete(ctx context.Context, in *pb.NamedDeleteRequest, opts ...grpc.CallOption) (*pb.NamedDeleteResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(NamedDeleteResponse)
+	out := new(pb.NamedDeleteResponse)
 	err := c.cc.Invoke(ctx, VectorService_NamedDelete_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -772,9 +779,9 @@ func (c *vectorServiceClient) NamedDelete(ctx context.Context, in *NamedDeleteRe
 	return out, nil
 }
 
-func (c *vectorServiceClient) NamedGet(ctx context.Context, in *NamedGetRequest, opts ...grpc.CallOption) (*NamedGetResponse, error) {
+func (c *vectorServiceClient) NamedGet(ctx context.Context, in *pb.NamedGetRequest, opts ...grpc.CallOption) (*pb.NamedGetResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(NamedGetResponse)
+	out := new(pb.NamedGetResponse)
 	err := c.cc.Invoke(ctx, VectorService_NamedGet_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -782,9 +789,9 @@ func (c *vectorServiceClient) NamedGet(ctx context.Context, in *NamedGetRequest,
 	return out, nil
 }
 
-func (c *vectorServiceClient) NamedGetBatch(ctx context.Context, in *NamedGetBatchRequest, opts ...grpc.CallOption) (*NamedGetBatchResponse, error) {
+func (c *vectorServiceClient) NamedGetBatch(ctx context.Context, in *pb.NamedGetBatchRequest, opts ...grpc.CallOption) (*pb.NamedGetBatchResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(NamedGetBatchResponse)
+	out := new(pb.NamedGetBatchResponse)
 	err := c.cc.Invoke(ctx, VectorService_NamedGetBatch_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -792,9 +799,9 @@ func (c *vectorServiceClient) NamedGetBatch(ctx context.Context, in *NamedGetBat
 	return out, nil
 }
 
-func (c *vectorServiceClient) NamedSetPayload(ctx context.Context, in *SetPayloadRequest, opts ...grpc.CallOption) (*PayloadResponse, error) {
+func (c *vectorServiceClient) NamedSetPayload(ctx context.Context, in *pb.SetPayloadRequest, opts ...grpc.CallOption) (*pb.PayloadResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(PayloadResponse)
+	out := new(pb.PayloadResponse)
 	err := c.cc.Invoke(ctx, VectorService_NamedSetPayload_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -802,9 +809,9 @@ func (c *vectorServiceClient) NamedSetPayload(ctx context.Context, in *SetPayloa
 	return out, nil
 }
 
-func (c *vectorServiceClient) NamedOverwritePayload(ctx context.Context, in *SetPayloadRequest, opts ...grpc.CallOption) (*PayloadResponse, error) {
+func (c *vectorServiceClient) NamedOverwritePayload(ctx context.Context, in *pb.SetPayloadRequest, opts ...grpc.CallOption) (*pb.PayloadResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(PayloadResponse)
+	out := new(pb.PayloadResponse)
 	err := c.cc.Invoke(ctx, VectorService_NamedOverwritePayload_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -812,9 +819,9 @@ func (c *vectorServiceClient) NamedOverwritePayload(ctx context.Context, in *Set
 	return out, nil
 }
 
-func (c *vectorServiceClient) NamedDeletePayloadKeys(ctx context.Context, in *DeletePayloadKeysRequest, opts ...grpc.CallOption) (*PayloadResponse, error) {
+func (c *vectorServiceClient) NamedDeletePayloadKeys(ctx context.Context, in *pb.DeletePayloadKeysRequest, opts ...grpc.CallOption) (*pb.PayloadResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(PayloadResponse)
+	out := new(pb.PayloadResponse)
 	err := c.cc.Invoke(ctx, VectorService_NamedDeletePayloadKeys_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -822,9 +829,9 @@ func (c *vectorServiceClient) NamedDeletePayloadKeys(ctx context.Context, in *De
 	return out, nil
 }
 
-func (c *vectorServiceClient) NamedClearPayload(ctx context.Context, in *ClearPayloadRequest, opts ...grpc.CallOption) (*PayloadResponse, error) {
+func (c *vectorServiceClient) NamedClearPayload(ctx context.Context, in *pb.ClearPayloadRequest, opts ...grpc.CallOption) (*pb.PayloadResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(PayloadResponse)
+	out := new(pb.PayloadResponse)
 	err := c.cc.Invoke(ctx, VectorService_NamedClearPayload_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -832,9 +839,9 @@ func (c *vectorServiceClient) NamedClearPayload(ctx context.Context, in *ClearPa
 	return out, nil
 }
 
-func (c *vectorServiceClient) NamedScroll(ctx context.Context, in *NamedScrollRequest, opts ...grpc.CallOption) (*NamedScrollResponse, error) {
+func (c *vectorServiceClient) NamedScroll(ctx context.Context, in *pb.NamedScrollRequest, opts ...grpc.CallOption) (*pb.NamedScrollResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(NamedScrollResponse)
+	out := new(pb.NamedScrollResponse)
 	err := c.cc.Invoke(ctx, VectorService_NamedScroll_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -842,9 +849,9 @@ func (c *vectorServiceClient) NamedScroll(ctx context.Context, in *NamedScrollRe
 	return out, nil
 }
 
-func (c *vectorServiceClient) Scroll(ctx context.Context, in *ScrollRequest, opts ...grpc.CallOption) (*ScrollResponse, error) {
+func (c *vectorServiceClient) Scroll(ctx context.Context, in *pb.ScrollRequest, opts ...grpc.CallOption) (*pb.ScrollResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ScrollResponse)
+	out := new(pb.ScrollResponse)
 	err := c.cc.Invoke(ctx, VectorService_Scroll_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -852,9 +859,9 @@ func (c *vectorServiceClient) Scroll(ctx context.Context, in *ScrollRequest, opt
 	return out, nil
 }
 
-func (c *vectorServiceClient) NamedGetConfig(ctx context.Context, in *NamedGetConfigRequest, opts ...grpc.CallOption) (*NamedGetConfigResponse, error) {
+func (c *vectorServiceClient) NamedGetConfig(ctx context.Context, in *pb.NamedGetConfigRequest, opts ...grpc.CallOption) (*pb.NamedGetConfigResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(NamedGetConfigResponse)
+	out := new(pb.NamedGetConfigResponse)
 	err := c.cc.Invoke(ctx, VectorService_NamedGetConfig_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -862,9 +869,9 @@ func (c *vectorServiceClient) NamedGetConfig(ctx context.Context, in *NamedGetCo
 	return out, nil
 }
 
-func (c *vectorServiceClient) CreateAlias(ctx context.Context, in *CreateAliasRequest, opts ...grpc.CallOption) (*CreateAliasResponse, error) {
+func (c *vectorServiceClient) CreateAlias(ctx context.Context, in *pb.CreateAliasRequest, opts ...grpc.CallOption) (*pb.CreateAliasResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(CreateAliasResponse)
+	out := new(pb.CreateAliasResponse)
 	err := c.cc.Invoke(ctx, VectorService_CreateAlias_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -872,9 +879,9 @@ func (c *vectorServiceClient) CreateAlias(ctx context.Context, in *CreateAliasRe
 	return out, nil
 }
 
-func (c *vectorServiceClient) DeleteAlias(ctx context.Context, in *DeleteAliasRequest, opts ...grpc.CallOption) (*DeleteAliasResponse, error) {
+func (c *vectorServiceClient) DeleteAlias(ctx context.Context, in *pb.DeleteAliasRequest, opts ...grpc.CallOption) (*pb.DeleteAliasResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(DeleteAliasResponse)
+	out := new(pb.DeleteAliasResponse)
 	err := c.cc.Invoke(ctx, VectorService_DeleteAlias_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -882,9 +889,9 @@ func (c *vectorServiceClient) DeleteAlias(ctx context.Context, in *DeleteAliasRe
 	return out, nil
 }
 
-func (c *vectorServiceClient) ListAliases(ctx context.Context, in *ListAliasesRequest, opts ...grpc.CallOption) (*ListAliasesResponse, error) {
+func (c *vectorServiceClient) ListAliases(ctx context.Context, in *pb.ListAliasesRequest, opts ...grpc.CallOption) (*pb.ListAliasesResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ListAliasesResponse)
+	out := new(pb.ListAliasesResponse)
 	err := c.cc.Invoke(ctx, VectorService_ListAliases_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -892,9 +899,9 @@ func (c *vectorServiceClient) ListAliases(ctx context.Context, in *ListAliasesRe
 	return out, nil
 }
 
-func (c *vectorServiceClient) AliasBatch(ctx context.Context, in *AliasBatchRequest, opts ...grpc.CallOption) (*AliasBatchResponse, error) {
+func (c *vectorServiceClient) AliasBatch(ctx context.Context, in *pb.AliasBatchRequest, opts ...grpc.CallOption) (*pb.AliasBatchResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(AliasBatchResponse)
+	out := new(pb.AliasBatchResponse)
 	err := c.cc.Invoke(ctx, VectorService_AliasBatch_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -902,9 +909,9 @@ func (c *vectorServiceClient) AliasBatch(ctx context.Context, in *AliasBatchRequ
 	return out, nil
 }
 
-func (c *vectorServiceClient) KeysAdd(ctx context.Context, in *KeysAddRequest, opts ...grpc.CallOption) (*KeysAck, error) {
+func (c *vectorServiceClient) KeysAdd(ctx context.Context, in *pb.KeysAddRequest, opts ...grpc.CallOption) (*pb.KeysAck, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(KeysAck)
+	out := new(pb.KeysAck)
 	err := c.cc.Invoke(ctx, VectorService_KeysAdd_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -912,9 +919,9 @@ func (c *vectorServiceClient) KeysAdd(ctx context.Context, in *KeysAddRequest, o
 	return out, nil
 }
 
-func (c *vectorServiceClient) KeysRevoke(ctx context.Context, in *KeysRevokeRequest, opts ...grpc.CallOption) (*KeysAck, error) {
+func (c *vectorServiceClient) KeysRevoke(ctx context.Context, in *pb.KeysRevokeRequest, opts ...grpc.CallOption) (*pb.KeysAck, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(KeysAck)
+	out := new(pb.KeysAck)
 	err := c.cc.Invoke(ctx, VectorService_KeysRevoke_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -922,9 +929,9 @@ func (c *vectorServiceClient) KeysRevoke(ctx context.Context, in *KeysRevokeRequ
 	return out, nil
 }
 
-func (c *vectorServiceClient) KeysList(ctx context.Context, in *KeysListRequest, opts ...grpc.CallOption) (*KeysListResponse, error) {
+func (c *vectorServiceClient) KeysList(ctx context.Context, in *pb.KeysListRequest, opts ...grpc.CallOption) (*pb.KeysListResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(KeysListResponse)
+	out := new(pb.KeysListResponse)
 	err := c.cc.Invoke(ctx, VectorService_KeysList_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -936,11 +943,11 @@ func (c *vectorServiceClient) KeysList(ctx context.Context, in *KeysListRequest,
 // All implementations must embed UnimplementedVectorServiceServer
 // for forward compatibility.
 type VectorServiceServer interface {
-	Health(context.Context, *HealthRequest) (*HealthResponse, error)
-	CreateCollection(context.Context, *CreateCollectionRequest) (*CreateCollectionResponse, error)
-	DropCollection(context.Context, *DropCollectionRequest) (*DropCollectionResponse, error)
-	Upsert(context.Context, *UpsertRequest) (*UpsertResponse, error)
-	Delete(context.Context, *DeleteRequest) (*DeleteResponse, error)
+	Health(context.Context, *pb.HealthRequest) (*pb.HealthResponse, error)
+	CreateCollection(context.Context, *pb.CreateCollectionRequest) (*pb.CreateCollectionResponse, error)
+	DropCollection(context.Context, *pb.DropCollectionRequest) (*pb.DropCollectionResponse, error)
+	Upsert(context.Context, *pb.UpsertRequest) (*pb.UpsertResponse, error)
+	Delete(context.Context, *pb.DeleteRequest) (*pb.DeleteResponse, error)
 	// Get-by-id retrieves a dense point: its vector + payload + remaining TTL.
 	// found=false is the not-found flag (absent/tombstoned/expired) — NOT a gRPC
 	// error — so a partitioned point-op can distinguish "not in this partition".
@@ -949,36 +956,36 @@ type VectorServiceServer interface {
 	// re-insert): SetPayload merges, OverwritePayload replaces the whole payload,
 	// DeletePayloadKeys removes listed keys, ClearPayload empties it. applied=false
 	// means the point was absent (→ NotFound at the edge).
-	Get(context.Context, *GetRequest) (*GetResponse, error)
+	Get(context.Context, *pb.GetRequest) (*pb.GetResponse, error)
 	// GetBatch retrieves MANY dense points by id in ONE op (the coordinator
 	// scatters the ids to their owning partitions, asks each only for its subset,
 	// and merges). A partial miss is NORMAL — absent ids come back in the missing
 	// list, NEVER a NotFound error (unlike single Get). points carry their id so a
 	// caller knows which point is which; with_vector/with_payload gate projections.
-	GetBatch(context.Context, *GetBatchRequest) (*GetBatchResponse, error)
-	SetPayload(context.Context, *SetPayloadRequest) (*PayloadResponse, error)
-	OverwritePayload(context.Context, *SetPayloadRequest) (*PayloadResponse, error)
-	DeletePayloadKeys(context.Context, *DeletePayloadKeysRequest) (*PayloadResponse, error)
-	ClearPayload(context.Context, *ClearPayloadRequest) (*PayloadResponse, error)
-	Search(context.Context, *SearchRequest) (*SearchResponse, error)
-	SearchDocs(context.Context, *SearchRequest) (*SearchDocsResponse, error)
-	SearchGroups(context.Context, *SearchGroupsRequest) (*SearchGroupsResponse, error)
-	HybridSearch(context.Context, *HybridRequest) (*SearchResponse, error)
+	GetBatch(context.Context, *pb.GetBatchRequest) (*pb.GetBatchResponse, error)
+	SetPayload(context.Context, *pb.SetPayloadRequest) (*pb.PayloadResponse, error)
+	OverwritePayload(context.Context, *pb.SetPayloadRequest) (*pb.PayloadResponse, error)
+	DeletePayloadKeys(context.Context, *pb.DeletePayloadKeysRequest) (*pb.PayloadResponse, error)
+	ClearPayload(context.Context, *pb.ClearPayloadRequest) (*pb.PayloadResponse, error)
+	Search(context.Context, *pb.SearchRequest) (*pb.SearchResponse, error)
+	SearchDocs(context.Context, *pb.SearchRequest) (*pb.SearchDocsResponse, error)
+	SearchGroups(context.Context, *pb.SearchGroupsRequest) (*pb.SearchGroupsResponse, error)
+	HybridSearch(context.Context, *pb.HybridRequest) (*pb.SearchResponse, error)
 	// TextSearch runs a BM25 full-text search over a FullText collection: the server
 	// tokenizes + scores the raw query text and returns enriched documents (content +
 	// metadata), so it reuses SearchDocsResponse (like SearchDocs).
-	TextSearch(context.Context, *TextSearchRequest) (*SearchDocsResponse, error)
+	TextSearch(context.Context, *pb.TextSearchRequest) (*pb.SearchDocsResponse, error)
 	// HybridTextSearch fuses a dense KNN lane with a BM25 full-text lane (raw query
 	// text analyzed server-side). Results carry the fused score + dense distance plus
 	// the degraded/missing partition trailer — so it reuses SearchResponse (like
 	// HybridSearch).
-	HybridTextSearch(context.Context, *HybridTextRequest) (*SearchResponse, error)
+	HybridTextSearch(context.Context, *pb.HybridTextRequest) (*pb.SearchResponse, error)
 	// VectorQuery runs the unified Query API (Qdrant-parity): a QuerySpec carries a
 	// root leaf + N prefetch leaves + a combine mode (FUSION/RERANK) + fusion
 	// config. v1 = the dense family, single-level. Results carry the fused/reranked
 	// score + dense distance, plus the degraded/missing partition trailer — so it
 	// reuses SearchResponse (like HybridSearch).
-	VectorQuery(context.Context, *VectorQueryRequest) (*SearchResponse, error)
+	VectorQuery(context.Context, *pb.VectorQueryRequest) (*pb.SearchResponse, error)
 	// NamedVectorQuery runs the unified Query API over a NAMED collection: the same
 	// QuerySpec (root + N prefetch leaves + FUSION/RERANK mode + fusion config), but
 	// EVERY leaf targets a named vector SPACE (NamedDenseLeaf / NamedSparseLeaf), so
@@ -987,7 +994,7 @@ type VectorServiceServer interface {
 	// (fused/reranked score + dense distance + the degraded/missing partition
 	// trailer) and rides the vector_named_query op. Distinct RPC from VectorQuery
 	// exactly as NamedHybridSearch is distinct from HybridSearch.
-	NamedVectorQuery(context.Context, *NamedVectorQueryRequest) (*SearchResponse, error)
+	NamedVectorQuery(context.Context, *pb.NamedVectorQueryRequest) (*pb.SearchResponse, error)
 	// MVVectorQuery runs the unified Query API over a MULTI-VECTOR (late-interaction)
 	// collection: the same QuerySpec (root + N prefetch leaves + FUSION/RERANK mode +
 	// fusion config), but the leaves are MV-family leaves — a MaxSim leaf (MVMaxSimLeaf,
@@ -996,84 +1003,84 @@ type VectorServiceServer interface {
 	// NamedVectorQuery: it reuses SearchResponse (fused/reranked score + the
 	// degraded/missing partition trailer) and rides the vector_mv_query op. Distinct
 	// RPC exactly as MVHybridSearch is distinct from HybridSearch.
-	MVVectorQuery(context.Context, *MVVectorQueryRequest) (*SearchResponse, error)
-	DeleteByFilter(context.Context, *DeleteByFilterRequest) (*DeleteByFilterResponse, error)
+	MVVectorQuery(context.Context, *pb.MVVectorQueryRequest) (*pb.SearchResponse, error)
+	DeleteByFilter(context.Context, *pb.DeleteByFilterRequest) (*pb.DeleteByFilterResponse, error)
 	// Resplit re-partitions a collection offline (synchronous; quiesce writes
 	// first). ResplitCleanup drops the orphaned pre-resplit partitions.
-	Resplit(context.Context, *ResplitRequest) (*ResplitResponse, error)
-	ResplitCleanup(context.Context, *ResplitCleanupRequest) (*ResplitCleanupResponse, error)
+	Resplit(context.Context, *pb.ResplitRequest) (*pb.ResplitResponse, error)
+	ResplitCleanup(context.Context, *pb.ResplitCleanupRequest) (*pb.ResplitCleanupResponse, error)
 	// Reshard re-partitions a collection ONLINE (synchronous, but reads AND
 	// writes stay live for the duration — no quiesce). The orchestrator dual-
 	// writes to old+new gen during a streamed if-absent copy, then flips the
 	// catalog at cutover. ReshardAbort aborts an in-flight reshard pre-cutover.
-	Reshard(context.Context, *ReshardRequest) (*ReshardResponse, error)
-	ReshardAbort(context.Context, *ReshardAbortRequest) (*ReshardAbortResponse, error)
+	Reshard(context.Context, *pb.ReshardRequest) (*pb.ReshardResponse, error)
+	ReshardAbort(context.Context, *pb.ReshardAbortRequest) (*pb.ReshardAbortResponse, error)
 	// Late interaction (multi-vector / ColBERT MaxSim).
-	MVCreateCollection(context.Context, *MVCreateRequest) (*MVCreateResponse, error)
-	MVDropCollection(context.Context, *MVDropRequest) (*MVDropResponse, error)
-	MVAdd(context.Context, *MVAddRequest) (*MVAddResponse, error)
-	MVSearch(context.Context, *MVSearchRequest) (*MVSearchResponse, error)
+	MVCreateCollection(context.Context, *pb.MVCreateRequest) (*pb.MVCreateResponse, error)
+	MVDropCollection(context.Context, *pb.MVDropRequest) (*pb.MVDropResponse, error)
+	MVAdd(context.Context, *pb.MVAddRequest) (*pb.MVAddResponse, error)
+	MVSearch(context.Context, *pb.MVSearchRequest) (*pb.MVSearchResponse, error)
 	// MVHybridSearch fuses an MV collection's MaxSim (late-interaction dense) lane
 	// and its per-doc sparse lane into the top-k (cross-modality hybrid). Results
 	// carry the fused score + dense distance, mirroring NamedHybridSearch — so it
 	// reuses NamedSearchResponse.
-	MVHybridSearch(context.Context, *MVHybridRequest) (*NamedSearchResponse, error)
+	MVHybridSearch(context.Context, *pb.MVHybridRequest) (*pb.NamedSearchResponse, error)
 	// MVScroll lists live multi-vector documents (id + payload, no token matrix)
 	// with cursor pagination. Mirrors the dense Scroll / NamedScroll surface.
-	MVScroll(context.Context, *MVScrollRequest) (*MVScrollResponse, error)
-	MVDelete(context.Context, *MVDeleteRequest) (*MVDeleteResponse, error)
+	MVScroll(context.Context, *pb.MVScrollRequest) (*pb.MVScrollResponse, error)
+	MVDelete(context.Context, *pb.MVDeleteRequest) (*pb.MVDeleteResponse, error)
 	// MV get-by-id + in-place payload mutation (see Get/SetPayload/.../ClearPayload
 	// for the dense equivalents; MVGet returns the doc's token matrix instead of a
 	// single vector). found/applied carry the not-found flag as above.
-	MVGet(context.Context, *MVGetRequest) (*MVGetResponse, error)
+	MVGet(context.Context, *pb.MVGetRequest) (*pb.MVGetResponse, error)
 	// MVGetBatch retrieves MANY multi-vector documents by id in ONE op (the
 	// coordinator scatters the ids to their owning partitions, asks each only for
 	// its subset, and merges). A partial miss is NORMAL — absent ids come back in
 	// the missing list, NEVER a NotFound error (unlike single MVGet). The MV clone
 	// of NamedGetBatch; each point carries its token matrix + payload (MV has NO
 	// ttl).
-	MVGetBatch(context.Context, *MVGetBatchRequest) (*MVGetBatchResponse, error)
-	MVSetPayload(context.Context, *SetPayloadRequest) (*PayloadResponse, error)
-	MVOverwritePayload(context.Context, *SetPayloadRequest) (*PayloadResponse, error)
-	MVDeletePayloadKeys(context.Context, *DeletePayloadKeysRequest) (*PayloadResponse, error)
-	MVClearPayload(context.Context, *ClearPayloadRequest) (*PayloadResponse, error)
-	MVResplit(context.Context, *ResplitRequest) (*ResplitResponse, error)
-	MVResplitCleanup(context.Context, *ResplitCleanupRequest) (*ResplitCleanupResponse, error)
+	MVGetBatch(context.Context, *pb.MVGetBatchRequest) (*pb.MVGetBatchResponse, error)
+	MVSetPayload(context.Context, *pb.SetPayloadRequest) (*pb.PayloadResponse, error)
+	MVOverwritePayload(context.Context, *pb.SetPayloadRequest) (*pb.PayloadResponse, error)
+	MVDeletePayloadKeys(context.Context, *pb.DeletePayloadKeysRequest) (*pb.PayloadResponse, error)
+	MVClearPayload(context.Context, *pb.ClearPayloadRequest) (*pb.PayloadResponse, error)
+	MVResplit(context.Context, *pb.ResplitRequest) (*pb.ResplitResponse, error)
+	MVResplitCleanup(context.Context, *pb.ResplitCleanupRequest) (*pb.ResplitCleanupResponse, error)
 	// Online reshard for multi-vector collections (see Reshard/ReshardAbort).
-	MVReshard(context.Context, *ReshardRequest) (*ReshardResponse, error)
-	MVReshardAbort(context.Context, *ReshardAbortRequest) (*ReshardAbortResponse, error)
+	MVReshard(context.Context, *pb.ReshardRequest) (*pb.ReshardResponse, error)
+	MVReshardAbort(context.Context, *pb.ReshardAbortRequest) (*pb.ReshardAbortResponse, error)
 	// Named vectors (Qdrant-style per-point multi-vector-space collections): a
 	// collection holds a MAP of named dense vector spaces, each its own HNSW
 	// index, sharing one per-point payload + id namespace. A point provides a map
 	// of named vectors; a search selects which named space to query. Mirrors the
 	// dense/MV transport surface; filter/metadata ride as JSON strings.
-	NamedCreate(context.Context, *NamedCreateRequest) (*NamedCreateResponse, error)
-	NamedDrop(context.Context, *NamedDropRequest) (*NamedDropResponse, error)
-	NamedUpsert(context.Context, *NamedUpsertRequest) (*NamedUpsertResponse, error)
-	NamedSearch(context.Context, *NamedSearchRequest) (*NamedSearchResponse, error)
-	NamedSparseSearch(context.Context, *NamedSparseSearchRequest) (*NamedSearchResponse, error)
-	NamedHybridSearch(context.Context, *NamedHybridRequest) (*NamedSearchResponse, error)
-	NamedSearchDocs(context.Context, *NamedSearchRequest) (*NamedSearchDocsResponse, error)
-	NamedDelete(context.Context, *NamedDeleteRequest) (*NamedDeleteResponse, error)
+	NamedCreate(context.Context, *pb.NamedCreateRequest) (*pb.NamedCreateResponse, error)
+	NamedDrop(context.Context, *pb.NamedDropRequest) (*pb.NamedDropResponse, error)
+	NamedUpsert(context.Context, *pb.NamedUpsertRequest) (*pb.NamedUpsertResponse, error)
+	NamedSearch(context.Context, *pb.NamedSearchRequest) (*pb.NamedSearchResponse, error)
+	NamedSparseSearch(context.Context, *pb.NamedSparseSearchRequest) (*pb.NamedSearchResponse, error)
+	NamedHybridSearch(context.Context, *pb.NamedHybridRequest) (*pb.NamedSearchResponse, error)
+	NamedSearchDocs(context.Context, *pb.NamedSearchRequest) (*pb.NamedSearchDocsResponse, error)
+	NamedDelete(context.Context, *pb.NamedDeleteRequest) (*pb.NamedDeleteResponse, error)
 	// Named get-by-id + in-place payload mutation (see Get/SetPayload/.../
 	// ClearPayload for the dense equivalents; NamedGet returns the per-point map of
 	// named-space -> vector instead of a single vector). found/applied carry the
 	// not-found flag as above. The payload is shared per point across spaces.
-	NamedGet(context.Context, *NamedGetRequest) (*NamedGetResponse, error)
+	NamedGet(context.Context, *pb.NamedGetRequest) (*pb.NamedGetResponse, error)
 	// NamedGetBatch retrieves MANY named-vector points by id in ONE op (the
 	// coordinator scatters the ids to their owning partitions, asks each only for
 	// its subset, and merges). A partial miss is NORMAL — absent ids come back in
 	// the missing list, NEVER a NotFound error (unlike single NamedGet). The named
 	// clone of GetBatch; each point carries its per-space vectors map + payload +
 	// ttl_ms.
-	NamedGetBatch(context.Context, *NamedGetBatchRequest) (*NamedGetBatchResponse, error)
-	NamedSetPayload(context.Context, *SetPayloadRequest) (*PayloadResponse, error)
-	NamedOverwritePayload(context.Context, *SetPayloadRequest) (*PayloadResponse, error)
-	NamedDeletePayloadKeys(context.Context, *DeletePayloadKeysRequest) (*PayloadResponse, error)
-	NamedClearPayload(context.Context, *ClearPayloadRequest) (*PayloadResponse, error)
-	NamedScroll(context.Context, *NamedScrollRequest) (*NamedScrollResponse, error)
-	Scroll(context.Context, *ScrollRequest) (*ScrollResponse, error)
-	NamedGetConfig(context.Context, *NamedGetConfigRequest) (*NamedGetConfigResponse, error)
+	NamedGetBatch(context.Context, *pb.NamedGetBatchRequest) (*pb.NamedGetBatchResponse, error)
+	NamedSetPayload(context.Context, *pb.SetPayloadRequest) (*pb.PayloadResponse, error)
+	NamedOverwritePayload(context.Context, *pb.SetPayloadRequest) (*pb.PayloadResponse, error)
+	NamedDeletePayloadKeys(context.Context, *pb.DeletePayloadKeysRequest) (*pb.PayloadResponse, error)
+	NamedClearPayload(context.Context, *pb.ClearPayloadRequest) (*pb.PayloadResponse, error)
+	NamedScroll(context.Context, *pb.NamedScrollRequest) (*pb.NamedScrollResponse, error)
+	Scroll(context.Context, *pb.ScrollRequest) (*pb.ScrollResponse, error)
+	NamedGetConfig(context.Context, *pb.NamedGetConfigRequest) (*pb.NamedGetConfigResponse, error)
 	// Collection aliases (alias -> collection resolution + atomic swap). An alias
 	// is a name that resolves to a real collection, so data-plane RPCs on the
 	// alias transparently route to the target (resolution is in the engine). These
@@ -1083,10 +1090,10 @@ type VectorServiceServer interface {
 	// window. CreateAlias/DeleteAlias are single-action conveniences. ListAliases
 	// is a local read (optional collection filter). Validation errors (target
 	// missing / shadow / reserved char / target-is-alias) map to InvalidArgument.
-	CreateAlias(context.Context, *CreateAliasRequest) (*CreateAliasResponse, error)
-	DeleteAlias(context.Context, *DeleteAliasRequest) (*DeleteAliasResponse, error)
-	ListAliases(context.Context, *ListAliasesRequest) (*ListAliasesResponse, error)
-	AliasBatch(context.Context, *AliasBatchRequest) (*AliasBatchResponse, error)
+	CreateAlias(context.Context, *pb.CreateAliasRequest) (*pb.CreateAliasResponse, error)
+	DeleteAlias(context.Context, *pb.DeleteAliasRequest) (*pb.DeleteAliasResponse, error)
+	ListAliases(context.Context, *pb.ListAliasesRequest) (*pb.ListAliasesResponse, error)
+	AliasBatch(context.Context, *pb.AliasBatchRequest) (*pb.AliasBatchResponse, error)
 	// Online key-admin (add/revoke/list API keys at RUNTIME, no restart). These are
 	// admin-scope-gated coordinator virtual-ops (__keys_add__/__keys_revoke__/
 	// __keys_list__) intercepted at the dispatcher and applied to the node's live
@@ -1095,9 +1102,9 @@ type VectorServiceServer interface {
 	// is touched. SECURITY: KeysList returns ONLY the redacted view (fingerprint +
 	// tenant + scopes + cert_cn) — the raw token is NEVER serialized at any edge;
 	// KeysAdd/KeysRevoke return an empty ack and never echo the token.
-	KeysAdd(context.Context, *KeysAddRequest) (*KeysAck, error)
-	KeysRevoke(context.Context, *KeysRevokeRequest) (*KeysAck, error)
-	KeysList(context.Context, *KeysListRequest) (*KeysListResponse, error)
+	KeysAdd(context.Context, *pb.KeysAddRequest) (*pb.KeysAck, error)
+	KeysRevoke(context.Context, *pb.KeysRevokeRequest) (*pb.KeysAck, error)
+	KeysList(context.Context, *pb.KeysListRequest) (*pb.KeysListResponse, error)
 	mustEmbedUnimplementedVectorServiceServer()
 }
 
@@ -1108,202 +1115,202 @@ type VectorServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedVectorServiceServer struct{}
 
-func (UnimplementedVectorServiceServer) Health(context.Context, *HealthRequest) (*HealthResponse, error) {
+func (UnimplementedVectorServiceServer) Health(context.Context, *pb.HealthRequest) (*pb.HealthResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Health not implemented")
 }
-func (UnimplementedVectorServiceServer) CreateCollection(context.Context, *CreateCollectionRequest) (*CreateCollectionResponse, error) {
+func (UnimplementedVectorServiceServer) CreateCollection(context.Context, *pb.CreateCollectionRequest) (*pb.CreateCollectionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateCollection not implemented")
 }
-func (UnimplementedVectorServiceServer) DropCollection(context.Context, *DropCollectionRequest) (*DropCollectionResponse, error) {
+func (UnimplementedVectorServiceServer) DropCollection(context.Context, *pb.DropCollectionRequest) (*pb.DropCollectionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DropCollection not implemented")
 }
-func (UnimplementedVectorServiceServer) Upsert(context.Context, *UpsertRequest) (*UpsertResponse, error) {
+func (UnimplementedVectorServiceServer) Upsert(context.Context, *pb.UpsertRequest) (*pb.UpsertResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Upsert not implemented")
 }
-func (UnimplementedVectorServiceServer) Delete(context.Context, *DeleteRequest) (*DeleteResponse, error) {
+func (UnimplementedVectorServiceServer) Delete(context.Context, *pb.DeleteRequest) (*pb.DeleteResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Delete not implemented")
 }
-func (UnimplementedVectorServiceServer) Get(context.Context, *GetRequest) (*GetResponse, error) {
+func (UnimplementedVectorServiceServer) Get(context.Context, *pb.GetRequest) (*pb.GetResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Get not implemented")
 }
-func (UnimplementedVectorServiceServer) GetBatch(context.Context, *GetBatchRequest) (*GetBatchResponse, error) {
+func (UnimplementedVectorServiceServer) GetBatch(context.Context, *pb.GetBatchRequest) (*pb.GetBatchResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetBatch not implemented")
 }
-func (UnimplementedVectorServiceServer) SetPayload(context.Context, *SetPayloadRequest) (*PayloadResponse, error) {
+func (UnimplementedVectorServiceServer) SetPayload(context.Context, *pb.SetPayloadRequest) (*pb.PayloadResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetPayload not implemented")
 }
-func (UnimplementedVectorServiceServer) OverwritePayload(context.Context, *SetPayloadRequest) (*PayloadResponse, error) {
+func (UnimplementedVectorServiceServer) OverwritePayload(context.Context, *pb.SetPayloadRequest) (*pb.PayloadResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method OverwritePayload not implemented")
 }
-func (UnimplementedVectorServiceServer) DeletePayloadKeys(context.Context, *DeletePayloadKeysRequest) (*PayloadResponse, error) {
+func (UnimplementedVectorServiceServer) DeletePayloadKeys(context.Context, *pb.DeletePayloadKeysRequest) (*pb.PayloadResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeletePayloadKeys not implemented")
 }
-func (UnimplementedVectorServiceServer) ClearPayload(context.Context, *ClearPayloadRequest) (*PayloadResponse, error) {
+func (UnimplementedVectorServiceServer) ClearPayload(context.Context, *pb.ClearPayloadRequest) (*pb.PayloadResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ClearPayload not implemented")
 }
-func (UnimplementedVectorServiceServer) Search(context.Context, *SearchRequest) (*SearchResponse, error) {
+func (UnimplementedVectorServiceServer) Search(context.Context, *pb.SearchRequest) (*pb.SearchResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Search not implemented")
 }
-func (UnimplementedVectorServiceServer) SearchDocs(context.Context, *SearchRequest) (*SearchDocsResponse, error) {
+func (UnimplementedVectorServiceServer) SearchDocs(context.Context, *pb.SearchRequest) (*pb.SearchDocsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SearchDocs not implemented")
 }
-func (UnimplementedVectorServiceServer) SearchGroups(context.Context, *SearchGroupsRequest) (*SearchGroupsResponse, error) {
+func (UnimplementedVectorServiceServer) SearchGroups(context.Context, *pb.SearchGroupsRequest) (*pb.SearchGroupsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SearchGroups not implemented")
 }
-func (UnimplementedVectorServiceServer) HybridSearch(context.Context, *HybridRequest) (*SearchResponse, error) {
+func (UnimplementedVectorServiceServer) HybridSearch(context.Context, *pb.HybridRequest) (*pb.SearchResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method HybridSearch not implemented")
 }
-func (UnimplementedVectorServiceServer) TextSearch(context.Context, *TextSearchRequest) (*SearchDocsResponse, error) {
+func (UnimplementedVectorServiceServer) TextSearch(context.Context, *pb.TextSearchRequest) (*pb.SearchDocsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method TextSearch not implemented")
 }
-func (UnimplementedVectorServiceServer) HybridTextSearch(context.Context, *HybridTextRequest) (*SearchResponse, error) {
+func (UnimplementedVectorServiceServer) HybridTextSearch(context.Context, *pb.HybridTextRequest) (*pb.SearchResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method HybridTextSearch not implemented")
 }
-func (UnimplementedVectorServiceServer) VectorQuery(context.Context, *VectorQueryRequest) (*SearchResponse, error) {
+func (UnimplementedVectorServiceServer) VectorQuery(context.Context, *pb.VectorQueryRequest) (*pb.SearchResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method VectorQuery not implemented")
 }
-func (UnimplementedVectorServiceServer) NamedVectorQuery(context.Context, *NamedVectorQueryRequest) (*SearchResponse, error) {
+func (UnimplementedVectorServiceServer) NamedVectorQuery(context.Context, *pb.NamedVectorQueryRequest) (*pb.SearchResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method NamedVectorQuery not implemented")
 }
-func (UnimplementedVectorServiceServer) MVVectorQuery(context.Context, *MVVectorQueryRequest) (*SearchResponse, error) {
+func (UnimplementedVectorServiceServer) MVVectorQuery(context.Context, *pb.MVVectorQueryRequest) (*pb.SearchResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method MVVectorQuery not implemented")
 }
-func (UnimplementedVectorServiceServer) DeleteByFilter(context.Context, *DeleteByFilterRequest) (*DeleteByFilterResponse, error) {
+func (UnimplementedVectorServiceServer) DeleteByFilter(context.Context, *pb.DeleteByFilterRequest) (*pb.DeleteByFilterResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteByFilter not implemented")
 }
-func (UnimplementedVectorServiceServer) Resplit(context.Context, *ResplitRequest) (*ResplitResponse, error) {
+func (UnimplementedVectorServiceServer) Resplit(context.Context, *pb.ResplitRequest) (*pb.ResplitResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Resplit not implemented")
 }
-func (UnimplementedVectorServiceServer) ResplitCleanup(context.Context, *ResplitCleanupRequest) (*ResplitCleanupResponse, error) {
+func (UnimplementedVectorServiceServer) ResplitCleanup(context.Context, *pb.ResplitCleanupRequest) (*pb.ResplitCleanupResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ResplitCleanup not implemented")
 }
-func (UnimplementedVectorServiceServer) Reshard(context.Context, *ReshardRequest) (*ReshardResponse, error) {
+func (UnimplementedVectorServiceServer) Reshard(context.Context, *pb.ReshardRequest) (*pb.ReshardResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Reshard not implemented")
 }
-func (UnimplementedVectorServiceServer) ReshardAbort(context.Context, *ReshardAbortRequest) (*ReshardAbortResponse, error) {
+func (UnimplementedVectorServiceServer) ReshardAbort(context.Context, *pb.ReshardAbortRequest) (*pb.ReshardAbortResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReshardAbort not implemented")
 }
-func (UnimplementedVectorServiceServer) MVCreateCollection(context.Context, *MVCreateRequest) (*MVCreateResponse, error) {
+func (UnimplementedVectorServiceServer) MVCreateCollection(context.Context, *pb.MVCreateRequest) (*pb.MVCreateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method MVCreateCollection not implemented")
 }
-func (UnimplementedVectorServiceServer) MVDropCollection(context.Context, *MVDropRequest) (*MVDropResponse, error) {
+func (UnimplementedVectorServiceServer) MVDropCollection(context.Context, *pb.MVDropRequest) (*pb.MVDropResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method MVDropCollection not implemented")
 }
-func (UnimplementedVectorServiceServer) MVAdd(context.Context, *MVAddRequest) (*MVAddResponse, error) {
+func (UnimplementedVectorServiceServer) MVAdd(context.Context, *pb.MVAddRequest) (*pb.MVAddResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method MVAdd not implemented")
 }
-func (UnimplementedVectorServiceServer) MVSearch(context.Context, *MVSearchRequest) (*MVSearchResponse, error) {
+func (UnimplementedVectorServiceServer) MVSearch(context.Context, *pb.MVSearchRequest) (*pb.MVSearchResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method MVSearch not implemented")
 }
-func (UnimplementedVectorServiceServer) MVHybridSearch(context.Context, *MVHybridRequest) (*NamedSearchResponse, error) {
+func (UnimplementedVectorServiceServer) MVHybridSearch(context.Context, *pb.MVHybridRequest) (*pb.NamedSearchResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method MVHybridSearch not implemented")
 }
-func (UnimplementedVectorServiceServer) MVScroll(context.Context, *MVScrollRequest) (*MVScrollResponse, error) {
+func (UnimplementedVectorServiceServer) MVScroll(context.Context, *pb.MVScrollRequest) (*pb.MVScrollResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method MVScroll not implemented")
 }
-func (UnimplementedVectorServiceServer) MVDelete(context.Context, *MVDeleteRequest) (*MVDeleteResponse, error) {
+func (UnimplementedVectorServiceServer) MVDelete(context.Context, *pb.MVDeleteRequest) (*pb.MVDeleteResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method MVDelete not implemented")
 }
-func (UnimplementedVectorServiceServer) MVGet(context.Context, *MVGetRequest) (*MVGetResponse, error) {
+func (UnimplementedVectorServiceServer) MVGet(context.Context, *pb.MVGetRequest) (*pb.MVGetResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method MVGet not implemented")
 }
-func (UnimplementedVectorServiceServer) MVGetBatch(context.Context, *MVGetBatchRequest) (*MVGetBatchResponse, error) {
+func (UnimplementedVectorServiceServer) MVGetBatch(context.Context, *pb.MVGetBatchRequest) (*pb.MVGetBatchResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method MVGetBatch not implemented")
 }
-func (UnimplementedVectorServiceServer) MVSetPayload(context.Context, *SetPayloadRequest) (*PayloadResponse, error) {
+func (UnimplementedVectorServiceServer) MVSetPayload(context.Context, *pb.SetPayloadRequest) (*pb.PayloadResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method MVSetPayload not implemented")
 }
-func (UnimplementedVectorServiceServer) MVOverwritePayload(context.Context, *SetPayloadRequest) (*PayloadResponse, error) {
+func (UnimplementedVectorServiceServer) MVOverwritePayload(context.Context, *pb.SetPayloadRequest) (*pb.PayloadResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method MVOverwritePayload not implemented")
 }
-func (UnimplementedVectorServiceServer) MVDeletePayloadKeys(context.Context, *DeletePayloadKeysRequest) (*PayloadResponse, error) {
+func (UnimplementedVectorServiceServer) MVDeletePayloadKeys(context.Context, *pb.DeletePayloadKeysRequest) (*pb.PayloadResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method MVDeletePayloadKeys not implemented")
 }
-func (UnimplementedVectorServiceServer) MVClearPayload(context.Context, *ClearPayloadRequest) (*PayloadResponse, error) {
+func (UnimplementedVectorServiceServer) MVClearPayload(context.Context, *pb.ClearPayloadRequest) (*pb.PayloadResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method MVClearPayload not implemented")
 }
-func (UnimplementedVectorServiceServer) MVResplit(context.Context, *ResplitRequest) (*ResplitResponse, error) {
+func (UnimplementedVectorServiceServer) MVResplit(context.Context, *pb.ResplitRequest) (*pb.ResplitResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method MVResplit not implemented")
 }
-func (UnimplementedVectorServiceServer) MVResplitCleanup(context.Context, *ResplitCleanupRequest) (*ResplitCleanupResponse, error) {
+func (UnimplementedVectorServiceServer) MVResplitCleanup(context.Context, *pb.ResplitCleanupRequest) (*pb.ResplitCleanupResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method MVResplitCleanup not implemented")
 }
-func (UnimplementedVectorServiceServer) MVReshard(context.Context, *ReshardRequest) (*ReshardResponse, error) {
+func (UnimplementedVectorServiceServer) MVReshard(context.Context, *pb.ReshardRequest) (*pb.ReshardResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method MVReshard not implemented")
 }
-func (UnimplementedVectorServiceServer) MVReshardAbort(context.Context, *ReshardAbortRequest) (*ReshardAbortResponse, error) {
+func (UnimplementedVectorServiceServer) MVReshardAbort(context.Context, *pb.ReshardAbortRequest) (*pb.ReshardAbortResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method MVReshardAbort not implemented")
 }
-func (UnimplementedVectorServiceServer) NamedCreate(context.Context, *NamedCreateRequest) (*NamedCreateResponse, error) {
+func (UnimplementedVectorServiceServer) NamedCreate(context.Context, *pb.NamedCreateRequest) (*pb.NamedCreateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method NamedCreate not implemented")
 }
-func (UnimplementedVectorServiceServer) NamedDrop(context.Context, *NamedDropRequest) (*NamedDropResponse, error) {
+func (UnimplementedVectorServiceServer) NamedDrop(context.Context, *pb.NamedDropRequest) (*pb.NamedDropResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method NamedDrop not implemented")
 }
-func (UnimplementedVectorServiceServer) NamedUpsert(context.Context, *NamedUpsertRequest) (*NamedUpsertResponse, error) {
+func (UnimplementedVectorServiceServer) NamedUpsert(context.Context, *pb.NamedUpsertRequest) (*pb.NamedUpsertResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method NamedUpsert not implemented")
 }
-func (UnimplementedVectorServiceServer) NamedSearch(context.Context, *NamedSearchRequest) (*NamedSearchResponse, error) {
+func (UnimplementedVectorServiceServer) NamedSearch(context.Context, *pb.NamedSearchRequest) (*pb.NamedSearchResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method NamedSearch not implemented")
 }
-func (UnimplementedVectorServiceServer) NamedSparseSearch(context.Context, *NamedSparseSearchRequest) (*NamedSearchResponse, error) {
+func (UnimplementedVectorServiceServer) NamedSparseSearch(context.Context, *pb.NamedSparseSearchRequest) (*pb.NamedSearchResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method NamedSparseSearch not implemented")
 }
-func (UnimplementedVectorServiceServer) NamedHybridSearch(context.Context, *NamedHybridRequest) (*NamedSearchResponse, error) {
+func (UnimplementedVectorServiceServer) NamedHybridSearch(context.Context, *pb.NamedHybridRequest) (*pb.NamedSearchResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method NamedHybridSearch not implemented")
 }
-func (UnimplementedVectorServiceServer) NamedSearchDocs(context.Context, *NamedSearchRequest) (*NamedSearchDocsResponse, error) {
+func (UnimplementedVectorServiceServer) NamedSearchDocs(context.Context, *pb.NamedSearchRequest) (*pb.NamedSearchDocsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method NamedSearchDocs not implemented")
 }
-func (UnimplementedVectorServiceServer) NamedDelete(context.Context, *NamedDeleteRequest) (*NamedDeleteResponse, error) {
+func (UnimplementedVectorServiceServer) NamedDelete(context.Context, *pb.NamedDeleteRequest) (*pb.NamedDeleteResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method NamedDelete not implemented")
 }
-func (UnimplementedVectorServiceServer) NamedGet(context.Context, *NamedGetRequest) (*NamedGetResponse, error) {
+func (UnimplementedVectorServiceServer) NamedGet(context.Context, *pb.NamedGetRequest) (*pb.NamedGetResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method NamedGet not implemented")
 }
-func (UnimplementedVectorServiceServer) NamedGetBatch(context.Context, *NamedGetBatchRequest) (*NamedGetBatchResponse, error) {
+func (UnimplementedVectorServiceServer) NamedGetBatch(context.Context, *pb.NamedGetBatchRequest) (*pb.NamedGetBatchResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method NamedGetBatch not implemented")
 }
-func (UnimplementedVectorServiceServer) NamedSetPayload(context.Context, *SetPayloadRequest) (*PayloadResponse, error) {
+func (UnimplementedVectorServiceServer) NamedSetPayload(context.Context, *pb.SetPayloadRequest) (*pb.PayloadResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method NamedSetPayload not implemented")
 }
-func (UnimplementedVectorServiceServer) NamedOverwritePayload(context.Context, *SetPayloadRequest) (*PayloadResponse, error) {
+func (UnimplementedVectorServiceServer) NamedOverwritePayload(context.Context, *pb.SetPayloadRequest) (*pb.PayloadResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method NamedOverwritePayload not implemented")
 }
-func (UnimplementedVectorServiceServer) NamedDeletePayloadKeys(context.Context, *DeletePayloadKeysRequest) (*PayloadResponse, error) {
+func (UnimplementedVectorServiceServer) NamedDeletePayloadKeys(context.Context, *pb.DeletePayloadKeysRequest) (*pb.PayloadResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method NamedDeletePayloadKeys not implemented")
 }
-func (UnimplementedVectorServiceServer) NamedClearPayload(context.Context, *ClearPayloadRequest) (*PayloadResponse, error) {
+func (UnimplementedVectorServiceServer) NamedClearPayload(context.Context, *pb.ClearPayloadRequest) (*pb.PayloadResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method NamedClearPayload not implemented")
 }
-func (UnimplementedVectorServiceServer) NamedScroll(context.Context, *NamedScrollRequest) (*NamedScrollResponse, error) {
+func (UnimplementedVectorServiceServer) NamedScroll(context.Context, *pb.NamedScrollRequest) (*pb.NamedScrollResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method NamedScroll not implemented")
 }
-func (UnimplementedVectorServiceServer) Scroll(context.Context, *ScrollRequest) (*ScrollResponse, error) {
+func (UnimplementedVectorServiceServer) Scroll(context.Context, *pb.ScrollRequest) (*pb.ScrollResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Scroll not implemented")
 }
-func (UnimplementedVectorServiceServer) NamedGetConfig(context.Context, *NamedGetConfigRequest) (*NamedGetConfigResponse, error) {
+func (UnimplementedVectorServiceServer) NamedGetConfig(context.Context, *pb.NamedGetConfigRequest) (*pb.NamedGetConfigResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method NamedGetConfig not implemented")
 }
-func (UnimplementedVectorServiceServer) CreateAlias(context.Context, *CreateAliasRequest) (*CreateAliasResponse, error) {
+func (UnimplementedVectorServiceServer) CreateAlias(context.Context, *pb.CreateAliasRequest) (*pb.CreateAliasResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateAlias not implemented")
 }
-func (UnimplementedVectorServiceServer) DeleteAlias(context.Context, *DeleteAliasRequest) (*DeleteAliasResponse, error) {
+func (UnimplementedVectorServiceServer) DeleteAlias(context.Context, *pb.DeleteAliasRequest) (*pb.DeleteAliasResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteAlias not implemented")
 }
-func (UnimplementedVectorServiceServer) ListAliases(context.Context, *ListAliasesRequest) (*ListAliasesResponse, error) {
+func (UnimplementedVectorServiceServer) ListAliases(context.Context, *pb.ListAliasesRequest) (*pb.ListAliasesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListAliases not implemented")
 }
-func (UnimplementedVectorServiceServer) AliasBatch(context.Context, *AliasBatchRequest) (*AliasBatchResponse, error) {
+func (UnimplementedVectorServiceServer) AliasBatch(context.Context, *pb.AliasBatchRequest) (*pb.AliasBatchResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AliasBatch not implemented")
 }
-func (UnimplementedVectorServiceServer) KeysAdd(context.Context, *KeysAddRequest) (*KeysAck, error) {
+func (UnimplementedVectorServiceServer) KeysAdd(context.Context, *pb.KeysAddRequest) (*pb.KeysAck, error) {
 	return nil, status.Error(codes.Unimplemented, "method KeysAdd not implemented")
 }
-func (UnimplementedVectorServiceServer) KeysRevoke(context.Context, *KeysRevokeRequest) (*KeysAck, error) {
+func (UnimplementedVectorServiceServer) KeysRevoke(context.Context, *pb.KeysRevokeRequest) (*pb.KeysAck, error) {
 	return nil, status.Error(codes.Unimplemented, "method KeysRevoke not implemented")
 }
-func (UnimplementedVectorServiceServer) KeysList(context.Context, *KeysListRequest) (*KeysListResponse, error) {
+func (UnimplementedVectorServiceServer) KeysList(context.Context, *pb.KeysListRequest) (*pb.KeysListResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method KeysList not implemented")
 }
 func (UnimplementedVectorServiceServer) mustEmbedUnimplementedVectorServiceServer() {}
@@ -1328,7 +1335,7 @@ func RegisterVectorServiceServer(s grpc.ServiceRegistrar, srv VectorServiceServe
 }
 
 func _VectorService_Health_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(HealthRequest)
+	in := new(pb.HealthRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1340,13 +1347,13 @@ func _VectorService_Health_Handler(srv interface{}, ctx context.Context, dec fun
 		FullMethod: VectorService_Health_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).Health(ctx, req.(*HealthRequest))
+		return srv.(VectorServiceServer).Health(ctx, req.(*pb.HealthRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_CreateCollection_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(CreateCollectionRequest)
+	in := new(pb.CreateCollectionRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1358,13 +1365,13 @@ func _VectorService_CreateCollection_Handler(srv interface{}, ctx context.Contex
 		FullMethod: VectorService_CreateCollection_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).CreateCollection(ctx, req.(*CreateCollectionRequest))
+		return srv.(VectorServiceServer).CreateCollection(ctx, req.(*pb.CreateCollectionRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_DropCollection_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(DropCollectionRequest)
+	in := new(pb.DropCollectionRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1376,13 +1383,13 @@ func _VectorService_DropCollection_Handler(srv interface{}, ctx context.Context,
 		FullMethod: VectorService_DropCollection_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).DropCollection(ctx, req.(*DropCollectionRequest))
+		return srv.(VectorServiceServer).DropCollection(ctx, req.(*pb.DropCollectionRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_Upsert_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(UpsertRequest)
+	in := new(pb.UpsertRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1394,13 +1401,13 @@ func _VectorService_Upsert_Handler(srv interface{}, ctx context.Context, dec fun
 		FullMethod: VectorService_Upsert_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).Upsert(ctx, req.(*UpsertRequest))
+		return srv.(VectorServiceServer).Upsert(ctx, req.(*pb.UpsertRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_Delete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(DeleteRequest)
+	in := new(pb.DeleteRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1412,13 +1419,13 @@ func _VectorService_Delete_Handler(srv interface{}, ctx context.Context, dec fun
 		FullMethod: VectorService_Delete_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).Delete(ctx, req.(*DeleteRequest))
+		return srv.(VectorServiceServer).Delete(ctx, req.(*pb.DeleteRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_Get_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetRequest)
+	in := new(pb.GetRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1430,13 +1437,13 @@ func _VectorService_Get_Handler(srv interface{}, ctx context.Context, dec func(i
 		FullMethod: VectorService_Get_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).Get(ctx, req.(*GetRequest))
+		return srv.(VectorServiceServer).Get(ctx, req.(*pb.GetRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_GetBatch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetBatchRequest)
+	in := new(pb.GetBatchRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1448,13 +1455,13 @@ func _VectorService_GetBatch_Handler(srv interface{}, ctx context.Context, dec f
 		FullMethod: VectorService_GetBatch_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).GetBatch(ctx, req.(*GetBatchRequest))
+		return srv.(VectorServiceServer).GetBatch(ctx, req.(*pb.GetBatchRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_SetPayload_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SetPayloadRequest)
+	in := new(pb.SetPayloadRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1466,13 +1473,13 @@ func _VectorService_SetPayload_Handler(srv interface{}, ctx context.Context, dec
 		FullMethod: VectorService_SetPayload_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).SetPayload(ctx, req.(*SetPayloadRequest))
+		return srv.(VectorServiceServer).SetPayload(ctx, req.(*pb.SetPayloadRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_OverwritePayload_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SetPayloadRequest)
+	in := new(pb.SetPayloadRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1484,13 +1491,13 @@ func _VectorService_OverwritePayload_Handler(srv interface{}, ctx context.Contex
 		FullMethod: VectorService_OverwritePayload_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).OverwritePayload(ctx, req.(*SetPayloadRequest))
+		return srv.(VectorServiceServer).OverwritePayload(ctx, req.(*pb.SetPayloadRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_DeletePayloadKeys_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(DeletePayloadKeysRequest)
+	in := new(pb.DeletePayloadKeysRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1502,13 +1509,13 @@ func _VectorService_DeletePayloadKeys_Handler(srv interface{}, ctx context.Conte
 		FullMethod: VectorService_DeletePayloadKeys_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).DeletePayloadKeys(ctx, req.(*DeletePayloadKeysRequest))
+		return srv.(VectorServiceServer).DeletePayloadKeys(ctx, req.(*pb.DeletePayloadKeysRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_ClearPayload_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ClearPayloadRequest)
+	in := new(pb.ClearPayloadRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1520,13 +1527,13 @@ func _VectorService_ClearPayload_Handler(srv interface{}, ctx context.Context, d
 		FullMethod: VectorService_ClearPayload_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).ClearPayload(ctx, req.(*ClearPayloadRequest))
+		return srv.(VectorServiceServer).ClearPayload(ctx, req.(*pb.ClearPayloadRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_Search_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SearchRequest)
+	in := new(pb.SearchRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1538,13 +1545,13 @@ func _VectorService_Search_Handler(srv interface{}, ctx context.Context, dec fun
 		FullMethod: VectorService_Search_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).Search(ctx, req.(*SearchRequest))
+		return srv.(VectorServiceServer).Search(ctx, req.(*pb.SearchRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_SearchDocs_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SearchRequest)
+	in := new(pb.SearchRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1556,13 +1563,13 @@ func _VectorService_SearchDocs_Handler(srv interface{}, ctx context.Context, dec
 		FullMethod: VectorService_SearchDocs_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).SearchDocs(ctx, req.(*SearchRequest))
+		return srv.(VectorServiceServer).SearchDocs(ctx, req.(*pb.SearchRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_SearchGroups_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SearchGroupsRequest)
+	in := new(pb.SearchGroupsRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1574,13 +1581,13 @@ func _VectorService_SearchGroups_Handler(srv interface{}, ctx context.Context, d
 		FullMethod: VectorService_SearchGroups_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).SearchGroups(ctx, req.(*SearchGroupsRequest))
+		return srv.(VectorServiceServer).SearchGroups(ctx, req.(*pb.SearchGroupsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_HybridSearch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(HybridRequest)
+	in := new(pb.HybridRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1592,13 +1599,13 @@ func _VectorService_HybridSearch_Handler(srv interface{}, ctx context.Context, d
 		FullMethod: VectorService_HybridSearch_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).HybridSearch(ctx, req.(*HybridRequest))
+		return srv.(VectorServiceServer).HybridSearch(ctx, req.(*pb.HybridRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_TextSearch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(TextSearchRequest)
+	in := new(pb.TextSearchRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1610,13 +1617,13 @@ func _VectorService_TextSearch_Handler(srv interface{}, ctx context.Context, dec
 		FullMethod: VectorService_TextSearch_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).TextSearch(ctx, req.(*TextSearchRequest))
+		return srv.(VectorServiceServer).TextSearch(ctx, req.(*pb.TextSearchRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_HybridTextSearch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(HybridTextRequest)
+	in := new(pb.HybridTextRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1628,13 +1635,13 @@ func _VectorService_HybridTextSearch_Handler(srv interface{}, ctx context.Contex
 		FullMethod: VectorService_HybridTextSearch_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).HybridTextSearch(ctx, req.(*HybridTextRequest))
+		return srv.(VectorServiceServer).HybridTextSearch(ctx, req.(*pb.HybridTextRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_VectorQuery_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(VectorQueryRequest)
+	in := new(pb.VectorQueryRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1646,13 +1653,13 @@ func _VectorService_VectorQuery_Handler(srv interface{}, ctx context.Context, de
 		FullMethod: VectorService_VectorQuery_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).VectorQuery(ctx, req.(*VectorQueryRequest))
+		return srv.(VectorServiceServer).VectorQuery(ctx, req.(*pb.VectorQueryRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_NamedVectorQuery_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(NamedVectorQueryRequest)
+	in := new(pb.NamedVectorQueryRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1664,13 +1671,13 @@ func _VectorService_NamedVectorQuery_Handler(srv interface{}, ctx context.Contex
 		FullMethod: VectorService_NamedVectorQuery_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).NamedVectorQuery(ctx, req.(*NamedVectorQueryRequest))
+		return srv.(VectorServiceServer).NamedVectorQuery(ctx, req.(*pb.NamedVectorQueryRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_MVVectorQuery_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(MVVectorQueryRequest)
+	in := new(pb.MVVectorQueryRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1682,13 +1689,13 @@ func _VectorService_MVVectorQuery_Handler(srv interface{}, ctx context.Context, 
 		FullMethod: VectorService_MVVectorQuery_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).MVVectorQuery(ctx, req.(*MVVectorQueryRequest))
+		return srv.(VectorServiceServer).MVVectorQuery(ctx, req.(*pb.MVVectorQueryRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_DeleteByFilter_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(DeleteByFilterRequest)
+	in := new(pb.DeleteByFilterRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1700,13 +1707,13 @@ func _VectorService_DeleteByFilter_Handler(srv interface{}, ctx context.Context,
 		FullMethod: VectorService_DeleteByFilter_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).DeleteByFilter(ctx, req.(*DeleteByFilterRequest))
+		return srv.(VectorServiceServer).DeleteByFilter(ctx, req.(*pb.DeleteByFilterRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_Resplit_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ResplitRequest)
+	in := new(pb.ResplitRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1718,13 +1725,13 @@ func _VectorService_Resplit_Handler(srv interface{}, ctx context.Context, dec fu
 		FullMethod: VectorService_Resplit_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).Resplit(ctx, req.(*ResplitRequest))
+		return srv.(VectorServiceServer).Resplit(ctx, req.(*pb.ResplitRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_ResplitCleanup_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ResplitCleanupRequest)
+	in := new(pb.ResplitCleanupRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1736,13 +1743,13 @@ func _VectorService_ResplitCleanup_Handler(srv interface{}, ctx context.Context,
 		FullMethod: VectorService_ResplitCleanup_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).ResplitCleanup(ctx, req.(*ResplitCleanupRequest))
+		return srv.(VectorServiceServer).ResplitCleanup(ctx, req.(*pb.ResplitCleanupRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_Reshard_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ReshardRequest)
+	in := new(pb.ReshardRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1754,13 +1761,13 @@ func _VectorService_Reshard_Handler(srv interface{}, ctx context.Context, dec fu
 		FullMethod: VectorService_Reshard_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).Reshard(ctx, req.(*ReshardRequest))
+		return srv.(VectorServiceServer).Reshard(ctx, req.(*pb.ReshardRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_ReshardAbort_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ReshardAbortRequest)
+	in := new(pb.ReshardAbortRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1772,13 +1779,13 @@ func _VectorService_ReshardAbort_Handler(srv interface{}, ctx context.Context, d
 		FullMethod: VectorService_ReshardAbort_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).ReshardAbort(ctx, req.(*ReshardAbortRequest))
+		return srv.(VectorServiceServer).ReshardAbort(ctx, req.(*pb.ReshardAbortRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_MVCreateCollection_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(MVCreateRequest)
+	in := new(pb.MVCreateRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1790,13 +1797,13 @@ func _VectorService_MVCreateCollection_Handler(srv interface{}, ctx context.Cont
 		FullMethod: VectorService_MVCreateCollection_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).MVCreateCollection(ctx, req.(*MVCreateRequest))
+		return srv.(VectorServiceServer).MVCreateCollection(ctx, req.(*pb.MVCreateRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_MVDropCollection_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(MVDropRequest)
+	in := new(pb.MVDropRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1808,13 +1815,13 @@ func _VectorService_MVDropCollection_Handler(srv interface{}, ctx context.Contex
 		FullMethod: VectorService_MVDropCollection_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).MVDropCollection(ctx, req.(*MVDropRequest))
+		return srv.(VectorServiceServer).MVDropCollection(ctx, req.(*pb.MVDropRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_MVAdd_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(MVAddRequest)
+	in := new(pb.MVAddRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1826,13 +1833,13 @@ func _VectorService_MVAdd_Handler(srv interface{}, ctx context.Context, dec func
 		FullMethod: VectorService_MVAdd_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).MVAdd(ctx, req.(*MVAddRequest))
+		return srv.(VectorServiceServer).MVAdd(ctx, req.(*pb.MVAddRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_MVSearch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(MVSearchRequest)
+	in := new(pb.MVSearchRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1844,13 +1851,13 @@ func _VectorService_MVSearch_Handler(srv interface{}, ctx context.Context, dec f
 		FullMethod: VectorService_MVSearch_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).MVSearch(ctx, req.(*MVSearchRequest))
+		return srv.(VectorServiceServer).MVSearch(ctx, req.(*pb.MVSearchRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_MVHybridSearch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(MVHybridRequest)
+	in := new(pb.MVHybridRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1862,13 +1869,13 @@ func _VectorService_MVHybridSearch_Handler(srv interface{}, ctx context.Context,
 		FullMethod: VectorService_MVHybridSearch_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).MVHybridSearch(ctx, req.(*MVHybridRequest))
+		return srv.(VectorServiceServer).MVHybridSearch(ctx, req.(*pb.MVHybridRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_MVScroll_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(MVScrollRequest)
+	in := new(pb.MVScrollRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1880,13 +1887,13 @@ func _VectorService_MVScroll_Handler(srv interface{}, ctx context.Context, dec f
 		FullMethod: VectorService_MVScroll_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).MVScroll(ctx, req.(*MVScrollRequest))
+		return srv.(VectorServiceServer).MVScroll(ctx, req.(*pb.MVScrollRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_MVDelete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(MVDeleteRequest)
+	in := new(pb.MVDeleteRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1898,13 +1905,13 @@ func _VectorService_MVDelete_Handler(srv interface{}, ctx context.Context, dec f
 		FullMethod: VectorService_MVDelete_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).MVDelete(ctx, req.(*MVDeleteRequest))
+		return srv.(VectorServiceServer).MVDelete(ctx, req.(*pb.MVDeleteRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_MVGet_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(MVGetRequest)
+	in := new(pb.MVGetRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1916,13 +1923,13 @@ func _VectorService_MVGet_Handler(srv interface{}, ctx context.Context, dec func
 		FullMethod: VectorService_MVGet_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).MVGet(ctx, req.(*MVGetRequest))
+		return srv.(VectorServiceServer).MVGet(ctx, req.(*pb.MVGetRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_MVGetBatch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(MVGetBatchRequest)
+	in := new(pb.MVGetBatchRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1934,13 +1941,13 @@ func _VectorService_MVGetBatch_Handler(srv interface{}, ctx context.Context, dec
 		FullMethod: VectorService_MVGetBatch_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).MVGetBatch(ctx, req.(*MVGetBatchRequest))
+		return srv.(VectorServiceServer).MVGetBatch(ctx, req.(*pb.MVGetBatchRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_MVSetPayload_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SetPayloadRequest)
+	in := new(pb.SetPayloadRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1952,13 +1959,13 @@ func _VectorService_MVSetPayload_Handler(srv interface{}, ctx context.Context, d
 		FullMethod: VectorService_MVSetPayload_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).MVSetPayload(ctx, req.(*SetPayloadRequest))
+		return srv.(VectorServiceServer).MVSetPayload(ctx, req.(*pb.SetPayloadRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_MVOverwritePayload_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SetPayloadRequest)
+	in := new(pb.SetPayloadRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1970,13 +1977,13 @@ func _VectorService_MVOverwritePayload_Handler(srv interface{}, ctx context.Cont
 		FullMethod: VectorService_MVOverwritePayload_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).MVOverwritePayload(ctx, req.(*SetPayloadRequest))
+		return srv.(VectorServiceServer).MVOverwritePayload(ctx, req.(*pb.SetPayloadRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_MVDeletePayloadKeys_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(DeletePayloadKeysRequest)
+	in := new(pb.DeletePayloadKeysRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1988,13 +1995,13 @@ func _VectorService_MVDeletePayloadKeys_Handler(srv interface{}, ctx context.Con
 		FullMethod: VectorService_MVDeletePayloadKeys_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).MVDeletePayloadKeys(ctx, req.(*DeletePayloadKeysRequest))
+		return srv.(VectorServiceServer).MVDeletePayloadKeys(ctx, req.(*pb.DeletePayloadKeysRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_MVClearPayload_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ClearPayloadRequest)
+	in := new(pb.ClearPayloadRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -2006,13 +2013,13 @@ func _VectorService_MVClearPayload_Handler(srv interface{}, ctx context.Context,
 		FullMethod: VectorService_MVClearPayload_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).MVClearPayload(ctx, req.(*ClearPayloadRequest))
+		return srv.(VectorServiceServer).MVClearPayload(ctx, req.(*pb.ClearPayloadRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_MVResplit_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ResplitRequest)
+	in := new(pb.ResplitRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -2024,13 +2031,13 @@ func _VectorService_MVResplit_Handler(srv interface{}, ctx context.Context, dec 
 		FullMethod: VectorService_MVResplit_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).MVResplit(ctx, req.(*ResplitRequest))
+		return srv.(VectorServiceServer).MVResplit(ctx, req.(*pb.ResplitRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_MVResplitCleanup_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ResplitCleanupRequest)
+	in := new(pb.ResplitCleanupRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -2042,13 +2049,13 @@ func _VectorService_MVResplitCleanup_Handler(srv interface{}, ctx context.Contex
 		FullMethod: VectorService_MVResplitCleanup_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).MVResplitCleanup(ctx, req.(*ResplitCleanupRequest))
+		return srv.(VectorServiceServer).MVResplitCleanup(ctx, req.(*pb.ResplitCleanupRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_MVReshard_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ReshardRequest)
+	in := new(pb.ReshardRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -2060,13 +2067,13 @@ func _VectorService_MVReshard_Handler(srv interface{}, ctx context.Context, dec 
 		FullMethod: VectorService_MVReshard_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).MVReshard(ctx, req.(*ReshardRequest))
+		return srv.(VectorServiceServer).MVReshard(ctx, req.(*pb.ReshardRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_MVReshardAbort_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ReshardAbortRequest)
+	in := new(pb.ReshardAbortRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -2078,13 +2085,13 @@ func _VectorService_MVReshardAbort_Handler(srv interface{}, ctx context.Context,
 		FullMethod: VectorService_MVReshardAbort_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).MVReshardAbort(ctx, req.(*ReshardAbortRequest))
+		return srv.(VectorServiceServer).MVReshardAbort(ctx, req.(*pb.ReshardAbortRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_NamedCreate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(NamedCreateRequest)
+	in := new(pb.NamedCreateRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -2096,13 +2103,13 @@ func _VectorService_NamedCreate_Handler(srv interface{}, ctx context.Context, de
 		FullMethod: VectorService_NamedCreate_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).NamedCreate(ctx, req.(*NamedCreateRequest))
+		return srv.(VectorServiceServer).NamedCreate(ctx, req.(*pb.NamedCreateRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_NamedDrop_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(NamedDropRequest)
+	in := new(pb.NamedDropRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -2114,13 +2121,13 @@ func _VectorService_NamedDrop_Handler(srv interface{}, ctx context.Context, dec 
 		FullMethod: VectorService_NamedDrop_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).NamedDrop(ctx, req.(*NamedDropRequest))
+		return srv.(VectorServiceServer).NamedDrop(ctx, req.(*pb.NamedDropRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_NamedUpsert_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(NamedUpsertRequest)
+	in := new(pb.NamedUpsertRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -2132,13 +2139,13 @@ func _VectorService_NamedUpsert_Handler(srv interface{}, ctx context.Context, de
 		FullMethod: VectorService_NamedUpsert_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).NamedUpsert(ctx, req.(*NamedUpsertRequest))
+		return srv.(VectorServiceServer).NamedUpsert(ctx, req.(*pb.NamedUpsertRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_NamedSearch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(NamedSearchRequest)
+	in := new(pb.NamedSearchRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -2150,13 +2157,13 @@ func _VectorService_NamedSearch_Handler(srv interface{}, ctx context.Context, de
 		FullMethod: VectorService_NamedSearch_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).NamedSearch(ctx, req.(*NamedSearchRequest))
+		return srv.(VectorServiceServer).NamedSearch(ctx, req.(*pb.NamedSearchRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_NamedSparseSearch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(NamedSparseSearchRequest)
+	in := new(pb.NamedSparseSearchRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -2168,13 +2175,13 @@ func _VectorService_NamedSparseSearch_Handler(srv interface{}, ctx context.Conte
 		FullMethod: VectorService_NamedSparseSearch_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).NamedSparseSearch(ctx, req.(*NamedSparseSearchRequest))
+		return srv.(VectorServiceServer).NamedSparseSearch(ctx, req.(*pb.NamedSparseSearchRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_NamedHybridSearch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(NamedHybridRequest)
+	in := new(pb.NamedHybridRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -2186,13 +2193,13 @@ func _VectorService_NamedHybridSearch_Handler(srv interface{}, ctx context.Conte
 		FullMethod: VectorService_NamedHybridSearch_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).NamedHybridSearch(ctx, req.(*NamedHybridRequest))
+		return srv.(VectorServiceServer).NamedHybridSearch(ctx, req.(*pb.NamedHybridRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_NamedSearchDocs_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(NamedSearchRequest)
+	in := new(pb.NamedSearchRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -2204,13 +2211,13 @@ func _VectorService_NamedSearchDocs_Handler(srv interface{}, ctx context.Context
 		FullMethod: VectorService_NamedSearchDocs_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).NamedSearchDocs(ctx, req.(*NamedSearchRequest))
+		return srv.(VectorServiceServer).NamedSearchDocs(ctx, req.(*pb.NamedSearchRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_NamedDelete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(NamedDeleteRequest)
+	in := new(pb.NamedDeleteRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -2222,13 +2229,13 @@ func _VectorService_NamedDelete_Handler(srv interface{}, ctx context.Context, de
 		FullMethod: VectorService_NamedDelete_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).NamedDelete(ctx, req.(*NamedDeleteRequest))
+		return srv.(VectorServiceServer).NamedDelete(ctx, req.(*pb.NamedDeleteRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_NamedGet_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(NamedGetRequest)
+	in := new(pb.NamedGetRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -2240,13 +2247,13 @@ func _VectorService_NamedGet_Handler(srv interface{}, ctx context.Context, dec f
 		FullMethod: VectorService_NamedGet_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).NamedGet(ctx, req.(*NamedGetRequest))
+		return srv.(VectorServiceServer).NamedGet(ctx, req.(*pb.NamedGetRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_NamedGetBatch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(NamedGetBatchRequest)
+	in := new(pb.NamedGetBatchRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -2258,13 +2265,13 @@ func _VectorService_NamedGetBatch_Handler(srv interface{}, ctx context.Context, 
 		FullMethod: VectorService_NamedGetBatch_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).NamedGetBatch(ctx, req.(*NamedGetBatchRequest))
+		return srv.(VectorServiceServer).NamedGetBatch(ctx, req.(*pb.NamedGetBatchRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_NamedSetPayload_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SetPayloadRequest)
+	in := new(pb.SetPayloadRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -2276,13 +2283,13 @@ func _VectorService_NamedSetPayload_Handler(srv interface{}, ctx context.Context
 		FullMethod: VectorService_NamedSetPayload_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).NamedSetPayload(ctx, req.(*SetPayloadRequest))
+		return srv.(VectorServiceServer).NamedSetPayload(ctx, req.(*pb.SetPayloadRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_NamedOverwritePayload_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SetPayloadRequest)
+	in := new(pb.SetPayloadRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -2294,13 +2301,13 @@ func _VectorService_NamedOverwritePayload_Handler(srv interface{}, ctx context.C
 		FullMethod: VectorService_NamedOverwritePayload_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).NamedOverwritePayload(ctx, req.(*SetPayloadRequest))
+		return srv.(VectorServiceServer).NamedOverwritePayload(ctx, req.(*pb.SetPayloadRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_NamedDeletePayloadKeys_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(DeletePayloadKeysRequest)
+	in := new(pb.DeletePayloadKeysRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -2312,13 +2319,13 @@ func _VectorService_NamedDeletePayloadKeys_Handler(srv interface{}, ctx context.
 		FullMethod: VectorService_NamedDeletePayloadKeys_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).NamedDeletePayloadKeys(ctx, req.(*DeletePayloadKeysRequest))
+		return srv.(VectorServiceServer).NamedDeletePayloadKeys(ctx, req.(*pb.DeletePayloadKeysRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_NamedClearPayload_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ClearPayloadRequest)
+	in := new(pb.ClearPayloadRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -2330,13 +2337,13 @@ func _VectorService_NamedClearPayload_Handler(srv interface{}, ctx context.Conte
 		FullMethod: VectorService_NamedClearPayload_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).NamedClearPayload(ctx, req.(*ClearPayloadRequest))
+		return srv.(VectorServiceServer).NamedClearPayload(ctx, req.(*pb.ClearPayloadRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_NamedScroll_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(NamedScrollRequest)
+	in := new(pb.NamedScrollRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -2348,13 +2355,13 @@ func _VectorService_NamedScroll_Handler(srv interface{}, ctx context.Context, de
 		FullMethod: VectorService_NamedScroll_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).NamedScroll(ctx, req.(*NamedScrollRequest))
+		return srv.(VectorServiceServer).NamedScroll(ctx, req.(*pb.NamedScrollRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_Scroll_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ScrollRequest)
+	in := new(pb.ScrollRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -2366,13 +2373,13 @@ func _VectorService_Scroll_Handler(srv interface{}, ctx context.Context, dec fun
 		FullMethod: VectorService_Scroll_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).Scroll(ctx, req.(*ScrollRequest))
+		return srv.(VectorServiceServer).Scroll(ctx, req.(*pb.ScrollRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_NamedGetConfig_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(NamedGetConfigRequest)
+	in := new(pb.NamedGetConfigRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -2384,13 +2391,13 @@ func _VectorService_NamedGetConfig_Handler(srv interface{}, ctx context.Context,
 		FullMethod: VectorService_NamedGetConfig_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).NamedGetConfig(ctx, req.(*NamedGetConfigRequest))
+		return srv.(VectorServiceServer).NamedGetConfig(ctx, req.(*pb.NamedGetConfigRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_CreateAlias_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(CreateAliasRequest)
+	in := new(pb.CreateAliasRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -2402,13 +2409,13 @@ func _VectorService_CreateAlias_Handler(srv interface{}, ctx context.Context, de
 		FullMethod: VectorService_CreateAlias_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).CreateAlias(ctx, req.(*CreateAliasRequest))
+		return srv.(VectorServiceServer).CreateAlias(ctx, req.(*pb.CreateAliasRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_DeleteAlias_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(DeleteAliasRequest)
+	in := new(pb.DeleteAliasRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -2420,13 +2427,13 @@ func _VectorService_DeleteAlias_Handler(srv interface{}, ctx context.Context, de
 		FullMethod: VectorService_DeleteAlias_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).DeleteAlias(ctx, req.(*DeleteAliasRequest))
+		return srv.(VectorServiceServer).DeleteAlias(ctx, req.(*pb.DeleteAliasRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_ListAliases_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ListAliasesRequest)
+	in := new(pb.ListAliasesRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -2438,13 +2445,13 @@ func _VectorService_ListAliases_Handler(srv interface{}, ctx context.Context, de
 		FullMethod: VectorService_ListAliases_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).ListAliases(ctx, req.(*ListAliasesRequest))
+		return srv.(VectorServiceServer).ListAliases(ctx, req.(*pb.ListAliasesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_AliasBatch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(AliasBatchRequest)
+	in := new(pb.AliasBatchRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -2456,13 +2463,13 @@ func _VectorService_AliasBatch_Handler(srv interface{}, ctx context.Context, dec
 		FullMethod: VectorService_AliasBatch_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).AliasBatch(ctx, req.(*AliasBatchRequest))
+		return srv.(VectorServiceServer).AliasBatch(ctx, req.(*pb.AliasBatchRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_KeysAdd_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(KeysAddRequest)
+	in := new(pb.KeysAddRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -2474,13 +2481,13 @@ func _VectorService_KeysAdd_Handler(srv interface{}, ctx context.Context, dec fu
 		FullMethod: VectorService_KeysAdd_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).KeysAdd(ctx, req.(*KeysAddRequest))
+		return srv.(VectorServiceServer).KeysAdd(ctx, req.(*pb.KeysAddRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_KeysRevoke_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(KeysRevokeRequest)
+	in := new(pb.KeysRevokeRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -2492,13 +2499,13 @@ func _VectorService_KeysRevoke_Handler(srv interface{}, ctx context.Context, dec
 		FullMethod: VectorService_KeysRevoke_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).KeysRevoke(ctx, req.(*KeysRevokeRequest))
+		return srv.(VectorServiceServer).KeysRevoke(ctx, req.(*pb.KeysRevokeRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _VectorService_KeysList_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(KeysListRequest)
+	in := new(pb.KeysListRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -2510,7 +2517,7 @@ func _VectorService_KeysList_Handler(srv interface{}, ctx context.Context, dec f
 		FullMethod: VectorService_KeysList_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VectorServiceServer).KeysList(ctx, req.(*KeysListRequest))
+		return srv.(VectorServiceServer).KeysList(ctx, req.(*pb.KeysListRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2788,5 +2795,5 @@ var VectorService_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "grpcapi/pb/rostam.proto",
+	Metadata: "grpcapi/pb/service.proto",
 }

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-package ops
+package wire
 
 import (
 	"encoding/binary"

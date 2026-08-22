@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-package ops
+package wire
 
 import (
 	"bytes"
@@ -434,10 +434,10 @@ const WASMKeyExtractorHandle = "std"
 //
 // It is a function rather than an exported variable so no caller can reassign the
 // one extractor the whole cluster's routing agrees on.
-func WASMKeyExtractor() KeyExtractor { return stdKeyExtractor }
+func WASMKeyExtractor() KeyExtractor { return StdKeyExtractor }
 
 // keyExtractorByHandle resolves a named handle to its KeyExtractor: "std" to
-// stdKeyExtractor, anything else to nil (a SHARDLESS registration).
+// StdKeyExtractor, anything else to nil (a SHARDLESS registration).
 //
 // NO WASM PATH CALLS THIS ANY MORE. WASM registrations use WASMKeyExtractor
 // unconditionally; this survives for a caller registering a plain Go op, which
@@ -450,7 +450,7 @@ func WASMKeyExtractor() KeyExtractor { return stdKeyExtractor }
 // WASMKeyExtractorHandle.
 func keyExtractorByHandle(handle string) KeyExtractor {
 	if handle == WASMKeyExtractorHandle {
-		return stdKeyExtractor
+		return StdKeyExtractor
 	}
 	return nil
 }

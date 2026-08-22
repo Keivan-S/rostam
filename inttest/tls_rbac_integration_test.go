@@ -22,8 +22,10 @@ import (
 	"github.com/rostamlabs/rostam"
 	"github.com/rostamlabs/rostam/authz"
 	"github.com/rostamlabs/rostam/client"
+	"github.com/rostamlabs/rostam/grpcapi/grpcsvc"
 	"github.com/rostamlabs/rostam/grpcapi/pb"
 	"github.com/rostamlabs/rostam/ops"
+	"github.com/rostamlabs/rostam/ops/wire"
 	"github.com/rostamlabs/rostam/tlsutil"
 	"github.com/rostamlabs/rostam/tlsutil/testcerts"
 	"github.com/rostamlabs/rostam/vector"
@@ -36,6 +38,7 @@ type tlsTestEnv struct {
 	srv    *rostam.Server
 	ca     *testcerts.CA
 	reg    *ops.Registry
+	wire   *wire.Registry // routing-only mirror of reg, for client.Config.Ops
 	keyReg *vector.KeyRegistry
 }
 
@@ -95,7 +98,11 @@ func newTLSServerEnv(t *testing.T, requireClientCert bool) *tlsTestEnv {
 	}
 	t.Cleanup(func() { _ = srv.Close() })
 
-	env := &tlsTestEnv{srv: srv, ca: ca, reg: reg, keyReg: keyReg}
+	wireReg := wire.NewRegistry()
+	if err := reg.ExportRouting(wireReg); err != nil {
+		t.Fatal(err)
+	}
+	env := &tlsTestEnv{srv: srv, ca: ca, reg: reg, wire: wireReg, keyReg: keyReg}
 	// Create the "docs" collection via an admin TCP client (mTLS cert "admincert"
 	// when required, plus the admin token). Use a fresh admin client so the test
 	// bodies start from a known collection.
@@ -122,7 +129,7 @@ func (e *tlsTestEnv) createDocsCollection(t *testing.T, mTLS bool) {
 	}
 	cli, err := client.New(client.Config{
 		Servers:                 []string{e.srv.TCPAddr()},
-		Ops:                     e.reg,
+		Ops:                     e.wire,
 		TopologyRefreshInterval: time.Second,
 		AuthToken:               "k_admin",
 		TLSConfig:               clientTLS,
@@ -322,13 +329,13 @@ func TestMTLSHTTPCertCNPrincipal(t *testing.T) {
 // gRPC TLS / mTLS
 // ---------------------------------------------------------------------------
 
-func dialGRPCTLS(t *testing.T, addr string, cfg *tls.Config) (pb.VectorServiceClient, func()) {
+func dialGRPCTLS(t *testing.T, addr string, cfg *tls.Config) (grpcsvc.VectorServiceClient, func()) {
 	t.Helper()
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(credentials.NewTLS(cfg)))
 	if err != nil {
 		t.Fatalf("grpc dial: %v", err)
 	}
-	return pb.NewVectorServiceClient(conn), func() { _ = conn.Close() }
+	return grpcsvc.NewVectorServiceClient(conn), func() { _ = conn.Close() }
 }
 
 // TestTLSGRPCWrongCAFails: a gRPC client trusting the wrong CA cannot complete a
@@ -406,7 +413,7 @@ func TestMTLSTCPCertCNPrincipal(t *testing.T) {
 	}
 	cli, err := client.New(client.Config{
 		Servers:                 []string{env.srv.TCPAddr()},
-		Ops:                     env.reg,
+		Ops:                     env.wire,
 		TopologyRefreshInterval: time.Second,
 		TLSConfig:               svcCfg, // NO AuthToken → cert CN is the principal
 	})
@@ -433,7 +440,7 @@ func TestMTLSTCPCertCNPrincipal(t *testing.T) {
 	}
 	badCli, err := client.New(client.Config{
 		Servers:                 []string{env.srv.TCPAddr()},
-		Ops:                     env.reg,
+		Ops:                     env.wire,
 		TopologyRefreshInterval: time.Second,
 		TLSConfig:               badCfg,
 	})
@@ -456,7 +463,7 @@ func TestMTLSTCPNoCertRejected(t *testing.T) {
 	}
 	cli, err := client.New(client.Config{
 		Servers:                 []string{env.srv.TCPAddr()},
-		Ops:                     env.reg,
+		Ops:                     env.wire,
 		TopologyRefreshInterval: time.Second,
 		AuthToken:               "k_admin", // even WITH a valid token, the handshake blocks first
 		TLSConfig:               noCertCfg,
@@ -484,7 +491,7 @@ func TestTLSTCPTokenWinsOverCert(t *testing.T) {
 	}
 	cli, err := client.New(client.Config{
 		Servers:                 []string{env.srv.TCPAddr()},
-		Ops:                     env.reg,
+		Ops:                     env.wire,
 		TopologyRefreshInterval: time.Second,
 		AuthToken:               "k_admin", // admin token + svcA (read-only) cert → token wins
 		TLSConfig:               cfg,
@@ -521,7 +528,11 @@ func TestPlaintextUnchangedWhenTLSNil(t *testing.T) {
 	}
 	defer func() { _ = srv.Close() }()
 
-	cli, err := client.New(client.Config{Servers: []string{srv.TCPAddr()}, Ops: reg, TopologyRefreshInterval: time.Second})
+	wireReg := wire.NewRegistry()
+	if err := reg.ExportRouting(wireReg); err != nil {
+		t.Fatal(err)
+	}
+	cli, err := client.New(client.Config{Servers: []string{srv.TCPAddr()}, Ops: wireReg, TopologyRefreshInterval: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}

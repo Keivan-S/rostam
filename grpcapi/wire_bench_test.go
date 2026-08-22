@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 
 	"github.com/rostamlabs/rostam/cache"
+	"github.com/rostamlabs/rostam/grpcapi/grpcsvc"
 	"github.com/rostamlabs/rostam/grpcapi/pb"
 	"github.com/rostamlabs/rostam/ops"
 	"github.com/rostamlabs/rostam/vector"
@@ -39,7 +40,7 @@ func wireCorpus(n, dim int, seed int64) [][]float32 {
 // → marshal → client unmarshal — i.e. everything the embedded-engine benchmarks
 // in Part A do NOT cover. The backing store is real (RegisterBuiltins + a vector
 // CollectionStore), so handler translation runs against live data.
-func newWireBench(b *testing.B) pb.VectorServiceClient {
+func newWireBench(b *testing.B) grpcsvc.VectorServiceClient {
 	b.Helper()
 	reg := ops.NewRegistry()
 	if err := ops.RegisterBuiltins(reg); err != nil {
@@ -54,7 +55,7 @@ func newWireBench(b *testing.B) pb.VectorServiceClient {
 
 	lis := bufconn.Listen(1 << 20)
 	gs := grpc.NewServer()
-	pb.RegisterVectorServiceServer(gs, NewServer(disp, nil))
+	grpcsvc.RegisterVectorServiceServer(gs, NewServer(disp, nil))
 	go func() { _ = gs.Serve(lis) }()
 
 	conn, err := grpc.NewClient("passthrough:///bufnet",
@@ -71,12 +72,12 @@ func newWireBench(b *testing.B) pb.VectorServiceClient {
 		_ = vstore.Close()
 		c.Close()
 	})
-	return pb.NewVectorServiceClient(conn)
+	return grpcsvc.NewVectorServiceClient(conn)
 }
 
 // seedCollection creates a dense HNSW collection and upserts n vectors over the
 // wire, returning the corpus. Done outside the timed region by callers.
-func seedCollection(b *testing.B, cl pb.VectorServiceClient, name string, n, dim int) [][]float32 {
+func seedCollection(b *testing.B, cl grpcsvc.VectorServiceClient, name string, n, dim int) [][]float32 {
 	b.Helper()
 	ctx := context.Background()
 	if _, err := cl.CreateCollection(ctx, &pb.CreateCollectionRequest{

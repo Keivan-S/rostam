@@ -318,10 +318,10 @@ func TestNamedSearchArgsOptsByteIdentical(t *testing.T) {
 func TestNamedSearchArgsOptsMalformed(t *testing.T) {
 	base := EncodeNamedSearchArgs("c", "title", []float32{1, 2, 3, 4}, 5, vector.Filter{})
 	// marker says opts present, but the rc/opa bytes are missing/short.
-	if _, _, _, _, _, _, _, _, err := DecodeNamedSearchArgsOpts(append(append([]byte{}, base...), namedTrailerOpts)); err == nil {
+	if _, _, _, _, _, _, _, _, err := DecodeNamedSearchArgsOpts(append(append([]byte{}, base...), NamedTrailerOpts)); err == nil {
 		t.Error("missing rc/opa block: expected error, got nil")
 	}
-	if _, _, _, _, _, _, _, _, err := DecodeNamedSearchArgsOpts(append(append([]byte{}, base...), namedTrailerOpts, 2)); err == nil {
+	if _, _, _, _, _, _, _, _, err := DecodeNamedSearchArgsOpts(append(append([]byte{}, base...), NamedTrailerOpts, 2)); err == nil {
 		t.Error("short rc/opa block (1 byte): expected error, got nil")
 	}
 }
@@ -397,17 +397,17 @@ func TestNamedScrollArgsOptsByteIdentical(t *testing.T) {
 func TestNamedScrollArgsOptsMalformed(t *testing.T) {
 	base := EncodeNamedScrollArgs("c", vector.Filter{}, 10)
 	// marker says cursor present, afterID missing.
-	if _, _, _, _, _, _, _, _, err := DecodeNamedScrollArgsOpts(append(append([]byte{}, base...), namedScrollCursor)); err == nil {
+	if _, _, _, _, _, _, _, _, err := DecodeNamedScrollArgsOpts(append(append([]byte{}, base...), NamedScrollCursor)); err == nil {
 		t.Error("missing afterID: expected error, got nil")
 	}
 	// marker says opts present, rc/opa missing.
-	if _, _, _, _, _, _, _, _, err := DecodeNamedScrollArgsOpts(append(append([]byte{}, base...), namedScrollOpts)); err == nil {
+	if _, _, _, _, _, _, _, _, err := DecodeNamedScrollArgsOpts(append(append([]byte{}, base...), NamedScrollOpts)); err == nil {
 		t.Error("missing rc/opa: expected error, got nil")
 	}
 	// marker says both present, only afterID supplied (opts short).
 	var idb [8]byte
 	binary.BigEndian.PutUint64(idb[:], 5)
-	trailer := append([]byte{namedScrollCursor | namedScrollOpts}, idb[:]...)
+	trailer := append([]byte{NamedScrollCursor | NamedScrollOpts}, idb[:]...)
 	if _, _, _, _, _, _, _, _, err := DecodeNamedScrollArgsOpts(append(append([]byte{}, base...), trailer...)); err == nil {
 		t.Error("cursor present but opts truncated: expected error, got nil")
 	}
@@ -792,14 +792,14 @@ func TestNamedGetBatchResultRoundtrip(t *testing.T) {
 	}
 	// truncation (fail-loud).
 	body := EncodeNamedGetBatchResult(rows)
-	if _, err := DecodeNamedGetBatchResult(nil); !errors.Is(err, errVectorArgsTruncated) {
-		t.Errorf("nil: err = %v, want errVectorArgsTruncated", err)
+	if _, err := DecodeNamedGetBatchResult(nil); !errors.Is(err, ErrVectorArgsTruncated) {
+		t.Errorf("nil: err = %v, want ErrVectorArgsTruncated", err)
 	}
-	if _, err := DecodeNamedGetBatchResult(body[:2]); !errors.Is(err, errVectorArgsTruncated) {
-		t.Errorf("header chop: err = %v, want errVectorArgsTruncated", err)
+	if _, err := DecodeNamedGetBatchResult(body[:2]); !errors.Is(err, ErrVectorArgsTruncated) {
+		t.Errorf("header chop: err = %v, want ErrVectorArgsTruncated", err)
 	}
-	if _, err := DecodeNamedGetBatchResult(body[:10]); !errors.Is(err, errVectorArgsTruncated) {
-		t.Errorf("mid-row chop: err = %v, want errVectorArgsTruncated", err)
+	if _, err := DecodeNamedGetBatchResult(body[:10]); !errors.Is(err, ErrVectorArgsTruncated) {
+		t.Errorf("mid-row chop: err = %v, want ErrVectorArgsTruncated", err)
 	}
 }
 
@@ -855,12 +855,12 @@ func TestHandleNamedGetBatch(t *testing.T) {
 	}
 
 	// projection: with_vector off -> no map, payload kept; with_payload off -> map kept, no meta.
-	body, _ = handleNamedGetBatch(tx, EncodeVectorGetBatchArgs("docs", []uint64{1}, getFlagWithPayload))
+	body, _ = handleNamedGetBatch(tx, EncodeVectorGetBatchArgs("docs", []uint64{1}, GetFlagWithPayload))
 	rows, _ = DecodeNamedGetBatchResult(body)
 	if !rows[0].Found || len(rows[0].Vectors) != 0 || rows[0].Meta["a"].Int != 1 {
 		t.Errorf("with_vector off: %+v", rows[0])
 	}
-	body, _ = handleNamedGetBatch(tx, EncodeVectorGetBatchArgs("docs", []uint64{1}, getFlagWithVector))
+	body, _ = handleNamedGetBatch(tx, EncodeVectorGetBatchArgs("docs", []uint64{1}, GetFlagWithVector))
 	rows, _ = DecodeNamedGetBatchResult(body)
 	if !rows[0].Found || rows[0].Vectors["title"][0] != 1 || rows[0].Meta != nil {
 		t.Errorf("with_payload off: %+v", rows[0])

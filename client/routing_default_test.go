@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rostamlabs/rostam/ops"
+	"github.com/rostamlabs/rostam/ops/wire"
 )
 
 // NewRouted wires routing; a keyed round-trip against a real node works.
@@ -24,7 +24,7 @@ func TestNewRoutedWiresRoutingRegistry(t *testing.T) {
 		t.Fatal("NewRouted did not wire a routing registry")
 	}
 	ctx := context.Background()
-	if _, err := c.Call(ctx, "put", ops.EncodePutArgs([]byte("k"), []byte("v"), 0)); err != nil {
+	if _, err := c.Call(ctx, "put", wire.EncodePutArgs([]byte("k"), []byte("v"), 0)); err != nil {
 		t.Fatalf("Call put via routed client: %v", err)
 	}
 }
@@ -48,8 +48,8 @@ func TestNewDoesNotAutoWireRouting(t *testing.T) {
 
 // A caller-supplied Ops registry is preserved by NewRouted (not overwritten).
 func TestNewRoutedPreservesSuppliedOps(t *testing.T) {
-	reg := ops.NewRegistry()
-	if err := ops.RegisterBuiltins(reg); err != nil {
+	reg := wire.NewRegistry()
+	if err := wire.RegisterRoutableBuiltins(reg); err != nil {
 		t.Fatal(err)
 	}
 	c, err := NewRouted(Config{

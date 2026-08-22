@@ -155,8 +155,8 @@ func TestVectorHandlerGetPoolReusesScratch(t *testing.T) {
 		if err != nil {
 			t.Fatalf("DecodeVectorGetArgs: %v", err)
 		}
-		withVec := flags&getFlagWithVector != 0
-		withPayload := flags&getFlagWithPayload != 0
+		withVec := flags&GetFlagWithVector != 0
+		withPayload := flags&GetFlagWithPayload != 0
 		vec, meta, ttl, sparse, version, ok, err := tx.vectors.GetPointVersion(gname, gid)
 		if err != nil {
 			t.Fatalf("GetPointVersion: %v", err)

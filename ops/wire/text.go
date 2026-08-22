@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-package ops
+package wire
 
 import (
 	"encoding/binary"
@@ -22,10 +22,10 @@ import (
 //   - vector_hybrid_text(_lanes): dense + raw text, fused server-side.
 //
 // The collection name sits at offset 1 (behind the flags byte) in BOTH layouts —
-// the At2 routing layout (vectorKeyColAt2), IDENTICAL to vector_hybrid_search — so
+// the At2 routing layout (VectorKeyColAt2), IDENTICAL to vector_hybrid_search — so
 // the CollectionNameFor offset table and the routing key extractor are reused
 // verbatim. DOUBLE-CHECKED: flags is args[0], colLen is args[1], col is
-// args[2:2+colLen] — exactly what vectorKeyColAt2 reads.
+// args[2:2+colLen] — exactly what VectorKeyColAt2 reads.
 //
 // SHARDED-IDF / global-DF: by default each shard scores the text query against ITS
 // OWN local corpus stats (n/df/avgdl), so partitioned BM25 scores are APPROXIMATE vs
@@ -107,7 +107,7 @@ func readGlobalStatsBlock(args []byte, off int, flags uint8) (g *vector.BM25Glob
 		return nil, off, nil
 	}
 	if len(args) < off+globalStatsHdrLen {
-		return nil, off, errVectorArgsTruncated
+		return nil, off, ErrVectorArgsTruncated
 	}
 	n := int(int64(binary.BigEndian.Uint64(args[off:])))
 	off += 8
@@ -119,7 +119,7 @@ func readGlobalStatsBlock(args []byte, off int, flags uint8) (g *vector.BM25Glob
 	// express it as the shared bound anyway: the same reasoning in one place, and no
 	// reliance on int being 64 bits.
 	if !CountFitsIn(cnt, len(args)-off, dfPairLen) {
-		return nil, off, errVectorArgsTruncated
+		return nil, off, ErrVectorArgsTruncated
 	}
 	df := make(map[uint32]int, cnt)
 	for i := 0; i < cnt; i++ {
@@ -222,12 +222,12 @@ func DecodeSearchTextArgs(args []byte) (collection string, query string, k int, 
 // consumed so DecodeSearchTextArgsOpts can read a trailing opts block.
 func decodeSearchTextArgsN(args []byte) (collection string, query string, k int, filter vector.Filter, n int, err error) {
 	if len(args) < 2 {
-		return "", "", 0, filter, 0, errVectorArgsTruncated
+		return "", "", 0, filter, 0, ErrVectorArgsTruncated
 	}
 	flags := args[0]
 	colLen := int(args[1])
 	if len(args) < 2+colLen+4+4 {
-		return "", "", 0, filter, 0, errVectorArgsTruncated
+		return "", "", 0, filter, 0, ErrVectorArgsTruncated
 	}
 	collection = string(args[2 : 2+colLen])
 	off := 2 + colLen
@@ -239,18 +239,18 @@ func decodeSearchTextArgsN(args []byte) (collection string, query string, k int,
 	// args[off : off+qLen] a backwards slice. CountFitsIn rejects the sign; the
 	// element floor is 1 because a query is a byte string.
 	if !CountFitsIn(qLen, len(args)-off, 1) {
-		return "", "", 0, filter, 0, errVectorArgsTruncated
+		return "", "", 0, filter, 0, ErrVectorArgsTruncated
 	}
 	query = string(args[off : off+qLen])
 	off += qLen
 	if flags&textFlagFilter != 0 {
 		if len(args) < off+4 {
-			return "", "", 0, filter, 0, errVectorArgsTruncated
+			return "", "", 0, filter, 0, ErrVectorArgsTruncated
 		}
 		flen := int(binary.BigEndian.Uint32(args[off:]))
 		off += 4
 		if len(args) < off+flen {
-			return "", "", 0, filter, 0, errVectorArgsTruncated
+			return "", "", 0, filter, 0, ErrVectorArgsTruncated
 		}
 		if uerr := json.Unmarshal(args[off:off+flen], &filter); uerr != nil {
 			return "", "", 0, filter, 0, fmt.Errorf("ops: decode filter: %w", uerr)
@@ -284,7 +284,7 @@ func DecodeSearchTextArgsGlobal(args []byte) (collection string, query string, k
 	off := n
 	if flags&textFlagOpts != 0 {
 		if len(args) < n+2 {
-			return "", "", 0, filter, 0, 0, 0, false, nil, errVectorArgsTruncated
+			return "", "", 0, filter, 0, 0, 0, false, nil, ErrVectorArgsTruncated
 		}
 		readConsistency = args[n]
 		onPartitionUnavailable = args[n+1]
@@ -390,13 +390,13 @@ func DecodeHybridTextArgs(args []byte) (collection string, dense []float32, quer
 
 func decodeHybridTextArgsN(args []byte) (collection string, dense []float32, query string, k int, opts vector.HybridOpts, n int, err error) {
 	if len(args) < 2 {
-		return "", nil, "", 0, opts, 0, errVectorArgsTruncated
+		return "", nil, "", 0, opts, 0, ErrVectorArgsTruncated
 	}
 	flags := args[0]
 	colLen := int(args[1])
 	// fixed: flags(1)+colLen(1)+col+k(4)+method(1)+alpha(8)+rrfK(4)+denseK(4)+sparseK(4)+dim(4)
 	if len(args) < 2+colLen+4+1+8+4+4+4+4 {
-		return "", nil, "", 0, opts, 0, errVectorArgsTruncated
+		return "", nil, "", 0, opts, 0, ErrVectorArgsTruncated
 	}
 	collection = string(args[2 : 2+colLen])
 	off := 2 + colLen
@@ -417,7 +417,7 @@ func decodeHybridTextArgsN(args []byte) (collection string, dense []float32, que
 	// See DecodeVectorInsertArgs: 4*dim overflows to 0 for a negative dim, and
 	// make([]float32, dim) then panics rather than erroring.
 	if !CountFitsIn(dim, len(args)-off, 4) {
-		return "", nil, "", 0, opts, 0, errVectorArgsTruncated
+		return "", nil, "", 0, opts, 0, ErrVectorArgsTruncated
 	}
 	dense = make([]float32, dim)
 	for i := 0; i < dim; i++ {
@@ -425,23 +425,23 @@ func decodeHybridTextArgsN(args []byte) (collection string, dense []float32, que
 		off += 4
 	}
 	if len(args) < off+4 {
-		return "", nil, "", 0, opts, 0, errVectorArgsTruncated
+		return "", nil, "", 0, opts, 0, ErrVectorArgsTruncated
 	}
 	qLen := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
 	if len(args) < off+qLen {
-		return "", nil, "", 0, opts, 0, errVectorArgsTruncated
+		return "", nil, "", 0, opts, 0, ErrVectorArgsTruncated
 	}
 	query = string(args[off : off+qLen])
 	off += qLen
 	if flags&textFlagFilter != 0 {
 		if len(args) < off+4 {
-			return "", nil, "", 0, opts, 0, errVectorArgsTruncated
+			return "", nil, "", 0, opts, 0, ErrVectorArgsTruncated
 		}
 		flen := int(binary.BigEndian.Uint32(args[off:]))
 		off += 4
 		if len(args) < off+flen {
-			return "", nil, "", 0, opts, 0, errVectorArgsTruncated
+			return "", nil, "", 0, opts, 0, ErrVectorArgsTruncated
 		}
 		if uerr := json.Unmarshal(args[off:off+flen], &opts.Filter); uerr != nil {
 			return "", nil, "", 0, opts, 0, fmt.Errorf("ops: decode filter: %w", uerr)
@@ -475,7 +475,7 @@ func DecodeHybridTextArgsGlobal(args []byte) (collection string, dense []float32
 	off := n
 	if flags&textFlagOpts != 0 {
 		if len(args) < n+2 {
-			return "", nil, "", 0, opts, 0, 0, 0, false, nil, errVectorArgsTruncated
+			return "", nil, "", 0, opts, 0, 0, 0, false, nil, ErrVectorArgsTruncated
 		}
 		readConsistency = args[n]
 		onPartitionUnavailable = args[n+1]
@@ -498,7 +498,7 @@ func DecodeHybridTextArgsGlobal(args []byte) (collection string, dense []float32
 // terms (n, tokenTotal, and per-term df). The coordinator fans it to every
 // partition and SUMS the results into the global N/avgdl/df injected into phase 1.
 //
-// Args wire (collection at offset 0 — the At1 routing layout, vectorKeyColAt1,
+// Args wire (collection at offset 0 — the At1 routing layout, VectorKeyColAt1,
 // NOT the flags-first At2 of the scoring ops):
 //
 //	[colLen:u8][col]
@@ -506,7 +506,7 @@ func DecodeHybridTextArgsGlobal(args []byte) (collection string, dense []float32
 //	(optional self-delimiting [marker][rc][opa](+bound) read-opts trailer)
 //
 // The rc/opa/bound trailer uses the shared self-delimiting marker codec
-// (appendReadOptsTrailerBounded) so a no-opts blob is byte-identical to the bare
+// (AppendReadOptsTrailerBounded) so a no-opts blob is byte-identical to the bare
 // [col][query] form and ReadConsistencyOf can peek the rc for the Linearizable
 // barrier on phase 0.
 
@@ -519,7 +519,7 @@ func EncodeBM25StatsArgs(collection string, query string, readConsistency, onPar
 	buf = append(buf, collection...)
 	buf = binary.BigEndian.AppendUint32(buf, uint32(len(query)))
 	buf = append(buf, query...)
-	buf = appendReadOptsTrailerBounded(buf, readConsistency, onPartitionUnavailable, bound)
+	buf = AppendReadOptsTrailerBounded(buf, readConsistency, onPartitionUnavailable, bound)
 	return buf
 }
 
@@ -527,18 +527,18 @@ func EncodeBM25StatsArgs(collection string, query string, readConsistency, onPar
 // consumed so the opts trailer can be read behind it.
 func decodeBM25StatsArgsN(args []byte) (collection string, query string, n int, err error) {
 	if len(args) < 1 {
-		return "", "", 0, errVectorArgsTruncated
+		return "", "", 0, ErrVectorArgsTruncated
 	}
 	colLen := int(args[0])
 	if len(args) < 1+colLen+4 {
-		return "", "", 0, errVectorArgsTruncated
+		return "", "", 0, ErrVectorArgsTruncated
 	}
 	collection = string(args[1 : 1+colLen])
 	off := 1 + colLen
 	qLen := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
 	if len(args) < off+qLen {
-		return "", "", 0, errVectorArgsTruncated
+		return "", "", 0, ErrVectorArgsTruncated
 	}
 	query = string(args[off : off+qLen])
 	off += qLen
@@ -552,7 +552,7 @@ func DecodeBM25StatsArgs(args []byte) (collection string, query string, readCons
 	if err != nil {
 		return "", "", 0, 0, 0, err
 	}
-	readConsistency, onPartitionUnavailable, bound, err = decodeReadOptsTrailerBounded(args, n)
+	readConsistency, onPartitionUnavailable, bound, err = DecodeReadOptsTrailerBounded(args, n)
 	if err != nil {
 		return "", "", 0, 0, 0, err
 	}
@@ -578,7 +578,7 @@ func EncodeBM25StatsResult(n int, tokenTotal uint64, df map[uint32]int) []byte {
 // DecodeBM25StatsResult decodes a partition's corpus stats reply.
 func DecodeBM25StatsResult(body []byte) (n int, tokenTotal uint64, df map[uint32]int, err error) {
 	if len(body) < bm25StatsResultHdr {
-		return 0, 0, nil, errVectorArgsTruncated
+		return 0, 0, nil, ErrVectorArgsTruncated
 	}
 	n = int(int64(binary.BigEndian.Uint64(body[0:])))
 	tokenTotal = binary.BigEndian.Uint64(body[8:])
@@ -587,7 +587,7 @@ func DecodeBM25StatsResult(body []byte) (n int, tokenTotal uint64, df map[uint32
 	// See the args-side twin: one wire factor times a constant, expressed as the
 	// shared bound so the reasoning lives in one place.
 	if !CountFitsIn(cnt, len(body)-off, dfPairLen) {
-		return 0, 0, nil, errVectorArgsTruncated
+		return 0, 0, nil, ErrVectorArgsTruncated
 	}
 	if cnt > 0 {
 		df = make(map[uint32]int, cnt)

@@ -6,7 +6,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/rostamlabs/rostam/ops"
+	"github.com/rostamlabs/rostam/ops/wire"
 	"github.com/rostamlabs/rostam/vector"
 )
 
@@ -77,16 +77,16 @@ type QueryRequest struct {
 // Returns ErrCollectionNotFound when the collection itself does not exist
 // (this also covers Recommend, which delegates to Query).
 func (col *Collection) Query(ctx context.Context, req QueryRequest) (SearchResponse, error) {
-	specBytes, err := ops.MarshalEngineQuerySpec(req.Spec)
+	specBytes, err := wire.MarshalEngineQuerySpec(req.Spec)
 	if err != nil {
 		return SearchResponse{}, fmt.Errorf("client: marshal query spec: %w", err)
 	}
 	body, err := col.c.Call(ctx, "vector_query",
-		ops.EncodeQueryArgs(col.name, specBytes, uint8(req.Consistency), 0, 0))
+		wire.EncodeQueryArgs(col.name, specBytes, uint8(req.Consistency), 0, 0))
 	if err != nil {
 		return SearchResponse{}, mapCollErr(err)
 	}
-	results, degraded, missing, err := ops.DecodeQueryResultDegraded(body)
+	results, degraded, missing, err := wire.DecodeQueryResultDegraded(body)
 	if err != nil {
 		return SearchResponse{}, err
 	}

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-package ops
+package wire
 
 import "encoding/binary"
 
@@ -15,28 +15,28 @@ const (
 	ConsistencyBoundedStaleness uint8 = 3 // any-replica read with a max-staleness bound (8-byte raft-entry bound rides the trailer)
 )
 
-// readOptsTrailerMarker is the self-delimiting marker byte that, when present at
+// ReadOptsTrailerMarker is the self-delimiting marker byte that, when present at
 // the end of a get / get_config arg blob, signals an [rc:u8][opa:u8] opts block
-// follows. It mirrors namedTrailerOpts (the named-search trailer): a zero marker
+// follows. It mirrors NamedTrailerOpts (the named-search trailer): a zero marker
 // is NEVER emitted, so a legacy (no-trailer) blob — or one whose rc/opa are both
-// zero — is byte-identical to the pre-rc form. Value 1<<0 matches namedTrailerOpts
+// zero — is byte-identical to the pre-rc form. Value 1<<0 matches NamedTrailerOpts
 // so the wire convention is uniform across the read families.
-const readOptsTrailerMarker uint8 = 1 << 0 // [rc:u8][opa:u8] follow
+const ReadOptsTrailerMarker uint8 = 1 << 0 // [rc:u8][opa:u8] follow
 
-// readOptsStalenessBit is the SECOND marker bit, OR'd into the trailer marker ONLY
+// ReadOptsStalenessBit is the SECOND marker bit, OR'd into the trailer marker ONLY
 // for a ConsistencyBoundedStaleness read. When set, an 8-byte big-endian staleness
 // bound (max raft entries the served replica may lag the leader's committed
 // frontier) follows the [marker][rc][opa] block. It is additive: rc∈{0,1,2} never
 // set it, so those trailers are byte-identical to the pre-bounded-staleness form.
-const readOptsStalenessBit uint8 = 1 << 1 // an 8-byte big-endian bound follows [marker][rc][opa]
+const ReadOptsStalenessBit uint8 = 1 << 1 // an 8-byte big-endian bound follows [marker][rc][opa]
 
-// appendReadOptsTrailerBounded appends the self-delimiting opts trailer to base,
+// AppendReadOptsTrailerBounded appends the self-delimiting opts trailer to base,
 // optionally carrying an 8-byte big-endian staleness bound. It is the single source
-// of truth the legacy appendReadOptsTrailer wraps:
+// of truth the legacy AppendReadOptsTrailer wraps:
 //   - rc==0 && opa==0 → base UNCHANGED (byte-identical to the legacy / no-trailer
 //     form), so the AnyReplica default path is wire-identical and the bound is never
 //     on the wire when unused.
-//   - rc==ConsistencyBoundedStaleness → marker = readOptsTrailerMarker|readOptsStalenessBit,
+//   - rc==ConsistencyBoundedStaleness → marker = ReadOptsTrailerMarker|ReadOptsStalenessBit,
 //     then [marker][rc][opa] followed by the 8 bound bytes (big-endian).
 //   - any other rc/opa (rc∈{1,2}, or rc==0 with opa!=0) → [marker][rc][opa], EXACTLY
 //     the current 3-byte form ⇒ byte-identical to the pre-bounded-staleness trailer.
@@ -44,17 +44,17 @@ const readOptsStalenessBit uint8 = 1 << 1 // an 8-byte big-endian bound follows 
 // The bound rides ONLY when rc==ConsistencyBoundedStaleness, regardless of its
 // value (a bound==0 bounded-staleness read still carries the 8 zero bytes so the
 // staleness bit, and hence the level, survives a round-trip unambiguously).
-func appendReadOptsTrailerBounded(base []byte, rc, opa uint8, bound uint64) []byte {
+func AppendReadOptsTrailerBounded(base []byte, rc, opa uint8, bound uint64) []byte {
 	if rc == 0 && opa == 0 {
 		return base // byte-identical to the legacy / no-trailer form
 	}
 	if rc == ConsistencyBoundedStaleness {
-		out := append(base, readOptsTrailerMarker|readOptsStalenessBit, rc, opa)
+		out := append(base, ReadOptsTrailerMarker|ReadOptsStalenessBit, rc, opa)
 		var b [8]byte
 		binary.BigEndian.PutUint64(b[:], bound)
 		return append(out, b[:]...)
 	}
-	return append(base, readOptsTrailerMarker, rc, opa)
+	return append(base, ReadOptsTrailerMarker, rc, opa)
 }
 
 // appendBoundTail appends the 8-byte big-endian staleness bound to out, but ONLY
@@ -84,55 +84,55 @@ func readBoundTail(args []byte, off int, rc uint8) (bound uint64, newOff int, er
 		return 0, off, nil
 	}
 	if len(args) < off+8 {
-		return 0, off, errVectorArgsTruncated
+		return 0, off, ErrVectorArgsTruncated
 	}
 	return binary.BigEndian.Uint64(args[off : off+8]), off + 8, nil
 }
 
-// appendReadOptsTrailer is the legacy 3-byte trailer codec, now a thin wrapper over
-// appendReadOptsTrailerBounded with bound==0. Existing callers (rc∈{0,1,2}) are
+// AppendReadOptsTrailer is the legacy 3-byte trailer codec, now a thin wrapper over
+// AppendReadOptsTrailerBounded with bound==0. Existing callers (rc∈{0,1,2}) are
 // byte-identical to before — they never set the staleness bit (which only fires for
 // rc==ConsistencyBoundedStaleness). ZERO churn.
-func appendReadOptsTrailer(base []byte, rc, opa uint8) []byte {
-	return appendReadOptsTrailerBounded(base, rc, opa, 0)
+func AppendReadOptsTrailer(base []byte, rc, opa uint8) []byte {
+	return AppendReadOptsTrailerBounded(base, rc, opa, 0)
 }
 
-// decodeReadOptsTrailerBounded reads the optional [marker][rc][opa](+[bound:u64])
+// DecodeReadOptsTrailerBounded reads the optional [marker][rc][opa](+[bound:u64])
 // trailer that may sit at offset n of args (the bytes consumed by the base decode).
 // Backward-compatible: no trailer (or a zero marker, never emitted ⇒ treated as "no
 // trailer" for trailing-byte tolerance) yields rc=0, opa=0, bound=0. A present
 // marker with a truncated rc/opa block, OR a set staleness bit with a truncated
 // 8-byte bound, is corruption — fail loud (never a silent drop, so a bounded /
 // linearizable read can never silently degrade to stale).
-func decodeReadOptsTrailerBounded(args []byte, n int) (rc, opa uint8, bound uint64, err error) {
+func DecodeReadOptsTrailerBounded(args []byte, n int) (rc, opa uint8, bound uint64, err error) {
 	if len(args) <= n || args[n] == 0 {
 		return 0, 0, 0, nil
 	}
 	marker := args[n]
 	off := n + 1
-	if marker&readOptsTrailerMarker != 0 {
+	if marker&ReadOptsTrailerMarker != 0 {
 		if len(args) < off+2 {
-			return 0, 0, 0, errVectorArgsTruncated
+			return 0, 0, 0, ErrVectorArgsTruncated
 		}
 		rc = args[off]
 		opa = args[off+1]
 		off += 2
 	}
-	if marker&readOptsStalenessBit != 0 {
+	if marker&ReadOptsStalenessBit != 0 {
 		if len(args) < off+8 {
-			return 0, 0, 0, errVectorArgsTruncated
+			return 0, 0, 0, ErrVectorArgsTruncated
 		}
 		bound = binary.BigEndian.Uint64(args[off : off+8])
 	}
 	return rc, opa, bound, nil
 }
 
-// decodeReadOptsTrailer reads the optional [marker][rc][opa] trailer, delegating to
-// decodeReadOptsTrailerBounded and dropping the bound so existing callers are
+// DecodeReadOptsTrailer reads the optional [marker][rc][opa] trailer, delegating to
+// DecodeReadOptsTrailerBounded and dropping the bound so existing callers are
 // unchanged. A bounded-staleness trailer's 8 bound bytes are still consumed/validated
 // (fail-loud) by the delegate; this view simply does not surface them.
-func decodeReadOptsTrailer(args []byte, n int) (rc, opa uint8, err error) {
-	rc, opa, _, err = decodeReadOptsTrailerBounded(args, n)
+func DecodeReadOptsTrailer(args []byte, n int) (rc, opa uint8, err error) {
+	rc, opa, _, err = DecodeReadOptsTrailerBounded(args, n)
 	return rc, opa, err
 }
 
@@ -439,7 +439,7 @@ func ReadConsistencyOf(op string, args []byte) (rc uint8, ok bool) {
 	case "vector_query", "vector_named_query", "vector_mv_query":
 		// The unified Query API ops (dense + named + MV) carry rc/opa in the shared
 		// self-delimiting read-opts trailer (EncodeQueryArgs →
-		// appendReadOptsTrailerBounded); without this case a Linearizable query
+		// AppendReadOptsTrailerBounded); without this case a Linearizable query
 		// skips the shard barrier ⇒ stale-capable.
 		_, _, rc, _, _, err := DecodeQueryArgs(args)
 		if err != nil {

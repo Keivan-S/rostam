@@ -10212,80 +10212,7 @@ const file_grpcapi_pb_rostam_proto_rawDesc = "" +
 	"\x11QUERY_MODE_RERANK\x10\x01*K\n" +
 	"\x11RecommendStrategy\x12\x1c\n" +
 	"\x18RECOMMEND_AVERAGE_VECTOR\x10\x00\x12\x18\n" +
-	"\x14RECOMMEND_BEST_SCORE\x10\x012\x80'\n" +
-	"\rVectorService\x12=\n" +
-	"\x06Health\x12\x18.rostam.v1.HealthRequest\x1a\x19.rostam.v1.HealthResponse\x12[\n" +
-	"\x10CreateCollection\x12\".rostam.v1.CreateCollectionRequest\x1a#.rostam.v1.CreateCollectionResponse\x12U\n" +
-	"\x0eDropCollection\x12 .rostam.v1.DropCollectionRequest\x1a!.rostam.v1.DropCollectionResponse\x12=\n" +
-	"\x06Upsert\x12\x18.rostam.v1.UpsertRequest\x1a\x19.rostam.v1.UpsertResponse\x12=\n" +
-	"\x06Delete\x12\x18.rostam.v1.DeleteRequest\x1a\x19.rostam.v1.DeleteResponse\x124\n" +
-	"\x03Get\x12\x15.rostam.v1.GetRequest\x1a\x16.rostam.v1.GetResponse\x12C\n" +
-	"\bGetBatch\x12\x1a.rostam.v1.GetBatchRequest\x1a\x1b.rostam.v1.GetBatchResponse\x12F\n" +
-	"\n" +
-	"SetPayload\x12\x1c.rostam.v1.SetPayloadRequest\x1a\x1a.rostam.v1.PayloadResponse\x12L\n" +
-	"\x10OverwritePayload\x12\x1c.rostam.v1.SetPayloadRequest\x1a\x1a.rostam.v1.PayloadResponse\x12T\n" +
-	"\x11DeletePayloadKeys\x12#.rostam.v1.DeletePayloadKeysRequest\x1a\x1a.rostam.v1.PayloadResponse\x12J\n" +
-	"\fClearPayload\x12\x1e.rostam.v1.ClearPayloadRequest\x1a\x1a.rostam.v1.PayloadResponse\x12=\n" +
-	"\x06Search\x12\x18.rostam.v1.SearchRequest\x1a\x19.rostam.v1.SearchResponse\x12E\n" +
-	"\n" +
-	"SearchDocs\x12\x18.rostam.v1.SearchRequest\x1a\x1d.rostam.v1.SearchDocsResponse\x12O\n" +
-	"\fSearchGroups\x12\x1e.rostam.v1.SearchGroupsRequest\x1a\x1f.rostam.v1.SearchGroupsResponse\x12C\n" +
-	"\fHybridSearch\x12\x18.rostam.v1.HybridRequest\x1a\x19.rostam.v1.SearchResponse\x12I\n" +
-	"\n" +
-	"TextSearch\x12\x1c.rostam.v1.TextSearchRequest\x1a\x1d.rostam.v1.SearchDocsResponse\x12K\n" +
-	"\x10HybridTextSearch\x12\x1c.rostam.v1.HybridTextRequest\x1a\x19.rostam.v1.SearchResponse\x12G\n" +
-	"\vVectorQuery\x12\x1d.rostam.v1.VectorQueryRequest\x1a\x19.rostam.v1.SearchResponse\x12Q\n" +
-	"\x10NamedVectorQuery\x12\".rostam.v1.NamedVectorQueryRequest\x1a\x19.rostam.v1.SearchResponse\x12K\n" +
-	"\rMVVectorQuery\x12\x1f.rostam.v1.MVVectorQueryRequest\x1a\x19.rostam.v1.SearchResponse\x12U\n" +
-	"\x0eDeleteByFilter\x12 .rostam.v1.DeleteByFilterRequest\x1a!.rostam.v1.DeleteByFilterResponse\x12@\n" +
-	"\aResplit\x12\x19.rostam.v1.ResplitRequest\x1a\x1a.rostam.v1.ResplitResponse\x12U\n" +
-	"\x0eResplitCleanup\x12 .rostam.v1.ResplitCleanupRequest\x1a!.rostam.v1.ResplitCleanupResponse\x12@\n" +
-	"\aReshard\x12\x19.rostam.v1.ReshardRequest\x1a\x1a.rostam.v1.ReshardResponse\x12O\n" +
-	"\fReshardAbort\x12\x1e.rostam.v1.ReshardAbortRequest\x1a\x1f.rostam.v1.ReshardAbortResponse\x12M\n" +
-	"\x12MVCreateCollection\x12\x1a.rostam.v1.MVCreateRequest\x1a\x1b.rostam.v1.MVCreateResponse\x12G\n" +
-	"\x10MVDropCollection\x12\x18.rostam.v1.MVDropRequest\x1a\x19.rostam.v1.MVDropResponse\x12:\n" +
-	"\x05MVAdd\x12\x17.rostam.v1.MVAddRequest\x1a\x18.rostam.v1.MVAddResponse\x12C\n" +
-	"\bMVSearch\x12\x1a.rostam.v1.MVSearchRequest\x1a\x1b.rostam.v1.MVSearchResponse\x12L\n" +
-	"\x0eMVHybridSearch\x12\x1a.rostam.v1.MVHybridRequest\x1a\x1e.rostam.v1.NamedSearchResponse\x12C\n" +
-	"\bMVScroll\x12\x1a.rostam.v1.MVScrollRequest\x1a\x1b.rostam.v1.MVScrollResponse\x12C\n" +
-	"\bMVDelete\x12\x1a.rostam.v1.MVDeleteRequest\x1a\x1b.rostam.v1.MVDeleteResponse\x12:\n" +
-	"\x05MVGet\x12\x17.rostam.v1.MVGetRequest\x1a\x18.rostam.v1.MVGetResponse\x12I\n" +
-	"\n" +
-	"MVGetBatch\x12\x1c.rostam.v1.MVGetBatchRequest\x1a\x1d.rostam.v1.MVGetBatchResponse\x12H\n" +
-	"\fMVSetPayload\x12\x1c.rostam.v1.SetPayloadRequest\x1a\x1a.rostam.v1.PayloadResponse\x12N\n" +
-	"\x12MVOverwritePayload\x12\x1c.rostam.v1.SetPayloadRequest\x1a\x1a.rostam.v1.PayloadResponse\x12V\n" +
-	"\x13MVDeletePayloadKeys\x12#.rostam.v1.DeletePayloadKeysRequest\x1a\x1a.rostam.v1.PayloadResponse\x12L\n" +
-	"\x0eMVClearPayload\x12\x1e.rostam.v1.ClearPayloadRequest\x1a\x1a.rostam.v1.PayloadResponse\x12B\n" +
-	"\tMVResplit\x12\x19.rostam.v1.ResplitRequest\x1a\x1a.rostam.v1.ResplitResponse\x12W\n" +
-	"\x10MVResplitCleanup\x12 .rostam.v1.ResplitCleanupRequest\x1a!.rostam.v1.ResplitCleanupResponse\x12B\n" +
-	"\tMVReshard\x12\x19.rostam.v1.ReshardRequest\x1a\x1a.rostam.v1.ReshardResponse\x12Q\n" +
-	"\x0eMVReshardAbort\x12\x1e.rostam.v1.ReshardAbortRequest\x1a\x1f.rostam.v1.ReshardAbortResponse\x12L\n" +
-	"\vNamedCreate\x12\x1d.rostam.v1.NamedCreateRequest\x1a\x1e.rostam.v1.NamedCreateResponse\x12F\n" +
-	"\tNamedDrop\x12\x1b.rostam.v1.NamedDropRequest\x1a\x1c.rostam.v1.NamedDropResponse\x12L\n" +
-	"\vNamedUpsert\x12\x1d.rostam.v1.NamedUpsertRequest\x1a\x1e.rostam.v1.NamedUpsertResponse\x12L\n" +
-	"\vNamedSearch\x12\x1d.rostam.v1.NamedSearchRequest\x1a\x1e.rostam.v1.NamedSearchResponse\x12X\n" +
-	"\x11NamedSparseSearch\x12#.rostam.v1.NamedSparseSearchRequest\x1a\x1e.rostam.v1.NamedSearchResponse\x12R\n" +
-	"\x11NamedHybridSearch\x12\x1d.rostam.v1.NamedHybridRequest\x1a\x1e.rostam.v1.NamedSearchResponse\x12T\n" +
-	"\x0fNamedSearchDocs\x12\x1d.rostam.v1.NamedSearchRequest\x1a\".rostam.v1.NamedSearchDocsResponse\x12L\n" +
-	"\vNamedDelete\x12\x1d.rostam.v1.NamedDeleteRequest\x1a\x1e.rostam.v1.NamedDeleteResponse\x12C\n" +
-	"\bNamedGet\x12\x1a.rostam.v1.NamedGetRequest\x1a\x1b.rostam.v1.NamedGetResponse\x12R\n" +
-	"\rNamedGetBatch\x12\x1f.rostam.v1.NamedGetBatchRequest\x1a .rostam.v1.NamedGetBatchResponse\x12K\n" +
-	"\x0fNamedSetPayload\x12\x1c.rostam.v1.SetPayloadRequest\x1a\x1a.rostam.v1.PayloadResponse\x12Q\n" +
-	"\x15NamedOverwritePayload\x12\x1c.rostam.v1.SetPayloadRequest\x1a\x1a.rostam.v1.PayloadResponse\x12Y\n" +
-	"\x16NamedDeletePayloadKeys\x12#.rostam.v1.DeletePayloadKeysRequest\x1a\x1a.rostam.v1.PayloadResponse\x12O\n" +
-	"\x11NamedClearPayload\x12\x1e.rostam.v1.ClearPayloadRequest\x1a\x1a.rostam.v1.PayloadResponse\x12L\n" +
-	"\vNamedScroll\x12\x1d.rostam.v1.NamedScrollRequest\x1a\x1e.rostam.v1.NamedScrollResponse\x12=\n" +
-	"\x06Scroll\x12\x18.rostam.v1.ScrollRequest\x1a\x19.rostam.v1.ScrollResponse\x12U\n" +
-	"\x0eNamedGetConfig\x12 .rostam.v1.NamedGetConfigRequest\x1a!.rostam.v1.NamedGetConfigResponse\x12L\n" +
-	"\vCreateAlias\x12\x1d.rostam.v1.CreateAliasRequest\x1a\x1e.rostam.v1.CreateAliasResponse\x12L\n" +
-	"\vDeleteAlias\x12\x1d.rostam.v1.DeleteAliasRequest\x1a\x1e.rostam.v1.DeleteAliasResponse\x12L\n" +
-	"\vListAliases\x12\x1d.rostam.v1.ListAliasesRequest\x1a\x1e.rostam.v1.ListAliasesResponse\x12I\n" +
-	"\n" +
-	"AliasBatch\x12\x1c.rostam.v1.AliasBatchRequest\x1a\x1d.rostam.v1.AliasBatchResponse\x128\n" +
-	"\aKeysAdd\x12\x19.rostam.v1.KeysAddRequest\x1a\x12.rostam.v1.KeysAck\x12>\n" +
-	"\n" +
-	"KeysRevoke\x12\x1c.rostam.v1.KeysRevokeRequest\x1a\x12.rostam.v1.KeysAck\x12C\n" +
-	"\bKeysList\x12\x1a.rostam.v1.KeysListRequest\x1a\x1b.rostam.v1.KeysListResponseB,Z*github.com/rostamlabs/rostam/grpcapi/pb;pbb\x06proto3"
+	"\x14RECOMMEND_BEST_SCORE\x10\x01B,Z*github.com/rostamlabs/rostam/grpcapi/pb;pbb\x06proto3"
 
 var (
 	file_grpcapi_pb_rostam_proto_rawDescOnce sync.Once
@@ -10495,140 +10422,8 @@ var file_grpcapi_pb_rostam_proto_depIdxs = []int32{
 	2,   // 58: rostam.v1.NamedUpsertRequest.VectorsEntry.value:type_name -> rostam.v1.NamedVectorList
 	2,   // 59: rostam.v1.NamedGetResponse.VectorsEntry.value:type_name -> rostam.v1.NamedVectorList
 	2,   // 60: rostam.v1.NamedBatchGetPoint.VectorsEntry.value:type_name -> rostam.v1.NamedVectorList
-	40,  // 61: rostam.v1.VectorService.Health:input_type -> rostam.v1.HealthRequest
-	44,  // 62: rostam.v1.VectorService.CreateCollection:input_type -> rostam.v1.CreateCollectionRequest
-	46,  // 63: rostam.v1.VectorService.DropCollection:input_type -> rostam.v1.DropCollectionRequest
-	48,  // 64: rostam.v1.VectorService.Upsert:input_type -> rostam.v1.UpsertRequest
-	50,  // 65: rostam.v1.VectorService.Delete:input_type -> rostam.v1.DeleteRequest
-	73,  // 66: rostam.v1.VectorService.Get:input_type -> rostam.v1.GetRequest
-	75,  // 67: rostam.v1.VectorService.GetBatch:input_type -> rostam.v1.GetBatchRequest
-	78,  // 68: rostam.v1.VectorService.SetPayload:input_type -> rostam.v1.SetPayloadRequest
-	78,  // 69: rostam.v1.VectorService.OverwritePayload:input_type -> rostam.v1.SetPayloadRequest
-	79,  // 70: rostam.v1.VectorService.DeletePayloadKeys:input_type -> rostam.v1.DeletePayloadKeysRequest
-	80,  // 71: rostam.v1.VectorService.ClearPayload:input_type -> rostam.v1.ClearPayloadRequest
-	52,  // 72: rostam.v1.VectorService.Search:input_type -> rostam.v1.SearchRequest
-	52,  // 73: rostam.v1.VectorService.SearchDocs:input_type -> rostam.v1.SearchRequest
-	57,  // 74: rostam.v1.VectorService.SearchGroups:input_type -> rostam.v1.SearchGroupsRequest
-	60,  // 75: rostam.v1.VectorService.HybridSearch:input_type -> rostam.v1.HybridRequest
-	61,  // 76: rostam.v1.VectorService.TextSearch:input_type -> rostam.v1.TextSearchRequest
-	62,  // 77: rostam.v1.VectorService.HybridTextSearch:input_type -> rostam.v1.HybridTextRequest
-	114, // 78: rostam.v1.VectorService.VectorQuery:input_type -> rostam.v1.VectorQueryRequest
-	115, // 79: rostam.v1.VectorService.NamedVectorQuery:input_type -> rostam.v1.NamedVectorQueryRequest
-	116, // 80: rostam.v1.VectorService.MVVectorQuery:input_type -> rostam.v1.MVVectorQueryRequest
-	63,  // 81: rostam.v1.VectorService.DeleteByFilter:input_type -> rostam.v1.DeleteByFilterRequest
-	65,  // 82: rostam.v1.VectorService.Resplit:input_type -> rostam.v1.ResplitRequest
-	67,  // 83: rostam.v1.VectorService.ResplitCleanup:input_type -> rostam.v1.ResplitCleanupRequest
-	69,  // 84: rostam.v1.VectorService.Reshard:input_type -> rostam.v1.ReshardRequest
-	71,  // 85: rostam.v1.VectorService.ReshardAbort:input_type -> rostam.v1.ReshardAbortRequest
-	26,  // 86: rostam.v1.VectorService.MVCreateCollection:input_type -> rostam.v1.MVCreateRequest
-	28,  // 87: rostam.v1.VectorService.MVDropCollection:input_type -> rostam.v1.MVDropRequest
-	30,  // 88: rostam.v1.VectorService.MVAdd:input_type -> rostam.v1.MVAddRequest
-	32,  // 89: rostam.v1.VectorService.MVSearch:input_type -> rostam.v1.MVSearchRequest
-	35,  // 90: rostam.v1.VectorService.MVHybridSearch:input_type -> rostam.v1.MVHybridRequest
-	36,  // 91: rostam.v1.VectorService.MVScroll:input_type -> rostam.v1.MVScrollRequest
-	38,  // 92: rostam.v1.VectorService.MVDelete:input_type -> rostam.v1.MVDeleteRequest
-	87,  // 93: rostam.v1.VectorService.MVGet:input_type -> rostam.v1.MVGetRequest
-	89,  // 94: rostam.v1.VectorService.MVGetBatch:input_type -> rostam.v1.MVGetBatchRequest
-	78,  // 95: rostam.v1.VectorService.MVSetPayload:input_type -> rostam.v1.SetPayloadRequest
-	78,  // 96: rostam.v1.VectorService.MVOverwritePayload:input_type -> rostam.v1.SetPayloadRequest
-	79,  // 97: rostam.v1.VectorService.MVDeletePayloadKeys:input_type -> rostam.v1.DeletePayloadKeysRequest
-	80,  // 98: rostam.v1.VectorService.MVClearPayload:input_type -> rostam.v1.ClearPayloadRequest
-	65,  // 99: rostam.v1.VectorService.MVResplit:input_type -> rostam.v1.ResplitRequest
-	67,  // 100: rostam.v1.VectorService.MVResplitCleanup:input_type -> rostam.v1.ResplitCleanupRequest
-	69,  // 101: rostam.v1.VectorService.MVReshard:input_type -> rostam.v1.ReshardRequest
-	71,  // 102: rostam.v1.VectorService.MVReshardAbort:input_type -> rostam.v1.ReshardAbortRequest
-	3,   // 103: rostam.v1.VectorService.NamedCreate:input_type -> rostam.v1.NamedCreateRequest
-	5,   // 104: rostam.v1.VectorService.NamedDrop:input_type -> rostam.v1.NamedDropRequest
-	7,   // 105: rostam.v1.VectorService.NamedUpsert:input_type -> rostam.v1.NamedUpsertRequest
-	9,   // 106: rostam.v1.VectorService.NamedSearch:input_type -> rostam.v1.NamedSearchRequest
-	12,  // 107: rostam.v1.VectorService.NamedSparseSearch:input_type -> rostam.v1.NamedSparseSearchRequest
-	13,  // 108: rostam.v1.VectorService.NamedHybridSearch:input_type -> rostam.v1.NamedHybridRequest
-	9,   // 109: rostam.v1.VectorService.NamedSearchDocs:input_type -> rostam.v1.NamedSearchRequest
-	15,  // 110: rostam.v1.VectorService.NamedDelete:input_type -> rostam.v1.NamedDeleteRequest
-	82,  // 111: rostam.v1.VectorService.NamedGet:input_type -> rostam.v1.NamedGetRequest
-	84,  // 112: rostam.v1.VectorService.NamedGetBatch:input_type -> rostam.v1.NamedGetBatchRequest
-	78,  // 113: rostam.v1.VectorService.NamedSetPayload:input_type -> rostam.v1.SetPayloadRequest
-	78,  // 114: rostam.v1.VectorService.NamedOverwritePayload:input_type -> rostam.v1.SetPayloadRequest
-	79,  // 115: rostam.v1.VectorService.NamedDeletePayloadKeys:input_type -> rostam.v1.DeletePayloadKeysRequest
-	80,  // 116: rostam.v1.VectorService.NamedClearPayload:input_type -> rostam.v1.ClearPayloadRequest
-	17,  // 117: rostam.v1.VectorService.NamedScroll:input_type -> rostam.v1.NamedScrollRequest
-	19,  // 118: rostam.v1.VectorService.Scroll:input_type -> rostam.v1.ScrollRequest
-	22,  // 119: rostam.v1.VectorService.NamedGetConfig:input_type -> rostam.v1.NamedGetConfigRequest
-	92,  // 120: rostam.v1.VectorService.CreateAlias:input_type -> rostam.v1.CreateAliasRequest
-	94,  // 121: rostam.v1.VectorService.DeleteAlias:input_type -> rostam.v1.DeleteAliasRequest
-	96,  // 122: rostam.v1.VectorService.ListAliases:input_type -> rostam.v1.ListAliasesRequest
-	100, // 123: rostam.v1.VectorService.AliasBatch:input_type -> rostam.v1.AliasBatchRequest
-	117, // 124: rostam.v1.VectorService.KeysAdd:input_type -> rostam.v1.KeysAddRequest
-	118, // 125: rostam.v1.VectorService.KeysRevoke:input_type -> rostam.v1.KeysRevokeRequest
-	119, // 126: rostam.v1.VectorService.KeysList:input_type -> rostam.v1.KeysListRequest
-	41,  // 127: rostam.v1.VectorService.Health:output_type -> rostam.v1.HealthResponse
-	45,  // 128: rostam.v1.VectorService.CreateCollection:output_type -> rostam.v1.CreateCollectionResponse
-	47,  // 129: rostam.v1.VectorService.DropCollection:output_type -> rostam.v1.DropCollectionResponse
-	49,  // 130: rostam.v1.VectorService.Upsert:output_type -> rostam.v1.UpsertResponse
-	51,  // 131: rostam.v1.VectorService.Delete:output_type -> rostam.v1.DeleteResponse
-	74,  // 132: rostam.v1.VectorService.Get:output_type -> rostam.v1.GetResponse
-	77,  // 133: rostam.v1.VectorService.GetBatch:output_type -> rostam.v1.GetBatchResponse
-	81,  // 134: rostam.v1.VectorService.SetPayload:output_type -> rostam.v1.PayloadResponse
-	81,  // 135: rostam.v1.VectorService.OverwritePayload:output_type -> rostam.v1.PayloadResponse
-	81,  // 136: rostam.v1.VectorService.DeletePayloadKeys:output_type -> rostam.v1.PayloadResponse
-	81,  // 137: rostam.v1.VectorService.ClearPayload:output_type -> rostam.v1.PayloadResponse
-	54,  // 138: rostam.v1.VectorService.Search:output_type -> rostam.v1.SearchResponse
-	56,  // 139: rostam.v1.VectorService.SearchDocs:output_type -> rostam.v1.SearchDocsResponse
-	59,  // 140: rostam.v1.VectorService.SearchGroups:output_type -> rostam.v1.SearchGroupsResponse
-	54,  // 141: rostam.v1.VectorService.HybridSearch:output_type -> rostam.v1.SearchResponse
-	56,  // 142: rostam.v1.VectorService.TextSearch:output_type -> rostam.v1.SearchDocsResponse
-	54,  // 143: rostam.v1.VectorService.HybridTextSearch:output_type -> rostam.v1.SearchResponse
-	54,  // 144: rostam.v1.VectorService.VectorQuery:output_type -> rostam.v1.SearchResponse
-	54,  // 145: rostam.v1.VectorService.NamedVectorQuery:output_type -> rostam.v1.SearchResponse
-	54,  // 146: rostam.v1.VectorService.MVVectorQuery:output_type -> rostam.v1.SearchResponse
-	64,  // 147: rostam.v1.VectorService.DeleteByFilter:output_type -> rostam.v1.DeleteByFilterResponse
-	66,  // 148: rostam.v1.VectorService.Resplit:output_type -> rostam.v1.ResplitResponse
-	68,  // 149: rostam.v1.VectorService.ResplitCleanup:output_type -> rostam.v1.ResplitCleanupResponse
-	70,  // 150: rostam.v1.VectorService.Reshard:output_type -> rostam.v1.ReshardResponse
-	72,  // 151: rostam.v1.VectorService.ReshardAbort:output_type -> rostam.v1.ReshardAbortResponse
-	27,  // 152: rostam.v1.VectorService.MVCreateCollection:output_type -> rostam.v1.MVCreateResponse
-	29,  // 153: rostam.v1.VectorService.MVDropCollection:output_type -> rostam.v1.MVDropResponse
-	31,  // 154: rostam.v1.VectorService.MVAdd:output_type -> rostam.v1.MVAddResponse
-	34,  // 155: rostam.v1.VectorService.MVSearch:output_type -> rostam.v1.MVSearchResponse
-	11,  // 156: rostam.v1.VectorService.MVHybridSearch:output_type -> rostam.v1.NamedSearchResponse
-	37,  // 157: rostam.v1.VectorService.MVScroll:output_type -> rostam.v1.MVScrollResponse
-	39,  // 158: rostam.v1.VectorService.MVDelete:output_type -> rostam.v1.MVDeleteResponse
-	88,  // 159: rostam.v1.VectorService.MVGet:output_type -> rostam.v1.MVGetResponse
-	91,  // 160: rostam.v1.VectorService.MVGetBatch:output_type -> rostam.v1.MVGetBatchResponse
-	81,  // 161: rostam.v1.VectorService.MVSetPayload:output_type -> rostam.v1.PayloadResponse
-	81,  // 162: rostam.v1.VectorService.MVOverwritePayload:output_type -> rostam.v1.PayloadResponse
-	81,  // 163: rostam.v1.VectorService.MVDeletePayloadKeys:output_type -> rostam.v1.PayloadResponse
-	81,  // 164: rostam.v1.VectorService.MVClearPayload:output_type -> rostam.v1.PayloadResponse
-	66,  // 165: rostam.v1.VectorService.MVResplit:output_type -> rostam.v1.ResplitResponse
-	68,  // 166: rostam.v1.VectorService.MVResplitCleanup:output_type -> rostam.v1.ResplitCleanupResponse
-	70,  // 167: rostam.v1.VectorService.MVReshard:output_type -> rostam.v1.ReshardResponse
-	72,  // 168: rostam.v1.VectorService.MVReshardAbort:output_type -> rostam.v1.ReshardAbortResponse
-	4,   // 169: rostam.v1.VectorService.NamedCreate:output_type -> rostam.v1.NamedCreateResponse
-	6,   // 170: rostam.v1.VectorService.NamedDrop:output_type -> rostam.v1.NamedDropResponse
-	8,   // 171: rostam.v1.VectorService.NamedUpsert:output_type -> rostam.v1.NamedUpsertResponse
-	11,  // 172: rostam.v1.VectorService.NamedSearch:output_type -> rostam.v1.NamedSearchResponse
-	11,  // 173: rostam.v1.VectorService.NamedSparseSearch:output_type -> rostam.v1.NamedSearchResponse
-	11,  // 174: rostam.v1.VectorService.NamedHybridSearch:output_type -> rostam.v1.NamedSearchResponse
-	14,  // 175: rostam.v1.VectorService.NamedSearchDocs:output_type -> rostam.v1.NamedSearchDocsResponse
-	16,  // 176: rostam.v1.VectorService.NamedDelete:output_type -> rostam.v1.NamedDeleteResponse
-	83,  // 177: rostam.v1.VectorService.NamedGet:output_type -> rostam.v1.NamedGetResponse
-	86,  // 178: rostam.v1.VectorService.NamedGetBatch:output_type -> rostam.v1.NamedGetBatchResponse
-	81,  // 179: rostam.v1.VectorService.NamedSetPayload:output_type -> rostam.v1.PayloadResponse
-	81,  // 180: rostam.v1.VectorService.NamedOverwritePayload:output_type -> rostam.v1.PayloadResponse
-	81,  // 181: rostam.v1.VectorService.NamedDeletePayloadKeys:output_type -> rostam.v1.PayloadResponse
-	81,  // 182: rostam.v1.VectorService.NamedClearPayload:output_type -> rostam.v1.PayloadResponse
-	18,  // 183: rostam.v1.VectorService.NamedScroll:output_type -> rostam.v1.NamedScrollResponse
-	21,  // 184: rostam.v1.VectorService.Scroll:output_type -> rostam.v1.ScrollResponse
-	23,  // 185: rostam.v1.VectorService.NamedGetConfig:output_type -> rostam.v1.NamedGetConfigResponse
-	93,  // 186: rostam.v1.VectorService.CreateAlias:output_type -> rostam.v1.CreateAliasResponse
-	95,  // 187: rostam.v1.VectorService.DeleteAlias:output_type -> rostam.v1.DeleteAliasResponse
-	98,  // 188: rostam.v1.VectorService.ListAliases:output_type -> rostam.v1.ListAliasesResponse
-	101, // 189: rostam.v1.VectorService.AliasBatch:output_type -> rostam.v1.AliasBatchResponse
-	122, // 190: rostam.v1.VectorService.KeysAdd:output_type -> rostam.v1.KeysAck
-	122, // 191: rostam.v1.VectorService.KeysRevoke:output_type -> rostam.v1.KeysAck
-	121, // 192: rostam.v1.VectorService.KeysList:output_type -> rostam.v1.KeysListResponse
-	127, // [127:193] is the sub-list for method output_type
-	61,  // [61:127] is the sub-list for method input_type
+	61,  // [61:61] is the sub-list for method output_type
+	61,  // [61:61] is the sub-list for method input_type
 	61,  // [61:61] is the sub-list for extension type_name
 	61,  // [61:61] is the sub-list for extension extendee
 	0,   // [0:61] is the sub-list for field type_name
@@ -10661,7 +10456,7 @@ func file_grpcapi_pb_rostam_proto_init() {
 			NumEnums:      2,
 			NumMessages:   128,
 			NumExtensions: 0,
-			NumServices:   1,
+			NumServices:   0,
 		},
 		GoTypes:           file_grpcapi_pb_rostam_proto_goTypes,
 		DependencyIndexes: file_grpcapi_pb_rostam_proto_depIdxs,

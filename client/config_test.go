@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rostamlabs/rostam/ops"
+	"github.com/rostamlabs/rostam/ops/wire"
 )
 
 func TestConfigDefaults(t *testing.T) {
@@ -77,8 +77,8 @@ func TestConfigDefaultsTopologyRefreshInterval(t *testing.T) {
 }
 
 func TestConfigValidateTopologyRefreshInterval(t *testing.T) {
-	reg := ops.NewRegistry()
-	if err := ops.RegisterBuiltins(reg); err != nil {
+	reg := wire.NewRegistry()
+	if err := wire.RegisterRoutableBuiltins(reg); err != nil {
 		t.Fatal(err)
 	}
 	// Too-short interval with Ops set: error.

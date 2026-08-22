@@ -15,18 +15,19 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/rostamlabs/rostam/authz"
+	"github.com/rostamlabs/rostam/grpcapi/grpcsvc"
 	"github.com/rostamlabs/rostam/grpcapi/pb"
 	"github.com/rostamlabs/rostam/ops"
 	"github.com/rostamlabs/rostam/vector"
 )
 
-func dialGRPC(t *testing.T, addr string) (pb.VectorServiceClient, func()) {
+func dialGRPC(t *testing.T, addr string) (grpcsvc.VectorServiceClient, func()) {
 	t.Helper()
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	return pb.NewVectorServiceClient(conn), func() { _ = conn.Close() }
+	return grpcsvc.NewVectorServiceClient(conn), func() { _ = conn.Close() }
 }
 
 // TestGRPCServerEndToEnd drives the RAG surface over a real gRPC connection:

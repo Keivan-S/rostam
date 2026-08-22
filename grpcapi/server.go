@@ -24,6 +24,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/rostamlabs/rostam/authz"
+	"github.com/rostamlabs/rostam/grpcapi/grpcsvc"
 	"github.com/rostamlabs/rostam/grpcapi/pb"
 	"github.com/rostamlabs/rostam/ops"
 	"github.com/rostamlabs/rostam/vector"
@@ -43,9 +44,9 @@ type Dispatcher interface {
 // matches the principal's scopes. nil accepts every request.
 type Authenticator = authz.Authenticator
 
-// Server implements pb.VectorServiceServer over a Dispatcher.
+// Server implements grpcsvc.VectorServiceServer over a Dispatcher.
 type Server struct {
-	pb.UnimplementedVectorServiceServer
+	grpcsvc.UnimplementedVectorServiceServer
 	disp Dispatcher
 	auth Authenticator
 }
@@ -56,7 +57,7 @@ func NewServer(disp Dispatcher, auth Authenticator) *Server {
 }
 
 // Register attaches the service to a grpc.Server.
-func (s *Server) Register(gs *grpc.Server) { pb.RegisterVectorServiceServer(gs, s) }
+func (s *Server) Register(gs *grpc.Server) { grpcsvc.RegisterVectorServiceServer(gs, s) }
 
 // authorize runs the optional Authenticator for (opName, args) using the bearer
 // token from the request metadata, returning an Unauthenticated status on

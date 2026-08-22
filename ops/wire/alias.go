@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-package ops
+package wire
 
 import (
 	"encoding/binary"
@@ -9,7 +9,7 @@ import (
 
 // errAliasArgsTruncated is returned by the alias Decode* helpers when the args
 // bytes are shorter than the layout requires (fail-loud, mirroring
-// errVectorArgsTruncated).
+// ErrVectorArgsTruncated).
 var errAliasArgsTruncated = errors.New("ops: alias args truncated")
 
 // AliasAction is one mutation in an atomic alias batch on the wire. It mirrors
