@@ -719,6 +719,17 @@ func NewEmbedded(cfg EmbeddedConfig) (Store, error) {
 	if cfg.Cache.MsyncIntervalMs != 0 {
 		cc.MsyncIntervalMs = cfg.Cache.MsyncIntervalMs
 	}
+	// TTL sweeper cadence: 0 keeps the default (cache.DefaultConfig's 1000ms),
+	// negative disables active reaping, positive sets the interval in ms. In a
+	// replicated shard the sweeper reaps against the logical clock (B3b) and also
+	// retires expired heap pages, so this cadence bounds how promptly a hot shard
+	// reclaims capacity.
+	switch {
+	case cfg.Cache.TTLSweepIntervalMs < 0:
+		cc.TTLSweepIntervalMs = 0
+	case cfg.Cache.TTLSweepIntervalMs > 0:
+		cc.TTLSweepIntervalMs = cfg.Cache.TTLSweepIntervalMs
+	}
 	// Spread the node's budget across its Raft shards: this node holds
 	// numShards caches, each pinned to cc.NumShards = 1, so the divisor is
 	// numShards and NOT cc.NumShards. Previously each shard inherited

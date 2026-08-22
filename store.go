@@ -1250,6 +1250,18 @@ type CacheConfig struct {
 	// Defaults to 100 when zero. Ignored when Durable is false.
 	MsyncIntervalMs int
 
+	// TTLSweepIntervalMs controls how often each shard's background sweeper
+	// actively reaps expired TTL keys to reclaim capacity, independent of whether
+	// they are ever read again (lazy-on-read expiry always returns an expired key
+	// as not-found regardless of this). Zero keeps the library default (1000ms); a
+	// NEGATIVE value disables active reaping entirely, leaving only lazy-on-read
+	// expiry (and, for persistent shards, cold compaction at the next open). The
+	// interval is a memory-reclaim-latency vs CPU-churn tradeoff, not a correctness
+	// knob: a slower sweep lets expired bytes linger longer, which on a write-heavy
+	// replicated heap shard raises the chance of hitting the capacity cap between
+	// sweeps.
+	TTLSweepIntervalMs int
+
 	// DisableColdCompaction turns OFF the live-only rewrite of each persistent
 	// shard's pages file at open. Default false (compaction ON), which is what a
 	// persistent shard needs: it is the only thing that reclaims the ghost page
