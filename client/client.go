@@ -332,8 +332,27 @@ func (c *Client) nextServer() string {
 // server forwards to an owner — the correctness floor for dumb routing).
 func (c *Client) pickInitialTarget(op string, args []byte) string {
 	if c.cfg.Ops != nil {
-		if _, ke, ok := c.cfg.Ops.Lookup(op); ok && ke != nil {
-			if key, hasKey := ke(args); hasKey {
+		if _, ke, layout, ok := c.cfg.Ops.LookupRouting(op); ok {
+			// maxRouteKeyLen bounds "default/" (8) + a u8-length collection name
+			// (255). Keeping scratch on the stack lets RouteKeyInto extract the
+			// routing key with no heap allocation on the hot path; a DIRECT call
+			// to RouteKeyInto (not through the ke func value) is what lets escape
+			// analysis keep scratch stack-bound — see ops/wire.RouteKeyInto.
+			const maxRouteKeyLen = 8 + 255
+			var scratch [maxRouteKeyLen]byte
+			var key []byte
+			var hasKey bool
+			switch {
+			case layout != wire.RouteLayoutNone:
+				key = wire.RouteKeyInto(layout, args, scratch[:0])
+				hasKey = key != nil
+			case ke != nil:
+				// RouteLayoutNone ops route through ke: KV builtins (the
+				// subslicing stdKeyExtractor, already alloc-free) and
+				// dynamic/WASM ops (no allocation-free layout).
+				key, hasKey = ke(args)
+			}
+			if hasKey {
 				if t := c.topology.get(); t != nil && t.NumShards > 0 {
 					shardID := int(xxhash.Sum64(key) % uint64(t.NumShards)) //nolint:gosec // NumShards bounded by Config validation
 					if len(t.Leaders) == t.NumShards && t.Leaders[shardID] != "" {
