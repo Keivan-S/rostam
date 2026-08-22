@@ -244,12 +244,74 @@ class TcpTransport:
     # metadata are cross-transport (the wire also carries ttl_ms/sparse/
     # version, which the unified Point type does not expose — see _types.Point).
 
-    def create_collection(self, name: str, dim: int, *, metric: str = "cosine", **cfg: Any) -> None:
-        """Create a vector collection. Keyword config mirrors the HTTP client:
-        m, ef_construction, ef_search, seed, quant, persistent, index_type,
-        ivf_nlist, ivf_nprobe, vamana_r/l/alpha, full_text, ..."""
-        conf = dict(cfg); conf["dim"] = dim; conf["metric"] = metric
+    def create_collection(
+        self,
+        name: str,
+        dim: int,
+        *,
+        metric: str = "cosine",
+        m: int = 0,
+        ef_construction: int = 0,
+        ef_search: int = 0,
+        seed: int = 0,
+        quant: str = "",
+        persistent: bool = False,
+        rescore_factor: int = 0,
+        extend_candidates: bool = False,
+        extend_candidates_max: int = 0,
+        level0_full_degree: bool = False,
+        quantized_build: bool = False,
+        partitions: int = 0,
+        index_type: str = "",
+        ivf_nlist: int = 0,
+        ivf_nprobe: int = 0,
+        ivf_pq: bool = False,
+        ivf_pq_m: int = 0,
+        ivf_rerank: bool = False,
+        quant_pq_m: int = 0,
+        opq: bool = False,
+        pq_drop_vecs: bool = False,
+        ivf_train_threshold: int = 0,
+        ivf_drift_retrain: bool = False,
+        ivf_drift_growth_factor: float = 0.0,
+        ivf_drift_factor: float = 0.0,
+        filter_first_relative_bp: int = 0,
+        opq_iters: int = 0,
+        full_text: Any = None,
+        sq_bits: int = 0,
+        prq_layers: int = 0,
+        vamana_r: int = 0,
+        vamana_l: int = 0,
+        vamana_alpha: float = 0.0,
+        anisotropic_eta: float = 0.0,
+        soar: bool = False,
+        soar_lambda: float = 0.0,
+        pq_nbits: int = 0,
+    ) -> None:
+        """Create a vector collection. Keyword config is identical to
+        HttpTransport.create_collection (see there for what each knob does) —
+        every field the config trailer accepts is a named parameter here too,
+        so there is no catch-all `**cfg` any more."""
+        conf: Dict[str, Any] = dict(
+            dim=dim, metric=metric, m=m, ef_construction=ef_construction, ef_search=ef_search,
+            seed=seed, quant=quant, persistent=persistent, rescore_factor=rescore_factor,
+            extend_candidates=extend_candidates, extend_candidates_max=extend_candidates_max,
+            level0_full_degree=level0_full_degree, quantized_build=quantized_build,
+            partitions=partitions, index_type=index_type,
+            ivf_nlist=ivf_nlist, ivf_nprobe=ivf_nprobe, ivf_pq=ivf_pq, ivf_pq_m=ivf_pq_m,
+            ivf_rerank=ivf_rerank, quant_pq_m=quant_pq_m, opq=opq, pq_drop_vecs=pq_drop_vecs,
+            ivf_train_threshold=ivf_train_threshold, ivf_drift_retrain=ivf_drift_retrain,
+            ivf_drift_growth_factor=ivf_drift_growth_factor, ivf_drift_factor=ivf_drift_factor,
+            filter_first_relative_bp=filter_first_relative_bp, opq_iters=opq_iters,
+            full_text=full_text, sq_bits=sq_bits, prq_layers=prq_layers,
+            vamana_r=vamana_r, vamana_l=vamana_l, vamana_alpha=vamana_alpha,
+            anisotropic_eta=anisotropic_eta, soar=soar, soar_lambda=soar_lambda, pq_nbits=pq_nbits,
+        )
         self._call("vector_create_collection", _vecwire.encode_create_collection_args(name, conf))
+
+    def drop_collection(self, name: str) -> None:
+        """Delete a collection and its data."""
+        self._call("vector_drop_collection", _vecwire.encode_drop_collection_args(name))
 
     def upsert(self, collection: str, id: int, vector: Sequence[float], *, content: str = "",
                metadata: Optional[Dict[str, Any]] = None, ttl_ms: int = 0,
@@ -388,13 +450,19 @@ class TcpTransport:
     def hybrid_text(self, collection: str, dense: Sequence[float], text: str, k: int, *,
                      filter: Optional[Dict[str, Any]] = None, method: str = "rrf",
                      alpha: float = 0.0, rrf_k: int = 0, dense_k: int = 0,
-                     sparse_k: int = 0) -> SearchResults:
+                     sparse_k: int = 0, global_idf: bool = False) -> SearchResults:
         """Fuse a dense-KNN lane with a server-side BM25 full-text lane (the
         collection must have been created with full_text=... for a full-text
-        analyzer to exist)."""
+        analyzer to exist).
+
+        global_idf=True opts into the BM25 global-DF (dfs_query_then_fetch)
+        two-phase search across partitions (default False => the per-shard-
+        local-IDF fast path; single-partition collections ignore it) — same
+        knob as HttpTransport.hybrid_text's."""
         opts = {"filter": filter, "method": method, "alpha": alpha, "rrf_k": rrf_k,
                 "dense_k": dense_k, "sparse_k": sparse_k}
-        args = _vecwire.encode_hybrid_text_args_global(collection, dense, text, k, opts)
+        args = _vecwire.encode_hybrid_text_args_global(collection, dense, text, k, opts,
+                                                        global_idf=global_idf)
         payload = self._call("vector_hybrid_text", args)
         results, degraded, missing = _vecwire.decode_hybrid_results_degraded(payload or b"\x00\x00\x00\x00")
         items = [SearchResult(id=r["id"], distance=r["distance"], score=r["score"]) for r in results]

@@ -15,13 +15,18 @@ client against a target with nothing listening yet.
 
 Method surface:
 
-- Shared with ``TcpTransport`` (unified return types): create_collection,
+- Shared with ``TcpTransport`` (unified return types, identical signatures —
+  verified by tests/test_transport_gaps.py): create_collection,
   drop_collection, upsert, insert, upsert_batch, delete, get, get_batch,
   scroll, search, search_docs, search_groups, hybrid_search, hybrid_text,
-  recommend, query, exists.
-- HTTP-only (kept for the facade to guard in a later task, or for direct use
-  of this backend): health, search_text, discover, mv_*, delete_by_filter,
-  bulk_stage, bulk_build, batch_upsert.
+  recommend, exists.
+- HTTP-only (guarded by the ``Rostam`` facade, which raises TransportError for
+  these on a TCP client): health, search_text, discover, mv_*,
+  delete_by_filter, bulk_build, and the general composable ``query`` (TCP has
+  its own recommend-shaped ``query`` method, but it is not wired as a shared
+  facade method — see ``TcpTransport.query``'s docstring). bulk_stage /
+  batch_upsert are HTTP-only too but reachable only via this backend
+  directly, not through the facade.
 """
 
 from __future__ import annotations
@@ -503,9 +508,31 @@ class HttpTransport:
         ef_search: int = 0,
         seed: int = 0,
         quant: str = "",
+        persistent: bool = False,
+        rescore_factor: int = 0,
+        extend_candidates: bool = False,
+        extend_candidates_max: int = 0,
+        level0_full_degree: bool = False,
+        quantized_build: bool = False,
+        partitions: int = 0,
+        index_type: str = "",
+        ivf_nlist: int = 0,
+        ivf_nprobe: int = 0,
+        ivf_pq: bool = False,
+        ivf_pq_m: int = 0,
+        ivf_rerank: bool = False,
+        quant_pq_m: int = 0,
+        opq: bool = False,
+        pq_drop_vecs: bool = False,
+        ivf_train_threshold: int = 0,
+        ivf_drift_retrain: bool = False,
+        ivf_drift_growth_factor: float = 0.0,
+        ivf_drift_factor: float = 0.0,
+        filter_first_relative_bp: int = 0,
+        opq_iters: int = 0,
+        full_text: Any = None,
         sq_bits: int = 0,
         prq_layers: int = 0,
-        index_type: str = "",
         vamana_r: int = 0,
         vamana_l: int = 0,
         vamana_alpha: float = 0.0,
@@ -513,12 +540,18 @@ class HttpTransport:
         soar: bool = False,
         soar_lambda: float = 0.0,
         pq_nbits: int = 0,
-        persistent: bool = False,
-        rescore_factor: int = 0,
-        full_text: Any = None,
     ) -> None:
         """Create a collection. metric: "cosine"|"l2"|"dot"; quant:
         ""|"sq8"|"bq1"|"pq"|"sq"|"prq".
+
+        The keyword surface is identical to TcpTransport.create_collection's
+        (the unification promise — signatures match byte for byte via
+        inspect.signature): index_type/ivf_*/opq*/pq_drop_vecs/
+        ivf_train_threshold/ivf_drift_* tune an "ivf" index; extend_candidates*/
+        level0_full_degree/quantized_build are HNSW build levers; partitions
+        sets the collection-level partition count. Each is sent to the server
+        only when non-default, so a plain create stays byte-compatible with a
+        pre-unification request.
 
         quant="sq" is the trained metric-agnostic scalar quantizer; sq_bits picks
         its bit-depth (4, 6, or 8; 0 = server default 8). quant="prq" is
@@ -556,12 +589,50 @@ class HttpTransport:
             "persistent": persistent,
             "rescore_factor": rescore_factor,
         }
+        if extend_candidates:
+            cfg["extend_candidates"] = extend_candidates
+        if extend_candidates_max:
+            cfg["extend_candidates_max"] = extend_candidates_max
+        if level0_full_degree:
+            cfg["level0_full_degree"] = level0_full_degree
+        if quantized_build:
+            cfg["quantized_build"] = quantized_build
+        if partitions:
+            cfg["partitions"] = partitions
+        if index_type:
+            cfg["index_type"] = index_type
+        if ivf_nlist:
+            cfg["ivf_nlist"] = ivf_nlist
+        if ivf_nprobe:
+            cfg["ivf_nprobe"] = ivf_nprobe
+        if ivf_pq:
+            cfg["ivf_pq"] = ivf_pq
+        if ivf_pq_m:
+            cfg["ivf_pq_m"] = ivf_pq_m
+        if ivf_rerank:
+            cfg["ivf_rerank"] = ivf_rerank
+        if quant_pq_m:
+            cfg["quant_pq_m"] = quant_pq_m
+        if opq:
+            cfg["opq"] = opq
+        if pq_drop_vecs:
+            cfg["pq_drop_vecs"] = pq_drop_vecs
+        if ivf_train_threshold:
+            cfg["ivf_train_threshold"] = ivf_train_threshold
+        if ivf_drift_retrain:
+            cfg["ivf_drift_retrain"] = ivf_drift_retrain
+        if ivf_drift_growth_factor:
+            cfg["ivf_drift_growth_factor"] = ivf_drift_growth_factor
+        if ivf_drift_factor:
+            cfg["ivf_drift_factor"] = ivf_drift_factor
+        if filter_first_relative_bp:
+            cfg["filter_first_relative_bp"] = filter_first_relative_bp
+        if opq_iters:
+            cfg["opq_iters"] = opq_iters
         if sq_bits:
             cfg["sq_bits"] = sq_bits
         if prq_layers:
             cfg["prq_layers"] = prq_layers
-        if index_type:
-            cfg["index_type"] = index_type
         if vamana_r:
             cfg["vamana_r"] = vamana_r
         if vamana_l:
@@ -608,13 +679,16 @@ class HttpTransport:
         id: int,
         vector: Vector,
         *,
-        content: str = "",
         metadata: Optional[Dict[str, Any]] = None,
         ttl_ms: int = 0,
         sparse: Optional[Dict[str, Sequence]] = None,
     ) -> None:
-        """Insert a point, rejecting a duplicate id (use upsert to replace)."""
-        self._put_point(collection, id, vector, content, metadata, ttl_ms, sparse, upsert=False)
+        """Insert a point, rejecting a duplicate id (use upsert to replace).
+
+        No `content` kwarg (unlike upsert): content is a RAG/upsert concept —
+        the engine's Insert rejects Content, and this mirrors that so the
+        signature is identical to TcpTransport.insert's."""
+        self._put_point(collection, id, vector, "", metadata, ttl_ms, sparse, upsert=False)
 
     def _put_point(self, collection, id, vector, content, metadata, ttl_ms, sparse, upsert):
         body = {
@@ -970,24 +1044,23 @@ class HttpTransport:
         self,
         collection: str,
         positive: Sequence[int],
-        k: int,
         *,
         negative: Optional[Sequence[int]] = None,
-        strategy: str = "",
+        k: int = 10,
         filter: Optional[Dict[str, Any]] = None,
+        strategy: str = "average_vector",
     ) -> SearchResults:
         """Recommend by example: score toward the ``positive`` ids and away from the
         ``negative`` ids, instead of from a raw query vector. ``strategy`` is
-        "average" (default, mean(pos) - mean(neg) → one dense query) or "best_score".
+        "average_vector" (default, mean(pos) - mean(neg) → one dense query) or
+        "best_score". Signature is identical to TcpTransport.recommend's.
 
         Carried over the wire by the Query API — there is no ``points/recommend``
         route — so this works identically on HTTP, gRPC and the binary TCP protocol.
         """
-        rec: Dict[str, Any] = {"positive": [int(i) for i in positive]}
+        rec: Dict[str, Any] = {"positive": [int(i) for i in positive], "strategy": strategy}
         if negative:
             rec["negative"] = [int(i) for i in negative]
-        if strategy:
-            rec["strategy"] = strategy
         leaf: Dict[str, Any] = {"recommend": rec, "k": k}
         if filter:
             leaf["filter"] = filter
@@ -1074,7 +1147,7 @@ class HttpTransport:
     def hybrid_text(
         self,
         collection: str,
-        vector: Vector,
+        dense: Vector,
         text: str,
         k: int,
         *,
@@ -1089,13 +1162,15 @@ class HttpTransport:
         """Fuse a dense query vector plus the RAW query text; the server analyzes
         the text into the BM25 lane and fuses it with the dense lane. method:
         "rrf"|"weighted"|"dbsf". Requires a collection created with
-        full_text=True.
+        full_text=True. Parameter name/order is identical to
+        TcpTransport.hybrid_text's (the `dense` param serializes to the wire's
+        "vector" field either way).
 
         global_idf=True opts into the BM25 global-DF (dfs_query_then_fetch) two-phase
         text lane across partitions (default False ⇒ the per-shard-local-IDF fast
         path; affects only the BM25 text lane)."""
         body: Dict[str, Any] = {
-            "vector": list(vector), "text": text, "k": k, "method": method, "alpha": alpha,
+            "vector": list(dense), "text": text, "k": k, "method": method, "alpha": alpha,
             "rrf_k": rrf_k, "dense_k": dense_k, "sparse_k": sparse_k,
         }
         if filter:

@@ -28,7 +28,7 @@ import unittest
 
 from _serverbin import find_server_bin
 from rostam import filters as f
-from rostam._types import RostamError
+from rostam._types import RostamError, TransportError
 from rostam.rostam import Rostam
 
 _BIN, _WHY = find_server_bin()
@@ -102,6 +102,24 @@ class CrossStackVectorNativeTest(unittest.TestCase):
         self.assertTrue(r.delete("c", 1))
         self.assertFalse(r.delete("c", 1))               # already gone
         self.assertIsNone(r.get("c", 1))
+
+    def test_drop_collection_round_trips(self):
+        # TcpTransport.drop_collection is new (Task 6): a real server must
+        # accept the "vector_drop_collection" op with the encoded name and
+        # actually remove the collection — a point write against it afterward
+        # must fail, and a fresh create_collection under the same name must
+        # start from empty (no leftover point).
+        r = self.r
+        r.create_collection("dc", dim=4, metric="cosine")
+        r.upsert("dc", 1, [0.1, 0.2, 0.3, 0.4])
+        self.assertTrue(r.exists("dc", 1))
+
+        r.drop_collection("dc")
+        with self.assertRaises(RostamError):
+            r.upsert("dc", 2, [0.1, 0.2, 0.3, 0.4])   # collection no longer exists
+
+        r.create_collection("dc", dim=4, metric="cosine")   # recreate under the same name
+        self.assertFalse(r.exists("dc", 1))                 # empty, not the pre-drop data
 
     def test_metadata_filter_round_trips(self):
         r = self.r
@@ -291,6 +309,11 @@ class CrossStackVectorNativeTest(unittest.TestCase):
         self.assertEqual(len(hits), 2)
         self.assertEqual(hits[0].id, 1)                    # both dense and text lanes favor id 1
         self.assertGreater(hits[0].score, 0)
+        # global_idf is new on TcpTransport.hybrid_text (Task 6, reconciled with
+        # HttpTransport's identically-named kwarg) — a single-partition server
+        # ignores it, but the wire flag must round-trip without erroring.
+        gi_hits = r.hybrid_text("ht", [0.9, 0.1, 0, 0], "quick fox", k=2, global_idf=True)
+        self.assertEqual([h.id for h in gi_hits], [h.id for h in hits])
 
     def test_recommend_excludes_seed_and_favors_similar(self):
         r = self.r
@@ -316,16 +339,22 @@ class CrossStackVectorNativeTest(unittest.TestCase):
         self.assertEqual([x.id for x in recs], [3])         # filter admits only the beta point
 
     def test_query_is_recommend_shaped(self):
-        # query() is documented as recommend-shaped only (this client's
-        # QuerySpec encoder builds a single-leaf RECOMMEND spec, not a general
-        # fusion/rerank tree) — it must return exactly what recommend()
-        # returns for the same arguments.
+        # The facade's r.query() is HTTP-only (TCP cannot build a general
+        # QuerySpec) and must raise on a TCP client — see
+        # tests/test_transport_gaps.py for the guard's unit coverage.
+        # TcpTransport itself still carries a recommend-shaped query() (not
+        # wired as a flat facade method): this client's QuerySpec encoder
+        # builds a single-leaf RECOMMEND spec, not a general fusion/rerank
+        # tree, so it must return exactly what recommend() returns for the
+        # same arguments.
         r = self.r
         r.create_collection("qy", dim=4, metric="cosine")
         r.upsert("qy", 1, [1, 0, 0, 0])
         r.upsert("qy", 2, [0.9, 0.1, 0, 0])
         r.upsert("qy", 3, [0, 0, 1, 0])
-        via_query = r.query("qy", [1], k=5)
+        with self.assertRaises(TransportError):
+            r.query("qy", [1], k=5)
+        via_query = r._t.query("qy", [1], k=5)
         via_recommend = r.recommend("qy", [1], k=5)
         self.assertEqual(via_query, via_recommend)
         self.assertNotIn(1, [x.id for x in via_query])

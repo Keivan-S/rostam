@@ -63,21 +63,30 @@ class Rostam:
 
     # ---- flat vector API -----------------------------------------------
     #
-    # The union of what both transport backends serve (create_collection,
-    # upsert, insert, upsert_batch, delete, get, get_batch, scroll, search,
-    # search_docs, search_groups, hybrid_search, hybrid_text, recommend,
-    # query, exists) — each method just forwards to the active backend
-    # (self._t), which returns the unified rostam._types result objects.
-    # Transport-specific extras (health, mv_*, delete_by_filter, bulk_build,
-    # kv.*) are wired in later tasks (4 and 6).
+    # SHARED methods (create_collection, upsert, insert, upsert_batch,
+    # delete, get, get_batch, scroll, search, search_docs, search_groups,
+    # hybrid_search, hybrid_text, recommend, drop_collection, exists) are the
+    # union both transport backends serve with an IDENTICAL signature (see
+    # tests/test_transport_gaps.py's test_shared_methods_have_identical_
+    # signatures) — each just forwards to the active backend (self._t),
+    # which returns the unified rostam._types result objects.
+    #
+    # TRANSPORT-SPECIFIC methods are guarded below: `query` (the general
+    # composable Query API) and the HTTP-only extras (health,
+    # delete_by_filter, bulk_build, mv_*, search_text, discover) raise
+    # TransportError on a TCP client instead of silently misbehaving or
+    # AttributeError-ing. `r.kv` already raises on HTTP (see _KVUnavailable).
+
+    def _require_http(self, op: str) -> None:
+        if self._kind != "http":
+            raise TransportError(f"{op} requires the HTTP transport; connect with http://host:8080")
 
     def create_collection(self, *args, **kwargs):
         """See TcpTransport.create_collection / HttpTransport.create_collection."""
         return self._t.create_collection(*args, **kwargs)
 
     def drop_collection(self, *args, **kwargs):
-        """See HttpTransport.drop_collection. (Not yet implemented on
-        TcpTransport — see Task 5 report concerns.)"""
+        """See TcpTransport.drop_collection / HttpTransport.drop_collection."""
         return self._t.drop_collection(*args, **kwargs)
 
     def upsert(self, *args, **kwargs):
@@ -133,12 +142,74 @@ class Rostam:
         return self._t.recommend(*args, **kwargs)
 
     def query(self, *args, **kwargs):
-        """See TcpTransport.query / HttpTransport.query."""
+        """The general composable Query API — HTTP-only (see
+        HttpTransport.query). TCP cannot build a general QuerySpec, only a
+        recommend-shaped one (exactly what recommend() already sends), so a
+        TCP client raises TransportError here instead of silently returning
+        something narrower than what was asked for."""
+        if self._kind != "http":
+            raise TransportError(
+                "the general query API requires the HTTP transport; connect with http://host:8080  "
+                "(TCP clients use recommend())"
+            )
         return self._t.query(*args, **kwargs)
 
     def exists(self, *args, **kwargs):
         """See TcpTransport.exists / HttpTransport.exists."""
         return self._t.exists(*args, **kwargs)
+
+    # ---- HTTP-only extras (guarded) --------------------------------------
+
+    def health(self, *args, **kwargs):
+        """See HttpTransport.health. HTTP-only."""
+        self._require_http("health")
+        return self._t.health(*args, **kwargs)
+
+    def delete_by_filter(self, *args, **kwargs):
+        """See HttpTransport.delete_by_filter. HTTP-only."""
+        self._require_http("delete_by_filter")
+        return self._t.delete_by_filter(*args, **kwargs)
+
+    def bulk_build(self, *args, **kwargs):
+        """See HttpTransport.bulk_build. HTTP-only."""
+        self._require_http("bulk_build")
+        return self._t.bulk_build(*args, **kwargs)
+
+    def search_text(self, *args, **kwargs):
+        """See HttpTransport.search_text. HTTP-only."""
+        self._require_http("search_text")
+        return self._t.search_text(*args, **kwargs)
+
+    def discover(self, *args, **kwargs):
+        """See HttpTransport.discover. HTTP-only."""
+        self._require_http("discover")
+        return self._t.discover(*args, **kwargs)
+
+    def mv_create_collection(self, *args, **kwargs):
+        """See HttpTransport.mv_create_collection. HTTP-only (no native-TCP
+        multivector op)."""
+        self._require_http("mv_create_collection")
+        return self._t.mv_create_collection(*args, **kwargs)
+
+    def mv_drop_collection(self, *args, **kwargs):
+        """See HttpTransport.mv_drop_collection. HTTP-only."""
+        self._require_http("mv_drop_collection")
+        return self._t.mv_drop_collection(*args, **kwargs)
+
+    def mv_add(self, *args, **kwargs):
+        """See HttpTransport.mv_add. HTTP-only."""
+        self._require_http("mv_add")
+        return self._t.mv_add(*args, **kwargs)
+
+    def mv_search(self, *args, **kwargs):
+        """See HttpTransport.mv_search. HTTP-only."""
+        self._require_http("mv_search")
+        return self._t.mv_search(*args, **kwargs)
+
+    def mv_delete(self, *args, **kwargs):
+        """See HttpTransport.mv_delete. HTTP-only."""
+        self._require_http("mv_delete")
+        return self._t.mv_delete(*args, **kwargs)
 
     # ---- lifecycle -------------------------------------------------------
 
