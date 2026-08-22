@@ -261,14 +261,21 @@ class TcpTransport:
         frame = struct.pack(">I", len(body)) + body
 
         retry_ok = idempotent
+        force_fresh = False
         while True:
             # Acquire may connect, and a failed connect raises OSError —
             # convert it to the client's RostamError contract like every
-            # other transport failure.
+            # other transport failure. On a stale-connection retry we must
+            # open a brand-new socket rather than acquire(), which could hand
+            # back another idle (possibly also-stale) pooled socket.
             try:
-                s, reused = self._pool.acquire()
+                if force_fresh:
+                    s, reused = self._pool._connect(), False
+                else:
+                    s, reused = self._pool.acquire()
             except OSError as e:
                 raise RostamError(f"connect failed: {e}") from e
+            force_fresh = False
 
             try:
                 status, payload = self._exchange(s, frame, stale_ok=reused and retry_ok)
@@ -276,6 +283,7 @@ class TcpTransport:
                 self._pool.discard(s)
                 if reused and retry_ok:
                     retry_ok = False  # exactly one retry, on a fresh connection
+                    force_fresh = True  # bypass the idle pool for that retry
                     continue
                 raise RostamError("connection closed by server mid-response")
             except (OSError, RostamError, struct.error) as e:
