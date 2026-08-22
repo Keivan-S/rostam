@@ -338,15 +338,13 @@ class CrossStackVectorNativeTest(unittest.TestCase):
         recs = r.recommend("rcn", [1], k=5, filter=f.eq("tenant", "beta"))
         self.assertEqual([x.id for x in recs], [3])         # filter admits only the beta point
 
-    def test_query_is_recommend_shaped(self):
+    def test_query_raises_on_tcp_use_recommend_instead(self):
         # The facade's r.query() is HTTP-only (TCP cannot build a general
         # QuerySpec) and must raise on a TCP client — see
         # tests/test_transport_gaps.py for the guard's unit coverage.
-        # TcpTransport itself still carries a recommend-shaped query() (not
-        # wired as a flat facade method): this client's QuerySpec encoder
-        # builds a single-leaf RECOMMEND spec, not a general fusion/rerank
-        # tree, so it must return exactly what recommend() returns for the
-        # same arguments.
+        # TcpTransport carries no query() of its own (dead code removed):
+        # TCP clients use recommend() directly, which is exactly what the
+        # old recommend-shaped query() forwarded to.
         r = self.r
         r.create_collection("qy", dim=4, metric="cosine")
         r.upsert("qy", 1, [1, 0, 0, 0])
@@ -354,10 +352,8 @@ class CrossStackVectorNativeTest(unittest.TestCase):
         r.upsert("qy", 3, [0, 0, 1, 0])
         with self.assertRaises(TransportError):
             r.query("qy", [1], k=5)
-        via_query = r._t.query("qy", [1], k=5)
         via_recommend = r.recommend("qy", [1], k=5)
-        self.assertEqual(via_query, via_recommend)
-        self.assertNotIn(1, [x.id for x in via_query])
+        self.assertNotIn(1, [x.id for x in via_recommend])
 
     def test_upsert_batch(self):
         r = self.r

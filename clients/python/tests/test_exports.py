@@ -12,7 +12,7 @@ def test_unified_exports_present():
     assert hasattr(rostam, "Rostam")
     for name in (
         "SearchResult", "Document", "Group", "Point", "ScrollPage",
-        "SearchResults", "GroupResults", "TransportError", "RostamError",
+        "SearchResults", "GroupResults", "MultiResult", "TransportError", "RostamError",
         "filters", "Embedder", "FunctionEmbedder", "OpenAIEmbedder", "TextStore",
     ):
         assert hasattr(rostam, name), name

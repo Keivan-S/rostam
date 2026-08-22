@@ -17,6 +17,7 @@ import json
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlsplit
 
 from rostam import filters as f
 from rostam._types import Point, RostamError, ScrollPage
@@ -57,6 +58,15 @@ class _Handler(BaseHTTPRequestHandler):
         self._record()
         if self.path == "/v1/health":
             return self._send(200, {"status": "ok"})
+        if "/points/" in self.path:
+            if self.path.endswith("/missing"):
+                return self._send(404, {"error": "not found"})
+            qs = parse_qs(urlsplit(self.path).query)
+            with_vector = qs.get("with_vector", ["true"])[0] == "true"
+            body = {"id": 1, "payload": {}}
+            if with_vector:
+                body["vector"] = [1.0, 0.0, 0.0]
+            return self._send(200, body)
         self._send(404, {"error": "not found"})
 
     def do_DELETE(self):
@@ -118,6 +128,18 @@ class ClientTest(unittest.TestCase):
     def setUp(self):
         REQUESTS.clear()
         self.c = Rostam(self.base, api_key="secret")
+
+    def test_get_with_vector(self):
+        p = self.c.get("docs", 1)
+        self.assertEqual(p.vector, [1.0, 0.0, 0.0])
+
+    def test_get_without_vector_is_none(self):
+        # Normalized to None (not []) when the vector wasn't fetched — must
+        # match TcpTransport.get's contract, which already returns None here.
+        # See test_get_batch_without_vector_skips_vectors for the get_batch
+        # counterpart.
+        p = self.c.get("docs", 1, with_vector=False)
+        self.assertIsNone(p.vector)
 
     def test_health(self):
         # health() is HTTP-only; the facade wires + guards it in a later task
@@ -334,7 +356,11 @@ def test_get_batch_without_vector_skips_vectors():
         c.create_collection("docs", dim=2)
         c.upsert("docs", 1, [1.0, 2.0], content="x", metadata={"a": 1})
         pts = c.get_batch("docs", [1], with_vector=False)
-        assert pts[0].vector == []
+        # Normalized to None (not []) — matches TcpTransport.get_batch, so a
+        # caller checking "was the vector fetched" behaves the same on both
+        # transports. See test_get_without_vector_is_none for the
+        # single-point get() counterpart.
+        assert pts[0].vector is None
         assert pts[0].content == "x"
     finally:
         srv.close()

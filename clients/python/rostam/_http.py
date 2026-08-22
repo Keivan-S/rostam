@@ -22,11 +22,10 @@ Method surface:
   recommend, exists.
 - HTTP-only (guarded by the ``Rostam`` facade, which raises TransportError for
   these on a TCP client): health, search_text, discover, mv_*,
-  delete_by_filter, bulk_build, and the general composable ``query`` (TCP has
-  its own recommend-shaped ``query`` method, but it is not wired as a shared
-  facade method — see ``TcpTransport.query``'s docstring). bulk_stage /
-  batch_upsert are HTTP-only too but reachable only via this backend
-  directly, not through the facade.
+  delete_by_filter, bulk_stage, bulk_build, batch_upsert, and the general
+  composable ``query`` (TCP has no ``query`` of its own — a TCP client uses
+  ``recommend()`` directly, which is exactly what a recommend-shaped query
+  would send).
 """
 
 from __future__ import annotations
@@ -867,7 +866,8 @@ class HttpTransport:
         if isinstance(meta, dict) and _RESERVED_CONTENT in meta:
             cv = meta.pop(_RESERVED_CONTENT)
             content = cv if isinstance(cv, str) else ""
-        return Point(id=int(id), vector=list(res.get("vector") or []), content=content, metadata=meta)
+        vec = res.get("vector")
+        return Point(id=int(id), vector=list(vec) if vec else None, content=content, metadata=meta)
 
     def scroll(
         self,
@@ -921,9 +921,10 @@ class HttpTransport:
             if isinstance(meta, dict) and _RESERVED_CONTENT in meta:
                 cv = meta.pop(_RESERVED_CONTENT)
                 content = cv if isinstance(cv, str) else ""
+            rvec = row.get("vector")
             out.append(Point(
                 id=row["id"],
-                vector=list(row.get("vector") or []),
+                vector=list(rvec) if rvec else None,
                 content=content,
                 metadata=meta,
             ))
@@ -1004,9 +1005,9 @@ class HttpTransport:
 
         Returns ``SearchResults``; when ``group_by`` is set the response is
         grouped and this returns ``GroupResults`` instead, with ``k`` counting
-        groups. This is a strictly richer surface than TcpTransport.query()
-        (which is recommend-shaped only); ``recommend()``/``discover()`` are the
-        cross-transport-shaped entry points.
+        groups. HTTP-only: TCP has no general QuerySpec builder, only a
+        recommend-shaped call (``recommend()``); ``recommend()``/``discover()``
+        are the cross-transport-shaped entry points.
         """
         if not prefetch:
             raise ValueError("query requires at least one prefetch leaf")

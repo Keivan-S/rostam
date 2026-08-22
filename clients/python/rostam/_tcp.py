@@ -483,14 +483,3 @@ class TcpTransport:
         results, degraded, missing = _vecwire.decode_query_result_degraded(payload or b"\x01\x00\x00\x00\x00")
         items = [SearchResult(id=r["id"], distance=r["distance"], score=r["score"]) for r in results]
         return SearchResults(items, degraded=degraded, missing=missing)
-
-    def query(self, collection: str, positive: Sequence[int], *,
-              negative: Optional[Sequence[int]] = None, k: int = 10,
-              filter: Optional[Dict[str, Any]] = None,
-              strategy: str = "average_vector") -> SearchResults:
-        """The unified Query API — RECOMMEND-shaped ONLY (this client's
-        stdlib-only QuerySpec encoder builds a single-leaf RECOMMEND spec, not
-        the general fusion/rerank/prefetch-tree QuerySpec). Makes the
-        identical call as recommend()."""
-        return self.recommend(collection, positive, negative=negative, k=k,
-                               filter=filter, strategy=strategy)

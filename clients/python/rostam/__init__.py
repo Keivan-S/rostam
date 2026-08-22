@@ -10,6 +10,7 @@ LlamaIndex / Haystack adapters live in ``rostam.langchain`` / ``rostam.llamainde
 """
 
 from . import filters
+from ._http import MultiResult
 from ._types import (
     Document,
     Group,
@@ -35,6 +36,7 @@ __all__ = [
     "Point",
     "Group",
     "ScrollPage",
+    "MultiResult",
     "filters",
     "Embedder",
     "FunctionEmbedder",

@@ -23,7 +23,8 @@ from rostam.rostam import Rostam
 def test_http_only_methods_raise_on_tcp():
     r = Rostam("tcp://127.0.0.1:7000")  # no I/O at construction
     for call in (lambda: r.health(), lambda: r.delete_by_filter("c", {}),
-                 lambda: r.bulk_build("c"), lambda: r.query("c", [])):
+                 lambda: r.bulk_stage("c", [], []), lambda: r.bulk_build("c"),
+                 lambda: r.batch_upsert("c", [], []), lambda: r.query("c", [])):
         with pytest.raises(TransportError):
             call()
 

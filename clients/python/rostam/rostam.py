@@ -74,9 +74,10 @@ class Rostam:
     #
     # TRANSPORT-SPECIFIC methods are guarded below: `query` (the general
     # composable Query API) and the HTTP-only extras (health,
-    # delete_by_filter, bulk_build, mv_*, search_text, discover) raise
-    # TransportError on a TCP client instead of silently misbehaving or
-    # AttributeError-ing. `r.kv` already raises on HTTP (see _KVUnavailable).
+    # delete_by_filter, bulk_stage, bulk_build, batch_upsert, mv_*,
+    # search_text, discover) raise TransportError on a TCP client instead of
+    # silently misbehaving or AttributeError-ing. `r.kv` already raises on
+    # HTTP (see _KVUnavailable).
 
     def _require_http(self, op: str) -> None:
         if self._kind != "http":
@@ -171,10 +172,20 @@ class Rostam:
         self._require_http("delete_by_filter")
         return self._t.delete_by_filter(*args, **kwargs)
 
+    def bulk_stage(self, *args, **kwargs):
+        """See HttpTransport.bulk_stage. HTTP-only."""
+        self._require_http("bulk_stage")
+        return self._t.bulk_stage(*args, **kwargs)
+
     def bulk_build(self, *args, **kwargs):
         """See HttpTransport.bulk_build. HTTP-only."""
         self._require_http("bulk_build")
         return self._t.bulk_build(*args, **kwargs)
+
+    def batch_upsert(self, *args, **kwargs):
+        """See HttpTransport.batch_upsert. HTTP-only."""
+        self._require_http("batch_upsert")
+        return self._t.batch_upsert(*args, **kwargs)
 
     def search_text(self, *args, **kwargs):
         """See HttpTransport.search_text. HTTP-only."""
