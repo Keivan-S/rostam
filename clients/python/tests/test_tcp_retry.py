@@ -171,15 +171,19 @@ class FakePoolSocketRetryTest(unittest.TestCase):
                 out, self._buf = self._buf[:n], self._buf[n:]
                 return out
 
-        sockets = [_DeadSocket(), _FreshSocket()]
-        reused_flags = [True, False]
+        fresh = _FreshSocket()
 
+        # First acquire hands back the dead *reused* pooled socket. The retry
+        # must open a brand-new connection via _connect() (NOT acquire() again,
+        # which could return another idle pooled socket) — so the fresh socket
+        # is served through _connect.
         def fake_acquire():
-            return sockets.pop(0), reused_flags.pop(0)
+            return _DeadSocket(), True
 
         discarded = []
         released = []
         t._pool.acquire = fake_acquire
+        t._pool._connect = lambda: fresh
         t._pool.discard = lambda s: discarded.append(s)
         t._pool.release = lambda s: released.append(s)
 
