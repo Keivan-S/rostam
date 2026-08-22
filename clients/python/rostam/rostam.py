@@ -40,24 +40,25 @@ class Rostam:
     KV lives under `r.kv.*` (TCP only)."""
 
     def __init__(self, target: str, *, api_key: Optional[str] = None,
-                 auth_token: Optional[str] = None, timeout: float = 30.0):
+                 auth_token: Optional[str] = None, timeout: float = 30.0,
+                 pool_maxsize: int = 8):
         kind, host, port, base_url = _parse_target(target)
         self._kind = kind
         token = auth_token if auth_token is not None else api_key
         self._t = None  # set by _connect
-        self._connect(kind, host, port, base_url, token, timeout)
+        self._connect(kind, host, port, base_url, token, timeout, pool_maxsize)
         #: Key-value operations (r.kv.get/put/delete/incr/expire/ping). Only
         #: reachable over the native TCP protocol; on the HTTP backend this is
         #: a _KVUnavailable sentinel that raises TransportError on any attribute
         #: access, since the KV store has no REST surface.
         self.kv = _KV(self._t) if kind == "tcp" else _KVUnavailable()
 
-    def _connect(self, kind, host, port, base_url, token, timeout):
+    def _connect(self, kind, host, port, base_url, token, timeout, pool_maxsize):
         if kind == "tcp":
-            self._t = _tcp.TcpTransport(host, port, token, timeout)
+            self._t = _tcp.TcpTransport(host, port, token, timeout, pool_maxsize=pool_maxsize)
             return
         if kind == "http":
-            self._t = _http.HttpTransport(base_url, token, timeout)
+            self._t = _http.HttpTransport(base_url, token, timeout, pool_maxsize=pool_maxsize)
             return
         raise TransportError(f"unknown transport kind {kind!r}")
 

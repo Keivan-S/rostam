@@ -66,18 +66,9 @@ def _seg(s: Union[str, int]) -> str:
 
 
 def _err(message: str, status: int = 0) -> RostamError:
-    """Build a unified ``_types.RostamError`` carrying the HTTP-specific
-    ``status``/``message`` attributes the old client.py contract exposed.
-
-    ``_types.RostamError`` takes no ``status`` kwarg (it is shared with the
-    TCP backend, which has no HTTP status code) — so the attributes are set
-    on the instance after construction rather than threaded through
-    ``__init__``.
-    """
-    e = RostamError(message)
-    e.status = status
-    e.message = message
-    return e
+    """Build a ``_types.RostamError`` carrying the HTTP status code (0 for a
+    transport-level failure with no response, e.g. a connection error)."""
+    return RostamError(message, status=status)
 
 
 @dataclass
