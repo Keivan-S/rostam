@@ -2531,7 +2531,7 @@ func (h *hnsw) Get(id uint64) (vec []float32, meta Metadata, ttl time.Duration, 
 		}
 	}
 	if sv := h.arena.Sparse(slot); sv != nil {
-		sparse = sv.clone() // clone: arena owns the pointer
+		sparse = sv.Clone() // clone: arena owns the pointer
 	}
 	return vec, meta, ttl, sparse, version, true
 }
@@ -2571,7 +2571,7 @@ func (h *hnsw) GetProjected(id uint64, withVec, withPayload bool) (vec []float32
 	}
 	if withPayload {
 		if sv := h.arena.Sparse(slot); sv != nil {
-			sparse = sv.clone() // clone: arena owns the pointer
+			sparse = sv.Clone() // clone: arena owns the pointer
 		}
 	}
 	return vec, meta, ttl, sparse, version, true
@@ -2607,7 +2607,7 @@ func (h *hnsw) GetInto(dst []float32, id uint64) (vec []float32, meta Metadata, 
 		}
 	}
 	if sv := h.arena.Sparse(slot); sv != nil {
-		sparse = sv.clone() // clone: arena owns the pointer
+		sparse = sv.Clone() // clone: arena owns the pointer
 	}
 	return vec, meta, ttl, sparse, version, true
 }

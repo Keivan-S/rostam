@@ -11,65 +11,15 @@ import (
 	"github.com/rostamlabs/rostam/vector/analysis"
 )
 
-// Metric identifies a distance / similarity function.
-type Metric uint8
-
-// IndexType selects the nearest-neighbor index implementation behind a
-// Collection. The zero value is IndexHNSW so an unset config (and every existing
-// persisted/wire config) keeps the historical HNSW behavior — backward-compatible
-// by construction.
-type IndexType uint8
-
-const (
-	// IndexHNSW is the default graph index (Hierarchical Navigable Small World).
-	IndexHNSW IndexType = iota
-	// IndexIVF is the IVF-Flat index: a k-means coarse quantizer over inverted
-	// lists, trained at BuildConcurrent. nlist/nprobe come from Config.IVFNlist /
-	// Config.IVFNprobe (0 = the index's computed/default values).
-	IndexIVF
-	// IndexVamana is the DiskANN-family Vamana graph: a SINGLE-LAYER graph with
-	// bounded out-degree R, built by the α-RobustPrune two-pass algorithm. It
-	// reuses the entire HNSW engine constrained to one layer (every node level 0)
-	// with an α-RobustPrune neighbor rule and a two-pass build; search enters at
-	// the medoid and runs the level-0 ef-beam (no multi-level descent). R/L/alpha
-	// come from Config.VamanaR / Config.VamanaL / Config.VamanaAlpha.
-	IndexVamana
-	// IndexGPU is an OPTIONAL GPU-accelerated (brute-force / exact-KNN) index,
-	// available ONLY in a build with -tags cuda (which requires CGO + the CUDA
-	// toolkit + an NVIDIA GPU). The DEFAULT pure-Go, CGO_ENABLED=0 build never
-	// compiles the GPU code path: selecting IndexGPU there fails LOUD at config
-	// time with ErrGPUNotCompiled (never a silent HNSW fallback). The gpuSupported
-	// constant (build-tag split) gates this; dispatch goes through
-	// newGPUIndex/openGPUIndex (also build-tag split).
-	//
-	// GPU-exact surface: ONLY the four core dense-KNN entry points (Search,
-	// SearchFiltered, SearchInto, SearchFilteredWith) are GPU-exact. MMR / Groups /
-	// Hybrid / Discover / Recommend (SearchMMR, SearchGroups, HybridSearch,
-	// DiscoverVecs, RecommendVecs) fall back to the APPROXIMATE inner HNSW graph —
-	// they are inherited from the embedded engine and not re-routed through the GPU
-	// kernel. The dense fast path serves k <= 256 on the GPU and transparently
-	// falls back to a CPU-exact brute force above that (selective filters, > 256
-	// tombstones, or k > 256), so the core top-k is always exact, never truncated.
-	IndexGPU
-)
+// Metric, IndexType, and their Cosine/L2/DotProduct and IndexHNSW/IndexIVF/
+// IndexVamana/IndexGPU constants now live in the engine-free vtypes leaf package
+// and are re-exported via vtypes_aliases.go.
 
 // Vamana defaults (applied when the corresponding Config field is 0).
 const (
 	defaultVamanaR     = 64  // max out-degree (level-0 slab stride)
 	defaultVamanaL     = 100 // build/search beam width
 	defaultVamanaAlpha = 1.2 // pass-2 RobustPrune α (pass 1 is always α=1)
-)
-
-const (
-	// Cosine treats vectors as directions and minimizes 1 - dot(a,b)/(|a|*|b|).
-	// Vectors are normalized on insert so the hot path is a single dot product.
-	Cosine Metric = iota
-	// L2 minimizes squared Euclidean distance. Results expose the squared
-	// distance directly; callers take sqrt at the API boundary if needed.
-	L2
-	// DotProduct returns -dot(a,b) (negated so smaller = more similar). Caller
-	// is responsible for any normalization.
-	DotProduct
 )
 
 // Config configures a VectorIndex. Dim and Metric are required; the rest
@@ -483,19 +433,8 @@ type Config struct {
 	FullText *FullTextConfig `json:"full_text,omitempty"`
 }
 
-// FullTextConfig enables and parameterizes the BM25 full-text lane. The zero
-// value (Analyzer="", K1=0, B=0) resolves to the default English analyzer and
-// the standard BM25 knobs (k1=1.2, b=0.75). A nil *FullTextConfig on Config means
-// full text is DISABLED.
-type FullTextConfig struct {
-	// Analyzer is the registered analyzer name (analysis.ByName). "" → the default
-	// English analyzer ("english").
-	Analyzer string `json:"analyzer,omitempty"`
-	// K1 is the BM25 term-frequency saturation knob; 0 → 1.2.
-	K1 float32 `json:"k1,omitempty"`
-	// B is the BM25 length-normalization knob; 0 → 0.75.
-	B float32 `json:"b,omitempty"`
-}
+// FullTextConfig now lives in the engine-free vtypes leaf package and is
+// re-exported via vtypes_aliases.go.
 
 // NamedConfig is the collection-level config carrier for a named-vector
 // collection: the per-space index params (Spaces) plus the collection-level

@@ -718,7 +718,7 @@ func (h *hnsw) scanVectors() []ScanRecord {
 			rec.Metadata = out
 		}
 		if sv := h.arena.Sparse(slot); sv != nil {
-			rec.Sparse = sv.clone() // clone: arena owns the pointer
+			rec.Sparse = sv.Clone() // clone: arena owns the pointer
 		}
 		if ke := h.arena.KeyExpires(slot); len(ke) > 0 {
 			// CLONE: KeyExpires aliases arena storage (the set path clones-on-write,

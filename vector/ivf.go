@@ -1591,7 +1591,7 @@ func (ix *ivf) Get(id uint64) (vec []float32, meta Metadata, ttl time.Duration, 
 		}
 	}
 	if sv := ix.arena.Sparse(slot); sv != nil {
-		sparse = sv.clone()
+		sparse = sv.Clone()
 	}
 	return vec, meta, ttl, sparse, version, true
 }
@@ -1629,7 +1629,7 @@ func (ix *ivf) GetProjected(id uint64, withVec, withPayload bool) (vec []float32
 	}
 	if withPayload {
 		if sv := ix.arena.Sparse(slot); sv != nil {
-			sparse = sv.clone()
+			sparse = sv.Clone()
 		}
 	}
 	return vec, meta, ttl, sparse, version, true
@@ -1663,7 +1663,7 @@ func (ix *ivf) GetInto(dst []float32, id uint64) (vec []float32, meta Metadata, 
 		}
 	}
 	if sv := ix.arena.Sparse(slot); sv != nil {
-		sparse = sv.clone()
+		sparse = sv.Clone()
 	}
 	return vec, meta, ttl, sparse, version, true
 }
@@ -3453,7 +3453,7 @@ func (ix *ivf) scanVectors() []ScanRecord {
 			rec.Metadata = out
 		}
 		if sv := ix.arena.Sparse(slot); sv != nil {
-			rec.Sparse = sv.clone()
+			rec.Sparse = sv.Clone()
 		}
 		recs = append(recs, rec)
 	}

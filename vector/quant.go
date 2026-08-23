@@ -8,44 +8,9 @@ import (
 	"math/bits"
 )
 
-// QuantMode selects the vector quantization scheme for an index.
-type QuantMode uint8
-
-const (
-	// QuantNone stores full-precision float32 vectors with no quantization.
-	// This is the default.
-	QuantNone QuantMode = iota
-	// QuantSQ8 stores scalar int8 codes (4× smaller than float32) and rescores
-	// the over-collected candidate set on full-precision float32. Cosine-scope
-	// for v1 (see the quantization design spec).
-	QuantSQ8
-	// QuantBQ1 stores 1-bit-per-dimension sign codes (32× smaller than float32),
-	// navigates the graph by Hamming distance, and rescores on float32. Best for
-	// high-dimensional normalized embeddings. Cosine-scope for v1.
-	QuantBQ1
-	// QuantPQ stores product-quantization codes (m bytes/vector, nbits=8). Used by
-	// the IVF-PQ index mode: the residual codebooks + per-cell ADC LUT live on the
-	// pq codec and are driven by the IVF (see pq.go). The newQuantizer adapter for
-	// this mode exists so the arena sizes the codes side-array to CodeLen()==m and
-	// can Encode on insert; the residual LUT scoring path is IVF-driven, not via
-	// the centroid-agnostic Distance below.
-	QuantPQ
-	// QuantSQ is the TRAINED, metric-agnostic scalar quantizer (trainedSQ). Unlike
-	// the legacy fixed-scale QuantSQ8 (a 1/127 Cosine-only fast-path), it learns a
-	// per-dimension [min,max] range from a build sample and scores asymmetrically
-	// under the index's ACTUAL metric (Cosine/L2/DotProduct). SQBits selects the
-	// bit-depth (8-bit only). Added AFTER QuantPQ so existing on-disk
-	// QuantNone/SQ8/BQ1/PQ enum values are unchanged. See sq.go.
-	QuantSQ
-	// QuantPRQ is PRODUCT-RESIDUAL quantization: a stack of PRQLayers (default 2)
-	// product-quantizer layers where each layer quantizes the RESIDUAL of the
-	// previous one. Code = PRQLayers·m bytes; reconstruction = Σ layer
-	// reconstructions; ADC = sum of the per-layer LUTs (the additive approximation,
-	// since HNSW's exact float rescore fixes the final ranking). Strictly higher
-	// accuracy than plain PQ at the same m. Added AFTER QuantSQ so existing on-disk
-	// QuantNone/SQ8/BQ1/PQ/SQ enum values are unchanged. See prq.go.
-	QuantPRQ
-)
+// QuantMode and its QuantNone/QuantSQ8/QuantBQ1/QuantPQ/QuantSQ/QuantPRQ
+// constants now live in the engine-free vtypes leaf package and are re-exported
+// via vtypes_aliases.go.
 
 // defaultPQM derives a sensible sub-quantizer count for dim when the IVF config
 // does not specify one: the largest power-of-two m that divides dim and keeps each
