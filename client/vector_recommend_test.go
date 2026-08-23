@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/rostamlabs/rostam/ops/wire"
-	"github.com/rostamlabs/rostam/vector"
+	"github.com/rostamlabs/rostam/vtypes"
 )
 
 // decodeOpFrame strips the wire's [opNameLen:1][opName][argsLen:4][args]
@@ -52,7 +52,7 @@ func decodeOpFrame(t *testing.T, body []byte) (opName string, args []byte) {
 // then returns a canned flat result via wire.EncodeQueryResultFusedDegraded so
 // Recommend's decode path is exercised too.
 func TestRecommendByExampleIDs(t *testing.T) {
-	want := []vector.Result{{ID: 2, Distance: 0.1, Score: 0.9}, {ID: 3, Distance: 0.2, Score: 0.5}}
+	want := []vtypes.Result{{ID: 2, Distance: 0.1, Score: 0.9}, {ID: 3, Distance: 0.2, Score: 0.5}}
 
 	var gotOp string
 	var gotArgs []byte
@@ -82,14 +82,14 @@ func TestRecommendByExampleIDs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecodeQuerySpecArgs: %v", err)
 	}
-	if spec.Mode != vector.ModeFusion {
+	if spec.Mode != vtypes.ModeFusion {
 		t.Fatalf("spec.Mode = %v, want ModeFusion", spec.Mode)
 	}
 	if len(spec.Prefetch) != 1 || spec.Prefetch[0].Leaf == nil {
 		t.Fatalf("spec.Prefetch = %+v, want exactly one leaf source", spec.Prefetch)
 	}
 	leaf := spec.Prefetch[0].Leaf
-	if leaf.Kind != vector.LeafRecommend {
+	if leaf.Kind != vtypes.LeafRecommend {
 		t.Fatalf("prefetch leaf.Kind = %v, want LeafRecommend", leaf.Kind)
 	}
 	if len(leaf.Positive) != 1 || leaf.Positive[0] != 1 {
@@ -99,7 +99,7 @@ func TestRecommendByExampleIDs(t *testing.T) {
 		t.Fatalf("leaf.Negative = %v, want empty", leaf.Negative)
 	}
 	// Root is unused by ModeFusion — the canonical shape carries no root leaf.
-	if len(spec.Root.Positive) != 0 || len(spec.Root.Dense) != 0 || spec.Root.Kind != vector.LeafDense {
+	if len(spec.Root.Positive) != 0 || len(spec.Root.Dense) != 0 || spec.Root.Kind != vtypes.LeafDense {
 		t.Fatalf("spec.Root = %+v, want empty/unset", spec.Root)
 	}
 

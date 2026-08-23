@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/rostamlabs/rostam/ops/wire"
-	"github.com/rostamlabs/rostam/vector"
+	"github.com/rostamlabs/rostam/vtypes"
 )
 
 // WriteRequest is the payload for Insert and Upsert.
@@ -16,8 +16,8 @@ type WriteRequest struct {
 	ID       uint64
 	Vector   []float32
 	Content  string              // raw text tokenized into the BM25 lane
-	Metadata vector.Metadata     // build with vector.NewString/NewInt/...
-	Sparse   vector.SparseVector // optional client sparse vector
+	Metadata vtypes.Metadata     // build with vtypes.NewString/NewInt/...
+	Sparse   vtypes.SparseVector // optional client sparse vector
 	TTL      time.Duration       // 0 = no expiry
 	// ExpectedVersion enables optimistic concurrency; HasExpectedVersion must be
 	// true for it to apply.
@@ -85,8 +85,8 @@ type PointInput struct {
 	ID       uint64
 	Vector   []float32
 	Content  string
-	Metadata vector.Metadata
-	Sparse   vector.SparseVector
+	Metadata vtypes.Metadata
+	Sparse   vtypes.SparseVector
 	TTL      time.Duration
 }
 

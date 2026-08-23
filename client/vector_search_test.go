@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/rostamlabs/rostam/vector"
+	"github.com/rostamlabs/rostam/vtypes"
 )
 
 // TestSearchOnMissingCollection confirms Search surfaces the server's
@@ -57,8 +57,8 @@ func seedSearchable(t *testing.T) (*Collection, func()) {
 	col := c.Collection("posts")
 	ctx := context.Background()
 	if err := col.Create(ctx, CreateRequest{
-		Dim: 4, Metric: vector.Cosine,
-		FullText: &vector.FullTextConfig{Analyzer: "english"},
+		Dim: 4, Metric: vtypes.Cosine,
+		FullText: &vtypes.FullTextConfig{Analyzer: "english"},
 	}); err != nil {
 		_ = c.Close()
 		stop()
@@ -66,11 +66,11 @@ func seedSearchable(t *testing.T) (*Collection, func()) {
 	}
 	pts := []PointInput{
 		{ID: 1, Vector: []float32{1, 0, 0, 0}, Content: "golang concurrency",
-			Metadata: vector.Metadata{"tag": vector.NewString("lang")}},
+			Metadata: vtypes.Metadata{"tag": vtypes.NewString("lang")}},
 		{ID: 2, Vector: []float32{0, 1, 0, 0}, Content: "vector search engines",
-			Metadata: vector.Metadata{"tag": vector.NewString("search")}},
+			Metadata: vtypes.Metadata{"tag": vtypes.NewString("search")}},
 		{ID: 3, Vector: []float32{0, 0, 1, 0}, Content: "bm25 keyword ranking",
-			Metadata: vector.Metadata{"tag": vector.NewString("search")}},
+			Metadata: vtypes.Metadata{"tag": vtypes.NewString("search")}},
 	}
 	if errs := col.UpsertBatch(ctx, pts); len(errs) != 0 {
 		_ = c.Close()

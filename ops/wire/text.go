@@ -9,7 +9,7 @@ import (
 	"math"
 	"sort"
 
-	"github.com/rostamlabs/rostam/vector"
+	"github.com/rostamlabs/rostam/vtypes"
 )
 
 // Full-text (BM25) search op codecs. These mirror the dense/hybrid search wire
@@ -60,7 +60,7 @@ const (
 //
 // When g==nil the buffer is returned unchanged and the flag bit is NOT set, so a
 // no-stats encoding is byte-identical to the pre-global form.
-func appendGlobalStatsBlock(buf []byte, flags *uint8, g *vector.BM25GlobalStats) []byte {
+func appendGlobalStatsBlock(buf []byte, flags *uint8, g *vtypes.BM25GlobalStats) []byte {
 	if g == nil {
 		return buf
 	}
@@ -91,7 +91,7 @@ func sortedDFKeys(df map[uint32]int) []uint32 {
 
 // globalStatsBlockLen returns the byte length the global-stats block for g
 // occupies (0 when g==nil) so encoders can pre-size their buffers.
-func globalStatsBlockLen(g *vector.BM25GlobalStats) int {
+func globalStatsBlockLen(g *vtypes.BM25GlobalStats) int {
 	if g == nil {
 		return 0
 	}
@@ -102,7 +102,7 @@ func globalStatsBlockLen(g *vector.BM25GlobalStats) int {
 // flags has textFlagGlobalStats set. It returns nil (and the unchanged offset)
 // when the bit is clear, so a no-stats body decodes to a nil *BM25GlobalStats. A
 // set bit with a truncated block is corruption — fail loud.
-func readGlobalStatsBlock(args []byte, off int, flags uint8) (g *vector.BM25GlobalStats, newOff int, err error) {
+func readGlobalStatsBlock(args []byte, off int, flags uint8) (g *vtypes.BM25GlobalStats, newOff int, err error) {
 	if flags&textFlagGlobalStats == 0 {
 		return nil, off, nil
 	}
@@ -129,7 +129,7 @@ func readGlobalStatsBlock(args []byte, off int, flags uint8) (g *vector.BM25Glob
 		off += 4
 		df[term] = d
 	}
-	return &vector.BM25GlobalStats{N: n, Avgdl: avgdl, DF: df}, off, nil
+	return &vtypes.BM25GlobalStats{N: n, Avgdl: avgdl, DF: df}, off, nil
 }
 
 // EncodeSearchTextArgs serializes vector_search_text args. Wire:
@@ -139,7 +139,7 @@ func readGlobalStatsBlock(args []byte, off int, flags uint8) (g *vector.BM25Glob
 //	[k:u32]
 //	[queryLen:u32][query: raw UTF-8 text]
 //	if HAS_FILTER: [filterLen:u32][filterJSON]
-func EncodeSearchTextArgs(collection string, query string, k int, filter vector.Filter) []byte {
+func EncodeSearchTextArgs(collection string, query string, k int, filter vtypes.Filter) []byte {
 	return EncodeSearchTextArgsOpts(collection, query, k, filter, 0, 0, 0)
 }
 
@@ -148,7 +148,7 @@ func EncodeSearchTextArgs(collection string, query string, k int, filter vector.
 // onPartitionUnavailable are both zero the trailer is omitted (byte-identical to
 // the no-opts form). The 8-byte staleness bound rides ONLY when
 // readConsistency==ConsistencyBoundedStaleness.
-func EncodeSearchTextArgsOpts(collection string, query string, k int, filter vector.Filter, readConsistency, onPartitionUnavailable uint8, bound uint64) []byte {
+func EncodeSearchTextArgsOpts(collection string, query string, k int, filter vtypes.Filter, readConsistency, onPartitionUnavailable uint8, bound uint64) []byte {
 	return EncodeSearchTextArgsGlobal(collection, query, k, filter, readConsistency, onPartitionUnavailable, bound, false, nil)
 }
 
@@ -169,7 +169,7 @@ func EncodeSearchTextArgsOpts(collection string, query string, k int, filter vec
 // scatter carries g!=nil (and may leave globalIDF unset — the shard only needs the
 // stats). Placing the stats block AFTER the opts trailer keeps ReadConsistencyOf's
 // byte-peek (which decodes base+opts at offset n) correct.
-func EncodeSearchTextArgsGlobal(collection string, query string, k int, filter vector.Filter, readConsistency, onPartitionUnavailable uint8, bound uint64, globalIDF bool, g *vector.BM25GlobalStats) []byte {
+func EncodeSearchTextArgsGlobal(collection string, query string, k int, filter vtypes.Filter, readConsistency, onPartitionUnavailable uint8, bound uint64, globalIDF bool, g *vtypes.BM25GlobalStats) []byte {
 	var flags uint8
 	var filterJSON []byte
 	if !filter.IsZero() {
@@ -213,14 +213,14 @@ func EncodeSearchTextArgsGlobal(collection string, query string, k int, filter v
 }
 
 // DecodeSearchTextArgs reads vector_search_text args (ignoring any opts trailer).
-func DecodeSearchTextArgs(args []byte) (collection string, query string, k int, filter vector.Filter, err error) {
+func DecodeSearchTextArgs(args []byte) (collection string, query string, k int, filter vtypes.Filter, err error) {
 	collection, query, k, filter, _, err = decodeSearchTextArgsN(args)
 	return collection, query, k, filter, err
 }
 
 // decodeSearchTextArgsN decodes the base block and returns the number of bytes
 // consumed so DecodeSearchTextArgsOpts can read a trailing opts block.
-func decodeSearchTextArgsN(args []byte) (collection string, query string, k int, filter vector.Filter, n int, err error) {
+func decodeSearchTextArgsN(args []byte) (collection string, query string, k int, filter vtypes.Filter, n int, err error) {
 	if len(args) < 2 {
 		return "", "", 0, filter, 0, ErrVectorArgsTruncated
 	}
@@ -263,7 +263,7 @@ func decodeSearchTextArgsN(args []byte) (collection string, query string, k int,
 // DecodeSearchTextArgsOpts decodes vector_search_text args that may carry a
 // cross-shard consistency opts trailer (textFlagOpts). Backward-compatible: args
 // without the trailer decode with readConsistency=0, onPartitionUnavailable=0.
-func DecodeSearchTextArgsOpts(args []byte) (collection string, query string, k int, filter vector.Filter, readConsistency, onPartitionUnavailable uint8, bound uint64, err error) {
+func DecodeSearchTextArgsOpts(args []byte) (collection string, query string, k int, filter vtypes.Filter, readConsistency, onPartitionUnavailable uint8, bound uint64, err error) {
 	collection, query, k, filter, readConsistency, onPartitionUnavailable, bound, _, _, err = DecodeSearchTextArgsGlobal(args)
 	return collection, query, k, filter, readConsistency, onPartitionUnavailable, bound, err
 }
@@ -272,7 +272,7 @@ func DecodeSearchTextArgsOpts(args []byte) (collection string, query string, k i
 // rc/opa/bound trailer AND the global-DF extensions: globalIDF (the request flag,
 // textFlagGlobalIDF) and g (the phase-1 global stats, nil when absent). Backward-
 // compatible: a pre-global body yields globalIDF=false, g=nil.
-func DecodeSearchTextArgsGlobal(args []byte) (collection string, query string, k int, filter vector.Filter, readConsistency, onPartitionUnavailable uint8, bound uint64, globalIDF bool, g *vector.BM25GlobalStats, err error) {
+func DecodeSearchTextArgsGlobal(args []byte) (collection string, query string, k int, filter vtypes.Filter, readConsistency, onPartitionUnavailable uint8, bound uint64, globalIDF bool, g *vtypes.BM25GlobalStats, err error) {
 	collection, query, k, filter, n, err := decodeSearchTextArgsN(args)
 	if err != nil {
 		return "", "", 0, filter, 0, 0, 0, false, nil, err
@@ -314,14 +314,14 @@ func DecodeSearchTextArgsGlobal(args []byte) (collection string, query string, k
 //
 // The text lane is BM25 (no sparse query vector rides the wire: the server
 // analyzes the raw text). opts carries fusion knobs identical to HybridOpts.
-func EncodeHybridTextArgs(collection string, dense []float32, query string, k int, opts vector.HybridOpts) []byte {
+func EncodeHybridTextArgs(collection string, dense []float32, query string, k int, opts vtypes.HybridOpts) []byte {
 	return EncodeHybridTextArgsOpts(collection, dense, query, k, opts, 0, 0, 0)
 }
 
 // EncodeHybridTextArgsOpts serializes vector_hybrid_text args with an optional
 // cross-shard consistency opts trailer (byte-identical to EncodeHybridTextArgs
 // when readConsistency and onPartitionUnavailable are both zero).
-func EncodeHybridTextArgsOpts(collection string, dense []float32, query string, k int, opts vector.HybridOpts, readConsistency, onPartitionUnavailable uint8, bound uint64) []byte {
+func EncodeHybridTextArgsOpts(collection string, dense []float32, query string, k int, opts vtypes.HybridOpts, readConsistency, onPartitionUnavailable uint8, bound uint64) []byte {
 	return EncodeHybridTextArgsGlobal(collection, dense, query, k, opts, readConsistency, onPartitionUnavailable, bound, false, nil)
 }
 
@@ -330,7 +330,7 @@ func EncodeHybridTextArgsOpts(collection string, dense []float32, query string, 
 // is false and g is nil): the request flag textFlagGlobalIDF, and the phase-1
 // global-stats block (behind textFlagGlobalStats) appended AFTER the rc/opa/bound
 // trailer. See EncodeSearchTextArgsGlobal for the rationale.
-func EncodeHybridTextArgsGlobal(collection string, dense []float32, query string, k int, opts vector.HybridOpts, readConsistency, onPartitionUnavailable uint8, bound uint64, globalIDF bool, g *vector.BM25GlobalStats) []byte {
+func EncodeHybridTextArgsGlobal(collection string, dense []float32, query string, k int, opts vtypes.HybridOpts, readConsistency, onPartitionUnavailable uint8, bound uint64, globalIDF bool, g *vtypes.BM25GlobalStats) []byte {
 	var flags uint8
 	var filterJSON []byte
 	if !opts.Filter.IsZero() {
@@ -383,12 +383,12 @@ func EncodeHybridTextArgsGlobal(collection string, dense []float32, query string
 }
 
 // DecodeHybridTextArgs reads vector_hybrid_text args (ignoring any opts trailer).
-func DecodeHybridTextArgs(args []byte) (collection string, dense []float32, query string, k int, opts vector.HybridOpts, err error) {
+func DecodeHybridTextArgs(args []byte) (collection string, dense []float32, query string, k int, opts vtypes.HybridOpts, err error) {
 	collection, dense, query, k, opts, _, err = decodeHybridTextArgsN(args)
 	return collection, dense, query, k, opts, err
 }
 
-func decodeHybridTextArgsN(args []byte) (collection string, dense []float32, query string, k int, opts vector.HybridOpts, n int, err error) {
+func decodeHybridTextArgsN(args []byte) (collection string, dense []float32, query string, k int, opts vtypes.HybridOpts, n int, err error) {
 	if len(args) < 2 {
 		return "", nil, "", 0, opts, 0, ErrVectorArgsTruncated
 	}
@@ -402,7 +402,7 @@ func decodeHybridTextArgsN(args []byte) (collection string, dense []float32, que
 	off := 2 + colLen
 	k = int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
-	opts.Method = vector.FusionMethod(args[off])
+	opts.Method = vtypes.FusionMethod(args[off])
 	off++
 	opts.Alpha = math.Float64frombits(binary.BigEndian.Uint64(args[off:]))
 	off += 8
@@ -454,7 +454,7 @@ func decodeHybridTextArgsN(args []byte) (collection string, dense []float32, que
 // DecodeHybridTextArgsOpts decodes vector_hybrid_text args that may carry a
 // cross-shard consistency opts trailer (textFlagOpts). Backward-compatible with
 // the no-opts form (readConsistency=0, onPartitionUnavailable=0).
-func DecodeHybridTextArgsOpts(args []byte) (collection string, dense []float32, query string, k int, opts vector.HybridOpts, readConsistency, onPartitionUnavailable uint8, bound uint64, err error) {
+func DecodeHybridTextArgsOpts(args []byte) (collection string, dense []float32, query string, k int, opts vtypes.HybridOpts, readConsistency, onPartitionUnavailable uint8, bound uint64, err error) {
 	collection, dense, query, k, opts, readConsistency, onPartitionUnavailable, bound, _, _, err = DecodeHybridTextArgsGlobal(args)
 	return collection, dense, query, k, opts, readConsistency, onPartitionUnavailable, bound, err
 }
@@ -463,7 +463,7 @@ func DecodeHybridTextArgsOpts(args []byte) (collection string, dense []float32, 
 // rc/opa/bound trailer AND the global-DF extensions: globalIDF (request flag) and g
 // (phase-1 global stats, nil when absent). Backward-compatible with the pre-global
 // form (globalIDF=false, g=nil).
-func DecodeHybridTextArgsGlobal(args []byte) (collection string, dense []float32, query string, k int, opts vector.HybridOpts, readConsistency, onPartitionUnavailable uint8, bound uint64, globalIDF bool, g *vector.BM25GlobalStats, err error) {
+func DecodeHybridTextArgsGlobal(args []byte) (collection string, dense []float32, query string, k int, opts vtypes.HybridOpts, readConsistency, onPartitionUnavailable uint8, bound uint64, globalIDF bool, g *vtypes.BM25GlobalStats, err error) {
 	collection, dense, query, k, opts, n, err := decodeHybridTextArgsN(args)
 	if err != nil {
 		return "", nil, "", 0, opts, 0, 0, 0, false, nil, err

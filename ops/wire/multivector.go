@@ -9,7 +9,7 @@ import (
 	"math"
 	"slices"
 
-	"github.com/rostamlabs/rostam/vector"
+	"github.com/rostamlabs/rostam/vtypes"
 )
 
 // encodeMatrix serializes a [][]float32 as [rows:u32]{[dim:u32][floats]}.
@@ -80,7 +80,7 @@ func DecodeMatrix(b []byte) ([][]float32, int, error) {
 // a plain HNSW MV create stays BYTE-IDENTICAL to the pre-IVF encoder. Each
 // sub-block (IVF-PQ, OPQ, train-threshold) is itself appended only when needed,
 // so an IVF-Flat create omits the PQ/OPQ bytes.
-func EncodeMVCreateArgs(name string, cfg vector.MultiVectorConfig) []byte {
+func EncodeMVCreateArgs(name string, cfg vtypes.MultiVectorConfig) []byte {
 	ivfpq := cfg.IVFPQ || cfg.IVFRerank
 	// Drift-retrain trailer (ivfDriftRetrain:1 + ivfDriftGrowthFactor:8 +
 	// ivfDriftFactor:8 = 17 bytes) rides at the VERY END, after the PQDropVecs byte.
@@ -99,7 +99,7 @@ func EncodeMVCreateArgs(name string, cfg vector.MultiVectorConfig) []byte {
 	opqIters := cfg.OPQIters != 0
 	relBP := cfg.FilterFirstRelativeBP != 0 || opqIters
 	drift := cfg.IVFDriftRetrain || cfg.IVFDriftGrowthFactor != 0 || cfg.IVFDriftFactor != 0 || relBP
-	ivf := cfg.IndexType != vector.IndexHNSW || cfg.IVFNlist != 0 || cfg.IVFNprobe != 0 || ivfpq || cfg.OPQ || cfg.IVFTrainThreshold != 0 || drift
+	ivf := cfg.IndexType != vtypes.IndexHNSW || cfg.IVFNlist != 0 || cfg.IVFNprobe != 0 || ivfpq || cfg.OPQ || cfg.IVFTrainThreshold != 0 || drift
 	n := 1 + len(name) + 4 + 4 + 4 + 4 + 8 + 1 + 4 + 1 + 4
 	if ivf {
 		n += 1 + 4 + 4 // indexType + ivfNlist + ivfNprobe
@@ -214,17 +214,17 @@ func EncodeMVCreateArgs(name string, cfg vector.MultiVectorConfig) []byte {
 }
 
 // DecodeMVCreateArgs reads args produced by EncodeMVCreateArgs.
-func DecodeMVCreateArgs(args []byte) (string, vector.MultiVectorConfig, error) {
+func DecodeMVCreateArgs(args []byte) (string, vtypes.MultiVectorConfig, error) {
 	if len(args) < 1 {
-		return "", vector.MultiVectorConfig{}, ErrVectorArgsTruncated
+		return "", vtypes.MultiVectorConfig{}, ErrVectorArgsTruncated
 	}
 	nameLen := int(args[0])
 	if len(args) < 1+nameLen+4+4+4+4+8 {
-		return "", vector.MultiVectorConfig{}, ErrVectorArgsTruncated
+		return "", vtypes.MultiVectorConfig{}, ErrVectorArgsTruncated
 	}
 	name := string(args[1 : 1+nameLen])
 	off := 1 + nameLen
-	cfg := vector.MultiVectorConfig{}
+	cfg := vtypes.MultiVectorConfig{}
 	cfg.Dim = int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
 	cfg.M = int(binary.BigEndian.Uint32(args[off:]))
@@ -237,7 +237,7 @@ func DecodeMVCreateArgs(args []byte) (string, vector.MultiVectorConfig, error) {
 	off += 8
 	// Quant/rescore/persistent extension — present iff the encoder included it.
 	if len(args) >= off+1+4+1 {
-		cfg.Quant = vector.QuantMode(args[off])
+		cfg.Quant = vtypes.QuantMode(args[off])
 		off++
 		cfg.RescoreFactor = int(binary.BigEndian.Uint32(args[off:]))
 		off += 4
@@ -250,7 +250,7 @@ func DecodeMVCreateArgs(args []byte) (string, vector.MultiVectorConfig, error) {
 			// IVF block — present iff the encoder included it (written only for a
 			// non-default IVF config), mirroring the dense decode.
 			if len(args) >= off+1+4+4 {
-				cfg.IndexType = vector.IndexType(args[off])
+				cfg.IndexType = vtypes.IndexType(args[off])
 				off++
 				cfg.IVFNlist = int(binary.BigEndian.Uint32(args[off:]))
 				off += 4
@@ -261,7 +261,7 @@ func DecodeMVCreateArgs(args []byte) (string, vector.MultiVectorConfig, error) {
 				// non-IVF (HNSW-PQ) index's trailing [OPQ][threshold][pqDropVecs] block
 				// (also 6 bytes) is NOT misread as a PQ sub-block. The encoder writes
 				// this sub-block only for IVFPQ/IVFRerank, both IVF-only.
-				if cfg.IndexType == vector.IndexIVF && len(args) >= off+1+4+1 {
+				if cfg.IndexType == vtypes.IndexIVF && len(args) >= off+1+4+1 {
 					cfg.IVFPQ = args[off] == 1
 					off++
 					cfg.IVFPQM = int(binary.BigEndian.Uint32(args[off:]))
@@ -330,7 +330,7 @@ func DecodeMVCreateArgs(args []byte) (string, vector.MultiVectorConfig, error) {
 
 // EncodeMVAddArgs serializes a vector_mv_add request.
 // Wire: [nameLen:u8][name][docID:u64][matrix][metaLen:u32][metaJSON].
-func EncodeMVAddArgs(name string, docID uint64, tokens [][]float32, meta vector.Metadata) []byte {
+func EncodeMVAddArgs(name string, docID uint64, tokens [][]float32, meta vtypes.Metadata) []byte {
 	var metaJSON []byte
 	if len(meta) > 0 {
 		metaJSON, _ = json.Marshal(meta)
@@ -352,14 +352,14 @@ func EncodeMVAddArgs(name string, docID uint64, tokens [][]float32, meta vector.
 // DecodeMVAddArgs reads args produced by EncodeMVAddArgs. Trailing bytes beyond
 // the base block (a CAS trailer from EncodeMVAddArgsCAS) are ignored, so a
 // non-CAS handler stays backward-compatible.
-func DecodeMVAddArgs(args []byte) (string, uint64, [][]float32, vector.Metadata, error) {
+func DecodeMVAddArgs(args []byte) (string, uint64, [][]float32, vtypes.Metadata, error) {
 	name, docID, tokens, meta, _, err := decodeMVAddArgsN(args)
 	return name, docID, tokens, meta, err
 }
 
 // decodeMVAddArgsN decodes the mv-add base block and returns the number of bytes
 // consumed, so DecodeMVAddArgsCAS can read a trailing CAS block.
-func decodeMVAddArgsN(args []byte) (name string, docID uint64, tokens [][]float32, meta vector.Metadata, n int, err error) {
+func decodeMVAddArgsN(args []byte) (name string, docID uint64, tokens [][]float32, meta vtypes.Metadata, n int, err error) {
 	if len(args) < 1 {
 		return "", 0, nil, nil, 0, ErrVectorArgsTruncated
 	}
@@ -385,7 +385,7 @@ func decodeMVAddArgsN(args []byte) (name string, docID uint64, tokens [][]float3
 		return "", 0, nil, nil, 0, ErrVectorArgsTruncated
 	}
 	if mlen > 0 {
-		mm := make(vector.Metadata)
+		mm := make(vtypes.Metadata)
 		if err := json.Unmarshal(args[off:off+mlen], &mm); err != nil {
 			return "", 0, nil, nil, 0, fmt.Errorf("ops: decode mv metadata: %w", err)
 		}
@@ -401,7 +401,7 @@ func decodeMVAddArgsN(args []byte) (name string, docID uint64, tokens [][]float3
 // covers the absence). Otherwise it appends a present flag (1) then
 // [nnz:u32]{[dim:u32][value:f32]} (writeSparseAppend). It MUST be the LAST trailer
 // on the wire (it self-delimits behind a single flag byte at the very end).
-func appendMVSparseTrailer(out []byte, sparse *vector.SparseVector) []byte {
+func appendMVSparseTrailer(out []byte, sparse *vtypes.SparseVector) []byte {
 	if sparse == nil || sparse.IsZero() {
 		return out // dense-only: byte-identical, no trailing block
 	}
@@ -414,7 +414,7 @@ func appendMVSparseTrailer(out []byte, sparse *vector.SparseVector) []byte {
 // blob ends before the flag byte ⇒ (nil, off, nil). A present flag (1) with a
 // truncated body is fail-loud. flag 0 is treated as "absent" (defensive; the
 // encoder omits the trailer rather than writing 0).
-func readMVSparseTrailer(args []byte, off int) (*vector.SparseVector, int, error) {
+func readMVSparseTrailer(args []byte, off int) (*vtypes.SparseVector, int, error) {
 	if off >= len(args) {
 		return nil, off, nil // old / dense-only blob: no sparse trailer
 	}
@@ -435,7 +435,7 @@ func readMVSparseTrailer(args []byte, off int) (*vector.SparseVector, int, error
 // block. When hasExpected is false the output is BYTE-IDENTICAL to EncodeMVAddArgs.
 // The handler turns a present block into CASCond{Expected: expectedVersion,
 // Has: true} (expectedVersion 0 = expect-absent / add-if-absent).
-func EncodeMVAddArgsCAS(name string, docID uint64, tokens [][]float32, meta vector.Metadata, expectedVersion uint64, hasExpected bool) []byte {
+func EncodeMVAddArgsCAS(name string, docID uint64, tokens [][]float32, meta vtypes.Metadata, expectedVersion uint64, hasExpected bool) []byte {
 	return EncodeMVAddArgsCASKeyTTL(name, docID, tokens, meta, expectedVersion, hasExpected, nil)
 }
 
@@ -445,7 +445,7 @@ func EncodeMVAddArgsCAS(name string, docID uint64, tokens [][]float32, meta vect
 // output is BYTE-IDENTICAL to EncodeMVAddArgs. The keyTTL block rides AFTER the
 // base block (before any CAS/version trailer), self-delimiting behind a present
 // byte — exactly like set_payload.
-func EncodeMVAddArgsKeyTTL(name string, docID uint64, tokens [][]float32, meta vector.Metadata, keyTTLMs map[string]int64) []byte {
+func EncodeMVAddArgsKeyTTL(name string, docID uint64, tokens [][]float32, meta vtypes.Metadata, keyTTLMs map[string]int64) []byte {
 	return EncodeMVAddArgsCASKeyTTL(name, docID, tokens, meta, 0, false, keyTTLMs)
 }
 
@@ -455,7 +455,7 @@ func EncodeMVAddArgsKeyTTL(name string, docID uint64, tokens [][]float32, meta v
 // are present the keyTTL present byte is ALWAYS emitted when a CAS block follows (0
 // when no map) — the set_payload-CAS interpose. When keyTTLMs is empty AND
 // hasExpected is false the output is BYTE-IDENTICAL to EncodeMVAddArgs.
-func EncodeMVAddArgsCASKeyTTL(name string, docID uint64, tokens [][]float32, meta vector.Metadata, expectedVersion uint64, hasExpected bool, keyTTLMs map[string]int64) []byte {
+func EncodeMVAddArgsCASKeyTTL(name string, docID uint64, tokens [][]float32, meta vtypes.Metadata, expectedVersion uint64, hasExpected bool, keyTTLMs map[string]int64) []byte {
 	return EncodeMVAddArgsCASKeyTTLSparse(name, docID, tokens, meta, expectedVersion, hasExpected, keyTTLMs, nil)
 }
 
@@ -465,7 +465,7 @@ func EncodeMVAddArgsCASKeyTTL(name string, docID uint64, tokens [][]float32, met
 // trailing block) — so a dense-only MV add stays byte-identical on the wire. The
 // sparse trailer is ALWAYS last (it self-delimits behind a single flag byte at the
 // very end, decoded EOF-tolerantly).
-func EncodeMVAddArgsCASKeyTTLSparse(name string, docID uint64, tokens [][]float32, meta vector.Metadata, expectedVersion uint64, hasExpected bool, keyTTLMs map[string]int64, sparse *vector.SparseVector) []byte {
+func EncodeMVAddArgsCASKeyTTLSparse(name string, docID uint64, tokens [][]float32, meta vtypes.Metadata, expectedVersion uint64, hasExpected bool, keyTTLMs map[string]int64, sparse *vtypes.SparseVector) []byte {
 	sparsePresent := sparse != nil && !sparse.IsZero()
 	base := EncodeMVAddArgs(name, docID, tokens, meta)
 	// A trailer (CAS and/or sparse) follows ⇒ force the keyTTL present byte so the CAS
@@ -489,7 +489,7 @@ func EncodeMVAddArgsCASKeyTTLSparse(name string, docID uint64, tokens [][]float3
 // DecodeMVAddArgsCAS reads args produced by EncodeMVAddArgsCAS (or the legacy
 // EncodeMVAddArgs — the CAS block is optional). hasExpected reports whether a CAS
 // precondition trailer was present.
-func DecodeMVAddArgsCAS(args []byte) (name string, docID uint64, tokens [][]float32, meta vector.Metadata, expectedVersion uint64, hasExpected bool, err error) {
+func DecodeMVAddArgsCAS(args []byte) (name string, docID uint64, tokens [][]float32, meta vtypes.Metadata, expectedVersion uint64, hasExpected bool, err error) {
 	name, docID, tokens, meta, expectedVersion, hasExpected, _, err = DecodeMVAddArgsCASKeyTTL(args)
 	return name, docID, tokens, meta, expectedVersion, hasExpected, err
 }
@@ -500,7 +500,7 @@ func DecodeMVAddArgsCAS(args []byte) (name string, docID uint64, tokens [][]floa
 // TTL block (key -> RELATIVE ms; nil when absent), then the OPTIONAL
 // [casPresent:u8][expectedVersion:u64] block. A legacy blob decodes to
 // keyTTLMs=nil, hasExpected=false. A present-but-truncated trailer is fail-loud.
-func DecodeMVAddArgsCASKeyTTL(args []byte) (name string, docID uint64, tokens [][]float32, meta vector.Metadata, expectedVersion uint64, hasExpected bool, keyTTLMs map[string]int64, err error) {
+func DecodeMVAddArgsCASKeyTTL(args []byte) (name string, docID uint64, tokens [][]float32, meta vtypes.Metadata, expectedVersion uint64, hasExpected bool, keyTTLMs map[string]int64, err error) {
 	name, docID, tokens, meta, expectedVersion, hasExpected, keyTTLMs, _, err = DecodeMVAddArgsCASKeyTTLSparse(args)
 	return name, docID, tokens, meta, expectedVersion, hasExpected, keyTTLMs, err
 }
@@ -512,7 +512,7 @@ func DecodeMVAddArgsCASKeyTTL(args []byte) (name string, docID uint64, tokens []
 // hasExpected=false, sparse=nil. The CAS marker (0 = absent, 1 = present+u64) is
 // consumed whenever a trailer block exists so the sparse trailer rides at a
 // deterministic offset. A present-but-truncated trailer is fail-loud.
-func DecodeMVAddArgsCASKeyTTLSparse(args []byte) (name string, docID uint64, tokens [][]float32, meta vector.Metadata, expectedVersion uint64, hasExpected bool, keyTTLMs map[string]int64, sparse *vector.SparseVector, err error) {
+func DecodeMVAddArgsCASKeyTTLSparse(args []byte) (name string, docID uint64, tokens [][]float32, meta vtypes.Metadata, expectedVersion uint64, hasExpected bool, keyTTLMs map[string]int64, sparse *vtypes.SparseVector, err error) {
 	name, docID, tokens, meta, n, err := decodeMVAddArgsN(args)
 	if err != nil {
 		return "", 0, nil, nil, 0, false, nil, nil, err
@@ -552,7 +552,7 @@ func DecodeMVAddArgsCASKeyTTLSparse(args []byte) (name string, docID uint64, tok
 // the online if-absent path (vector_mv_add_if_absent) and the offline verbatim
 // replace path (vector_mv_add_versioned) both decode this trailer. Mirrors the
 // dense vecFlagVersion block and the additive EncodeMVAddArgsCAS trailer.
-func EncodeMVAddArgsVersioned(name string, docID uint64, tokens [][]float32, meta vector.Metadata, version uint64) []byte {
+func EncodeMVAddArgsVersioned(name string, docID uint64, tokens [][]float32, meta vtypes.Metadata, version uint64) []byte {
 	base := EncodeMVAddArgs(name, docID, tokens, meta)
 	if version == 0 {
 		return base // byte-identical to the no-version wire
@@ -581,7 +581,7 @@ func EncodeMVAddArgsVersioned(name string, docID uint64, tokens [][]float32, met
 // the relative MV keyTTL block (EncodeMVAddArgsKeyTTL). Used ONLY by the MV
 // reshard/resplit copy passes so a copied document keeps BOTH its per-document CAS
 // version AND its original absolute key deadlines time-stable.
-func EncodeMVAddArgsVersionedKeyExpires(name string, docID uint64, tokens [][]float32, meta vector.Metadata, version uint64, keyExpires map[string]uint64) []byte {
+func EncodeMVAddArgsVersionedKeyExpires(name string, docID uint64, tokens [][]float32, meta vtypes.Metadata, version uint64, keyExpires map[string]uint64) []byte {
 	return EncodeMVAddArgsVersionedKeyExpiresSparse(name, docID, tokens, meta, version, keyExpires, nil)
 }
 
@@ -592,7 +592,7 @@ func EncodeMVAddArgsVersionedKeyExpires(name string, docID uint64, tokens [][]fl
 // byte-identical). When sparse is present the version trailer is forced (verPresent=1,
 // version possibly 0) and the kePresent byte is forced (0 when no keyExpires) so the
 // sparse trailer rides at a deterministic offset. The sparse trailer is ALWAYS last.
-func EncodeMVAddArgsVersionedKeyExpiresSparse(name string, docID uint64, tokens [][]float32, meta vector.Metadata, version uint64, keyExpires map[string]uint64, sparse *vector.SparseVector) []byte {
+func EncodeMVAddArgsVersionedKeyExpiresSparse(name string, docID uint64, tokens [][]float32, meta vtypes.Metadata, version uint64, keyExpires map[string]uint64, sparse *vtypes.SparseVector) []byte {
 	sparsePresent := sparse != nil && !sparse.IsZero()
 	if len(keyExpires) == 0 && !sparsePresent {
 		// Zero-overhead: byte-identical to the version-only wire (the version trailer's
@@ -629,7 +629,7 @@ func EncodeMVAddArgsVersionedKeyExpiresSparse(name string, docID uint64, tokens 
 // DecodeMVAddArgsVersioned reads args produced by EncodeMVAddArgsVersioned (or the
 // legacy EncodeMVAddArgs — the version block is optional). version 0 / a missing
 // block ⇒ no version-preservation (the plain bump/if-absent semantics).
-func DecodeMVAddArgsVersioned(args []byte) (name string, docID uint64, tokens [][]float32, meta vector.Metadata, version uint64, err error) {
+func DecodeMVAddArgsVersioned(args []byte) (name string, docID uint64, tokens [][]float32, meta vtypes.Metadata, version uint64, err error) {
 	name, docID, tokens, meta, version, _, err = DecodeMVAddArgsVersionedKeyExpires(args)
 	return name, docID, tokens, meta, version, err
 }
@@ -641,7 +641,7 @@ func DecodeMVAddArgsVersioned(args []byte) (name string, docID uint64, tokens []
 // blob decodes to version 0, keyExpires nil, sparse nil. The kePresent byte (0 =
 // absent) is consumed whenever a trailer exists so the sparse trailer rides at a
 // deterministic offset. A present-but-truncated trailer is fail-loud.
-func DecodeMVAddArgsVersionedKeyExpiresSparse(args []byte) (name string, docID uint64, tokens [][]float32, meta vector.Metadata, version uint64, keyExpires map[string]uint64, sparse *vector.SparseVector, err error) {
+func DecodeMVAddArgsVersionedKeyExpiresSparse(args []byte) (name string, docID uint64, tokens [][]float32, meta vtypes.Metadata, version uint64, keyExpires map[string]uint64, sparse *vtypes.SparseVector, err error) {
 	name, docID, tokens, meta, n, err := decodeMVAddArgsN(args)
 	if err != nil {
 		return "", 0, nil, nil, 0, nil, nil, err
@@ -705,7 +705,7 @@ func DecodeMVAddArgsVersionedKeyExpiresSparse(args []byte) (name string, docID u
 // per-key payload TTL map (nil when the kePresent byte is 0 or absent), applied
 // VERBATIM by the reshard reinsert handlers. A legacy blob (no trailers) decodes
 // to version 0, keyExpires nil. A present-but-truncated trailer is fail-loud.
-func DecodeMVAddArgsVersionedKeyExpires(args []byte) (name string, docID uint64, tokens [][]float32, meta vector.Metadata, version uint64, keyExpires map[string]uint64, err error) {
+func DecodeMVAddArgsVersionedKeyExpires(args []byte) (name string, docID uint64, tokens [][]float32, meta vtypes.Metadata, version uint64, keyExpires map[string]uint64, err error) {
 	name, docID, tokens, meta, version, keyExpires, _, err = DecodeMVAddArgsVersionedKeyExpiresSparse(args)
 	return name, docID, tokens, meta, version, keyExpires, err
 }
@@ -796,18 +796,18 @@ const (
 // any trailing bytes. When only rc/opa are non-zero the trailer is the legacy
 // "[mvTrailerOpts][rc][opa]" form, byte-identical to the pre-filter encoder.
 func EncodeMVSearchArgsOpts(name string, query [][]float32, k, candPerToken int, readConsistency, onPartitionUnavailable uint8, bound uint64) []byte {
-	return encodeMVSearchArgsOptsFilter(name, query, k, candPerToken, readConsistency, onPartitionUnavailable, vector.Filter{}, bound)
+	return encodeMVSearchArgsOptsFilter(name, query, k, candPerToken, readConsistency, onPartitionUnavailable, vtypes.Filter{}, bound)
 }
 
 // EncodeMVSearchArgsOptsFilter is EncodeMVSearchArgsOpts plus a payload filter
 // carried on the wire (length-prefixed JSON, mirroring the dense
 // EncodeVectorSearchArgsExt serialization). See EncodeMVSearchArgsOpts for the
 // trailer layout and the backward-compat guarantees.
-func EncodeMVSearchArgsOptsFilter(name string, query [][]float32, k, candPerToken int, readConsistency, onPartitionUnavailable uint8, filter vector.Filter, bound uint64) []byte {
+func EncodeMVSearchArgsOptsFilter(name string, query [][]float32, k, candPerToken int, readConsistency, onPartitionUnavailable uint8, filter vtypes.Filter, bound uint64) []byte {
 	return encodeMVSearchArgsOptsFilter(name, query, k, candPerToken, readConsistency, onPartitionUnavailable, filter, bound)
 }
 
-func encodeMVSearchArgsOptsFilter(name string, query [][]float32, k, candPerToken int, readConsistency, onPartitionUnavailable uint8, filter vector.Filter, bound uint64) []byte {
+func encodeMVSearchArgsOptsFilter(name string, query [][]float32, k, candPerToken int, readConsistency, onPartitionUnavailable uint8, filter vtypes.Filter, bound uint64) []byte {
 	base := EncodeMVSearchArgs(name, query, k, candPerToken)
 
 	var marker uint8
@@ -859,22 +859,22 @@ func DecodeMVSearchArgsOpts(args []byte) (name string, query [][]float32, k, can
 // args (no trailer) decode with readConsistency=0, onPartitionUnavailable=0 and a
 // zero vector.Filter. A malformed filter JSON is a fail-loud error (NOT a silent
 // drop) so a corrupt/over-permissive filter never weakens a search.
-func DecodeMVSearchArgsOptsFilter(args []byte) (name string, query [][]float32, k, candPerToken int, readConsistency, onPartitionUnavailable uint8, filter vector.Filter, bound uint64, err error) {
+func DecodeMVSearchArgsOptsFilter(args []byte) (name string, query [][]float32, k, candPerToken int, readConsistency, onPartitionUnavailable uint8, filter vtypes.Filter, bound uint64, err error) {
 	name, query, k, candPerToken, n, err := decodeMVSearchArgsN(args)
 	if err != nil {
-		return "", nil, 0, 0, 0, 0, vector.Filter{}, 0, err
+		return "", nil, 0, 0, 0, 0, vtypes.Filter{}, 0, err
 	}
 	if len(args) <= n || args[n] == 0 {
 		// No trailer (legacy / no-filter no-rc no-opa form). A zero marker is never
 		// emitted, so treat a zero byte here as "no trailer" too (trailing-bytes
 		// tolerance), matching DecodeMVSearchArgs's contract.
-		return name, query, k, candPerToken, 0, 0, vector.Filter{}, 0, nil
+		return name, query, k, candPerToken, 0, 0, vtypes.Filter{}, 0, nil
 	}
 	marker := args[n]
 	off := n + 1
 	if marker&mvTrailerOpts != 0 {
 		if len(args) < off+2 {
-			return "", nil, 0, 0, 0, 0, vector.Filter{}, 0, ErrVectorArgsTruncated
+			return "", nil, 0, 0, 0, 0, vtypes.Filter{}, 0, ErrVectorArgsTruncated
 		}
 		readConsistency = args[off]
 		onPartitionUnavailable = args[off+1]
@@ -882,22 +882,22 @@ func DecodeMVSearchArgsOptsFilter(args []byte) (name string, query [][]float32, 
 	}
 	if marker&mvTrailerStaleness != 0 {
 		if len(args) < off+8 {
-			return "", nil, 0, 0, 0, 0, vector.Filter{}, 0, ErrVectorArgsTruncated
+			return "", nil, 0, 0, 0, 0, vtypes.Filter{}, 0, ErrVectorArgsTruncated
 		}
 		bound = binary.BigEndian.Uint64(args[off : off+8])
 		off += 8
 	}
 	if marker&MVTrailerFilter != 0 {
 		if len(args) < off+4 {
-			return "", nil, 0, 0, 0, 0, vector.Filter{}, 0, ErrVectorArgsTruncated
+			return "", nil, 0, 0, 0, 0, vtypes.Filter{}, 0, ErrVectorArgsTruncated
 		}
 		flen := int(binary.BigEndian.Uint32(args[off:]))
 		off += 4
 		if len(args) < off+flen {
-			return "", nil, 0, 0, 0, 0, vector.Filter{}, 0, ErrVectorArgsTruncated
+			return "", nil, 0, 0, 0, 0, vtypes.Filter{}, 0, ErrVectorArgsTruncated
 		}
 		if uerr := json.Unmarshal(args[off:off+flen], &filter); uerr != nil {
-			return "", nil, 0, 0, 0, 0, vector.Filter{}, 0, fmt.Errorf("ops: decode mv filter: %w", uerr)
+			return "", nil, 0, 0, 0, 0, vtypes.Filter{}, 0, fmt.Errorf("ops: decode mv filter: %w", uerr)
 		}
 	}
 	return name, query, k, candPerToken, readConsistency, onPartitionUnavailable, filter, bound, nil
@@ -935,7 +935,7 @@ const (
 // set iff the sparse query carries terms, so the degradation cases are
 // self-describing. When rc==0 && opa==0 the opts trailer is omitted and HAS_OPTS is
 // clear (byte-identical trailer), mirroring EncodeNamedHybridArgs.
-func EncodeMVHybridArgs(name string, query [][]float32, sparseQ vector.SparseVector, k int, opts vector.HybridOpts, readConsistency, onPartitionUnavailable uint8, bound uint64) []byte {
+func EncodeMVHybridArgs(name string, query [][]float32, sparseQ vtypes.SparseVector, k int, opts vtypes.HybridOpts, readConsistency, onPartitionUnavailable uint8, bound uint64) []byte {
 	var flags uint8
 	var filterJSON []byte
 	if !opts.Filter.IsZero() {
@@ -983,7 +983,7 @@ func EncodeMVHybridArgs(name string, query [][]float32, sparseQ vector.SparseVec
 // zero filter when absent; sparseQ is the zero SparseVector when absent; rc/opa are
 // 0 when the opts trailer is absent. A present flag with a truncated block is
 // fail-loud (so a Linearizable MV hybrid never silently degrades to stale).
-func DecodeMVHybridArgs(args []byte) (name string, query [][]float32, sparseQ vector.SparseVector, k int, opts vector.HybridOpts, readConsistency, onPartitionUnavailable uint8, bound uint64, err error) {
+func DecodeMVHybridArgs(args []byte) (name string, query [][]float32, sparseQ vtypes.SparseVector, k int, opts vtypes.HybridOpts, readConsistency, onPartitionUnavailable uint8, bound uint64, err error) {
 	if len(args) < 2 {
 		return "", nil, sparseQ, 0, opts, 0, 0, 0, ErrVectorArgsTruncated
 	}
@@ -997,7 +997,7 @@ func DecodeMVHybridArgs(args []byte) (name string, query [][]float32, sparseQ ve
 	off += colLen
 	k = int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
-	opts.Method = vector.FusionMethod(args[off])
+	opts.Method = vtypes.FusionMethod(args[off])
 	off++
 	opts.Alpha = math.Float64frombits(binary.BigEndian.Uint64(args[off:]))
 	off += 8
@@ -1009,38 +1009,38 @@ func DecodeMVHybridArgs(args []byte) (name string, query [][]float32, sparseQ ve
 	off += 4
 	mtx, mn, merr := DecodeMatrix(args[off:])
 	if merr != nil {
-		return "", nil, vector.SparseVector{}, 0, opts, 0, 0, 0, merr
+		return "", nil, vtypes.SparseVector{}, 0, opts, 0, 0, 0, merr
 	}
 	query = mtx
 	off += mn
 	sparseQ, off, err = readSparse(args, off)
 	if err != nil {
-		return "", nil, vector.SparseVector{}, 0, opts, 0, 0, 0, err
+		return "", nil, vtypes.SparseVector{}, 0, opts, 0, 0, 0, err
 	}
 	if flags&mvHybridFlagFilter != 0 {
 		if len(args) < off+4 {
-			return "", nil, vector.SparseVector{}, 0, opts, 0, 0, 0, ErrVectorArgsTruncated
+			return "", nil, vtypes.SparseVector{}, 0, opts, 0, 0, 0, ErrVectorArgsTruncated
 		}
 		flen := int(binary.BigEndian.Uint32(args[off:]))
 		off += 4
 		if len(args) < off+flen {
-			return "", nil, vector.SparseVector{}, 0, opts, 0, 0, 0, ErrVectorArgsTruncated
+			return "", nil, vtypes.SparseVector{}, 0, opts, 0, 0, 0, ErrVectorArgsTruncated
 		}
 		if uerr := json.Unmarshal(args[off:off+flen], &opts.Filter); uerr != nil {
-			return "", nil, vector.SparseVector{}, 0, opts, 0, 0, 0, fmt.Errorf("ops: decode mv hybrid filter: %w", uerr)
+			return "", nil, vtypes.SparseVector{}, 0, opts, 0, 0, 0, fmt.Errorf("ops: decode mv hybrid filter: %w", uerr)
 		}
 		off += flen
 	}
 	if flags&mvHybridFlagOpts != 0 {
 		if len(args) < off+2 {
-			return "", nil, vector.SparseVector{}, 0, opts, 0, 0, 0, ErrVectorArgsTruncated
+			return "", nil, vtypes.SparseVector{}, 0, opts, 0, 0, 0, ErrVectorArgsTruncated
 		}
 		readConsistency = args[off]
 		onPartitionUnavailable = args[off+1]
 		off += 2
 		bound, _, err = readBoundTail(args, off, readConsistency)
 		if err != nil {
-			return "", nil, vector.SparseVector{}, 0, opts, 0, 0, 0, err
+			return "", nil, vtypes.SparseVector{}, 0, opts, 0, 0, 0, err
 		}
 	}
 	return name, query, sparseQ, k, opts, readConsistency, onPartitionUnavailable, bound, nil
@@ -1072,7 +1072,7 @@ const (
 // Wire: [colLen:u8][col][limit:u32][filterLen:u32][filterJSON] (filterLen 0 = no
 // filter) — the SAME base shape as EncodeNamedScrollArgs, so the MV scroll wire
 // mirrors named scroll. The filter rides in the base block.
-func EncodeMVScrollArgs(col string, filter vector.Filter, limit int) []byte {
+func EncodeMVScrollArgs(col string, filter vtypes.Filter, limit int) []byte {
 	var filterJSON []byte
 	if !filter.IsZero() {
 		filterJSON, _ = json.Marshal(filter)
@@ -1105,14 +1105,14 @@ func EncodeMVScrollArgs(col string, filter vector.Filter, limit int) []byte {
 // When neither a cursor nor non-zero rc/opa is present the trailer is omitted
 // entirely and the output is BYTE-IDENTICAL to EncodeMVScrollArgs. Mirrors
 // EncodeNamedScrollArgsOpts.
-func EncodeMVScrollArgsOpts(col string, filter vector.Filter, limit int, readConsistency, onPartitionUnavailable uint8, afterID uint64, hasAfter bool) []byte {
+func EncodeMVScrollArgsOpts(col string, filter vtypes.Filter, limit int, readConsistency, onPartitionUnavailable uint8, afterID uint64, hasAfter bool) []byte {
 	return EncodeMVScrollArgsOptsBounded(col, filter, limit, readConsistency, onPartitionUnavailable, afterID, hasAfter, 0)
 }
 
 // EncodeMVScrollArgsOptsBounded is EncodeMVScrollArgsOpts plus the optional 8-byte
 // staleness bound behind the mvScrollStaleness marker bit (after rc/opa, before any
 // order block) ONLY when rc==ConsistencyBoundedStaleness. Byte-identical for rc∈{0,1,2}.
-func EncodeMVScrollArgsOptsBounded(col string, filter vector.Filter, limit int, readConsistency, onPartitionUnavailable uint8, afterID uint64, hasAfter bool, bound uint64) []byte {
+func EncodeMVScrollArgsOptsBounded(col string, filter vtypes.Filter, limit int, readConsistency, onPartitionUnavailable uint8, afterID uint64, hasAfter bool, bound uint64) []byte {
 	base := EncodeMVScrollArgs(col, filter, limit)
 	var marker uint8
 	if hasAfter {
@@ -1149,14 +1149,14 @@ func EncodeMVScrollArgsOptsBounded(col string, filter vector.Filter, limit int, 
 // nil it is byte-identical to EncodeMVScrollArgsOpts (zero-overhead no-order_by wire).
 // When order != nil the mvScrollOrder marker bit is set and the order block is appended
 // after the cursor + opts blocks. Mirrors EncodeNamedScrollArgsOrder / EncodeScrollArgsOrder.
-func EncodeMVScrollArgsOrder(col string, filter vector.Filter, limit int, readConsistency, onPartitionUnavailable uint8, afterID uint64, hasAfter bool, order *ScrollOrder) []byte {
+func EncodeMVScrollArgsOrder(col string, filter vtypes.Filter, limit int, readConsistency, onPartitionUnavailable uint8, afterID uint64, hasAfter bool, order *ScrollOrder) []byte {
 	return EncodeMVScrollArgsOrderBounded(col, filter, limit, readConsistency, onPartitionUnavailable, afterID, hasAfter, order, 0)
 }
 
 // EncodeMVScrollArgsOrderBounded is EncodeMVScrollArgsOrder plus the optional 8-byte
 // staleness bound behind the mvScrollStaleness marker bit (after rc/opa, BEFORE the
 // order block) ONLY when rc==ConsistencyBoundedStaleness.
-func EncodeMVScrollArgsOrderBounded(col string, filter vector.Filter, limit int, readConsistency, onPartitionUnavailable uint8, afterID uint64, hasAfter bool, order *ScrollOrder, bound uint64) []byte {
+func EncodeMVScrollArgsOrderBounded(col string, filter vtypes.Filter, limit int, readConsistency, onPartitionUnavailable uint8, afterID uint64, hasAfter bool, order *ScrollOrder, bound uint64) []byte {
 	if order == nil {
 		return EncodeMVScrollArgsOptsBounded(col, filter, limit, readConsistency, onPartitionUnavailable, afterID, hasAfter, bound)
 	}
@@ -1193,10 +1193,10 @@ func EncodeMVScrollArgsOrderBounded(col string, filter vector.Filter, limit int,
 // DecodeMVScrollArgsOpts: same base + marker (cursor/opts) trailer, then (if the
 // mvScrollOrder bit is set) the shared order block. order is nil for legacy args /
 // order==nil at encode time. Mirrors DecodeNamedScrollArgsOrder / DecodeScrollArgsOrder.
-func DecodeMVScrollArgsOrder(args []byte) (col string, filter vector.Filter, limit int, readConsistency, onPartitionUnavailable uint8, afterID uint64, hasAfter bool, order *ScrollOrder, err error) {
+func DecodeMVScrollArgsOrder(args []byte) (col string, filter vtypes.Filter, limit int, readConsistency, onPartitionUnavailable uint8, afterID uint64, hasAfter bool, order *ScrollOrder, err error) {
 	col, filter, limit, n, err := decodeMVScrollArgsN(args)
 	if err != nil {
-		return "", vector.Filter{}, 0, 0, 0, 0, false, nil, err
+		return "", vtypes.Filter{}, 0, 0, 0, 0, false, nil, err
 	}
 	if len(args) <= n || args[n] == 0 {
 		return col, filter, limit, 0, 0, 0, false, nil, nil
@@ -1205,7 +1205,7 @@ func DecodeMVScrollArgsOrder(args []byte) (col string, filter vector.Filter, lim
 	off := n + 1
 	if marker&MVScrollCursor != 0 {
 		if len(args) < off+8 {
-			return "", vector.Filter{}, 0, 0, 0, 0, false, nil, ErrVectorArgsTruncated
+			return "", vtypes.Filter{}, 0, 0, 0, 0, false, nil, ErrVectorArgsTruncated
 		}
 		afterID = binary.BigEndian.Uint64(args[off:])
 		hasAfter = true
@@ -1213,7 +1213,7 @@ func DecodeMVScrollArgsOrder(args []byte) (col string, filter vector.Filter, lim
 	}
 	if marker&MVScrollOpts != 0 {
 		if len(args) < off+2 {
-			return "", vector.Filter{}, 0, 0, 0, 0, false, nil, ErrVectorArgsTruncated
+			return "", vtypes.Filter{}, 0, 0, 0, 0, false, nil, ErrVectorArgsTruncated
 		}
 		readConsistency = args[off]
 		onPartitionUnavailable = args[off+1]
@@ -1222,17 +1222,17 @@ func DecodeMVScrollArgsOrder(args []byte) (col string, filter vector.Filter, lim
 	if marker&mvScrollStaleness != 0 {
 		// Consume the 8-byte bound (after rc/opa, before the order block).
 		if len(args) < off+8 {
-			return "", vector.Filter{}, 0, 0, 0, 0, false, nil, ErrVectorArgsTruncated
+			return "", vtypes.Filter{}, 0, 0, 0, 0, false, nil, ErrVectorArgsTruncated
 		}
 		off += 8
 	}
 	if marker&mvScrollOrder != 0 {
 		order, _, err = readScrollOrderBlock(args, off)
 		if err != nil {
-			return "", vector.Filter{}, 0, 0, 0, 0, false, nil, err
+			return "", vtypes.Filter{}, 0, 0, 0, 0, false, nil, err
 		}
 		if order == nil {
-			return "", vector.Filter{}, 0, 0, 0, 0, false, nil, ErrVectorArgsTruncated
+			return "", vtypes.Filter{}, 0, 0, 0, 0, false, nil, ErrVectorArgsTruncated
 		}
 	}
 	return col, filter, limit, readConsistency, onPartitionUnavailable, afterID, hasAfter, order, nil
@@ -1244,10 +1244,10 @@ func DecodeMVScrollArgsOrder(args []byte) (col string, filter vector.Filter, lim
 // onPartitionUnavailable=0. A present marker with a missing/truncated block is
 // corruption — fail loud. A malformed filter JSON in the base block is also
 // fail-loud (never a silent drop). Mirrors DecodeNamedScrollArgsOpts.
-func DecodeMVScrollArgsOpts(args []byte) (col string, filter vector.Filter, limit int, readConsistency, onPartitionUnavailable uint8, afterID uint64, hasAfter bool, bound uint64, err error) {
+func DecodeMVScrollArgsOpts(args []byte) (col string, filter vtypes.Filter, limit int, readConsistency, onPartitionUnavailable uint8, afterID uint64, hasAfter bool, bound uint64, err error) {
 	col, filter, limit, n, err := decodeMVScrollArgsN(args)
 	if err != nil {
-		return "", vector.Filter{}, 0, 0, 0, 0, false, 0, err
+		return "", vtypes.Filter{}, 0, 0, 0, 0, false, 0, err
 	}
 	if len(args) <= n || args[n] == 0 {
 		// No trailer (no-cursor no-rc no-opa form). A zero marker is never emitted,
@@ -1258,7 +1258,7 @@ func DecodeMVScrollArgsOpts(args []byte) (col string, filter vector.Filter, limi
 	off := n + 1
 	if marker&MVScrollCursor != 0 {
 		if len(args) < off+8 {
-			return "", vector.Filter{}, 0, 0, 0, 0, false, 0, ErrVectorArgsTruncated
+			return "", vtypes.Filter{}, 0, 0, 0, 0, false, 0, ErrVectorArgsTruncated
 		}
 		afterID = binary.BigEndian.Uint64(args[off:])
 		hasAfter = true
@@ -1266,7 +1266,7 @@ func DecodeMVScrollArgsOpts(args []byte) (col string, filter vector.Filter, limi
 	}
 	if marker&MVScrollOpts != 0 {
 		if len(args) < off+2 {
-			return "", vector.Filter{}, 0, 0, 0, 0, false, 0, ErrVectorArgsTruncated
+			return "", vtypes.Filter{}, 0, 0, 0, 0, false, 0, ErrVectorArgsTruncated
 		}
 		readConsistency = args[off]
 		onPartitionUnavailable = args[off+1]
@@ -1274,7 +1274,7 @@ func DecodeMVScrollArgsOpts(args []byte) (col string, filter vector.Filter, limi
 	}
 	if marker&mvScrollStaleness != 0 {
 		if len(args) < off+8 {
-			return "", vector.Filter{}, 0, 0, 0, 0, false, 0, ErrVectorArgsTruncated
+			return "", vtypes.Filter{}, 0, 0, 0, 0, false, 0, ErrVectorArgsTruncated
 		}
 		bound = binary.BigEndian.Uint64(args[off : off+8])
 	}
@@ -1285,13 +1285,13 @@ func DecodeMVScrollArgsOpts(args []byte) (col string, filter vector.Filter, limi
 // named-scroll base: [colLen:u8][col][limit:u32][filterLen:u32][filterJSON]) and
 // returns the number of bytes consumed so DecodeMVScrollArgsOpts can read the
 // self-delimiting trailer. A malformed filter JSON is fail-loud.
-func decodeMVScrollArgsN(args []byte) (col string, filter vector.Filter, limit int, n int, err error) {
+func decodeMVScrollArgsN(args []byte) (col string, filter vtypes.Filter, limit int, n int, err error) {
 	if len(args) < 1 {
-		return "", vector.Filter{}, 0, 0, ErrVectorArgsTruncated
+		return "", vtypes.Filter{}, 0, 0, ErrVectorArgsTruncated
 	}
 	colLen := int(args[0])
 	if len(args) < 1+colLen+4+4 {
-		return "", vector.Filter{}, 0, 0, ErrVectorArgsTruncated
+		return "", vtypes.Filter{}, 0, 0, ErrVectorArgsTruncated
 	}
 	col = string(args[1 : 1+colLen])
 	off := 1 + colLen
@@ -1300,11 +1300,11 @@ func decodeMVScrollArgsN(args []byte) (col string, filter vector.Filter, limit i
 	flen := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
 	if len(args) < off+flen {
-		return "", vector.Filter{}, 0, 0, ErrVectorArgsTruncated
+		return "", vtypes.Filter{}, 0, 0, ErrVectorArgsTruncated
 	}
 	if flen > 0 {
 		if uerr := json.Unmarshal(args[off:off+flen], &filter); uerr != nil {
-			return "", vector.Filter{}, 0, 0, fmt.Errorf("ops: decode mv scroll filter: %w", uerr)
+			return "", vtypes.Filter{}, 0, 0, fmt.Errorf("ops: decode mv scroll filter: %w", uerr)
 		}
 	}
 	off += flen
@@ -1313,7 +1313,7 @@ func decodeMVScrollArgsN(args []byte) (col string, filter vector.Filter, limit i
 
 // EncodeMVResults serializes []vector.MultiResult.
 // Wire: [count:u32]{[id:u64][score:f32][metaLen:u32][metaJSON]}.
-func EncodeMVResults(results []vector.MultiResult) []byte {
+func EncodeMVResults(results []vtypes.MultiResult) []byte {
 	metas := make([][]byte, len(results))
 	n := 4
 	for i, r := range results {
@@ -1338,14 +1338,14 @@ func EncodeMVResults(results []vector.MultiResult) []byte {
 }
 
 // DecodeMVResults reads results produced by EncodeMVResults.
-func DecodeMVResults(body []byte) ([]vector.MultiResult, error) {
+func DecodeMVResults(body []byte) ([]vtypes.MultiResult, error) {
 	out, _, err := decodeMVResultsN(body)
 	return out, err
 }
 
 // decodeMVResultsN decodes one MV-results block and returns the results plus the
 // number of bytes consumed (so callers can read a trailing degraded block).
-func decodeMVResultsN(body []byte) ([]vector.MultiResult, int, error) {
+func decodeMVResultsN(body []byte) ([]vtypes.MultiResult, int, error) {
 	if len(body) < 4 {
 		return nil, 0, ErrVectorArgsTruncated
 	}
@@ -1355,12 +1355,12 @@ func decodeMVResultsN(body []byte) ([]vector.MultiResult, int, error) {
 	if !CountFitsIn(count, len(body)-off, 16) {
 		return nil, 0, ErrVectorArgsTruncated
 	}
-	out := make([]vector.MultiResult, 0, count)
+	out := make([]vtypes.MultiResult, 0, count)
 	for i := 0; i < count; i++ {
 		if len(body) < off+8+4+4 {
 			return nil, 0, ErrVectorArgsTruncated
 		}
-		var r vector.MultiResult
+		var r vtypes.MultiResult
 		r.ID = binary.BigEndian.Uint64(body[off:])
 		off += 8
 		r.Score = math.Float32frombits(binary.BigEndian.Uint32(body[off:]))
@@ -1371,7 +1371,7 @@ func decodeMVResultsN(body []byte) ([]vector.MultiResult, int, error) {
 			return nil, 0, ErrVectorArgsTruncated
 		}
 		if mlen > 0 {
-			m := make(vector.Metadata)
+			m := make(vtypes.Metadata)
 			if err := json.Unmarshal(body[off:off+mlen], &m); err != nil {
 				return nil, 0, fmt.Errorf("ops: decode mv result metadata: %w", err)
 			}
@@ -1386,13 +1386,13 @@ func decodeMVResultsN(body []byte) ([]vector.MultiResult, int, error) {
 // EncodeMVResultsDegraded encodes MV results with an optional degraded-partition
 // trailer (same wire format as the dense search trailer). When degraded is false
 // and missing is empty the output is byte-identical to EncodeMVResults.
-func EncodeMVResultsDegraded(results []vector.MultiResult, degraded bool, missing []uint16) []byte {
+func EncodeMVResultsDegraded(results []vtypes.MultiResult, degraded bool, missing []uint16) []byte {
 	return appendDegradedTrailer(EncodeMVResults(results), degraded, missing)
 }
 
 // DecodeMVResultsDegraded decodes MV results and the optional degraded trailer.
 // Backward-compatible with legacy EncodeMVResults bytes.
-func DecodeMVResultsDegraded(body []byte) (results []vector.MultiResult, degraded bool, missing []uint16, err error) {
+func DecodeMVResultsDegraded(body []byte) (results []vtypes.MultiResult, degraded bool, missing []uint16, err error) {
 	results, off, err := decodeMVResultsN(body)
 	if err != nil {
 		return nil, false, nil, err
@@ -1544,7 +1544,7 @@ func DecodeMVScanArgs(args []byte) (string, error) {
 // keyExpires byte at all) tolerates its absence per-record (keyExpires → nil),
 // mirroring the dense scan codec's EOF tolerance — MV scans are transient (never a
 // stored artifact), so the new encoder always writes the present byte.
-func EncodeMVScanResult(recs []vector.MultiScanRecord) []byte {
+func EncodeMVScanResult(recs []vtypes.MultiScanRecord) []byte {
 	metas := make([][]byte, len(recs))
 	n := 4
 	for i, r := range recs {
@@ -1640,7 +1640,7 @@ func EncodeMVScanResult(recs []vector.MultiScanRecord) []byte {
 // are deep-copied (owned by the result). The trailing per-record version is
 // REQUIRED (the encoder always writes it; scan results are transient), mirroring
 // the dense DecodeScanVectorsResult — a truncated trailer is ErrVectorArgsTruncated.
-func DecodeMVScanResult(body []byte) ([]vector.MultiScanRecord, error) {
+func DecodeMVScanResult(body []byte) ([]vtypes.MultiScanRecord, error) {
 	if len(body) < 4 {
 		return nil, ErrVectorArgsTruncated
 	}
@@ -1650,12 +1650,12 @@ func DecodeMVScanResult(body []byte) ([]vector.MultiScanRecord, error) {
 	if !CountFitsIn(count, len(body)-off, 16) {
 		return nil, ErrVectorArgsTruncated
 	}
-	recs := make([]vector.MultiScanRecord, 0, count)
+	recs := make([]vtypes.MultiScanRecord, 0, count)
 	for i := 0; i < count; i++ {
 		if len(body) < off+8+4+4 {
 			return nil, ErrVectorArgsTruncated
 		}
-		var r vector.MultiScanRecord
+		var r vtypes.MultiScanRecord
 		r.ID = binary.BigEndian.Uint64(body[off:])
 		off += 8
 		numTokens := int(binary.BigEndian.Uint32(body[off:]))
@@ -1702,7 +1702,7 @@ func DecodeMVScanResult(body []byte) ([]vector.MultiScanRecord, error) {
 			return nil, ErrVectorArgsTruncated
 		}
 		if mlen > 0 {
-			m := make(vector.Metadata)
+			m := make(vtypes.Metadata)
 			if err := json.Unmarshal(body[off:off+mlen], &m); err != nil {
 				return nil, fmt.Errorf("ops: decode mv scan metadata: %w", err)
 			}
@@ -1794,14 +1794,14 @@ func DecodeMVScanResult(body []byte) ([]vector.MultiScanRecord, error) {
 // matrix; withPayload gates the doc payload. Mirrors EncodeMVScanResult's record.
 // A trailing [verPresent:u8][?version:u64] CAS version block rides at the tail
 // (byte-identical when 0); see EncodeMVGetResultV.
-func EncodeMVGetResult(found bool, tokens [][]float32, payload vector.Metadata, withVector, withPayload bool) []byte {
+func EncodeMVGetResult(found bool, tokens [][]float32, payload vtypes.Metadata, withVector, withPayload bool) []byte {
 	return EncodeMVGetResultV(found, tokens, payload, withVector, withPayload, 0)
 }
 
 // EncodeMVGetResultV is EncodeMVGetResult plus the document's per-document CAS
 // version. A 0 version writes verPresent=0 and NO version field (byte-identical to
 // the pre-version encoding); a live version (>=1) writes verPresent=1 + the u64.
-func EncodeMVGetResultV(found bool, tokens [][]float32, payload vector.Metadata, withVector, withPayload bool, version uint64) []byte {
+func EncodeMVGetResultV(found bool, tokens [][]float32, payload vtypes.Metadata, withVector, withPayload bool, version uint64) []byte {
 	return appendMVGetResultV(nil, found, tokens, payload, withVector, withPayload, version)
 }
 
@@ -1811,7 +1811,7 @@ func EncodeMVGetResultV(found bool, tokens [][]float32, payload vector.Metadata,
 // capacity — what lets the batch encoder serialize many token-matrix rows into one
 // buffer without a throwaway slice per row. EncodeMVGetResultV is the nil-dst
 // single-get wrapper (one presized alloc, byte-identical to before).
-func appendMVGetResultV(dst []byte, found bool, tokens [][]float32, payload vector.Metadata, withVector, withPayload bool, version uint64) []byte {
+func appendMVGetResultV(dst []byte, found bool, tokens [][]float32, payload vtypes.Metadata, withVector, withPayload bool, version uint64) []byte {
 	if !found {
 		return append(dst, 0)
 	}
@@ -1879,14 +1879,14 @@ func appendMVGetResultV(dst []byte, found bool, tokens [][]float32, payload vect
 
 // DecodeMVGetResult reads a result produced by EncodeMVGetResult. found is false
 // for an absent document (the not-found flag). Token floats are deep-copied.
-func DecodeMVGetResult(body []byte) (found bool, tokens [][]float32, payload vector.Metadata, err error) {
+func DecodeMVGetResult(body []byte) (found bool, tokens [][]float32, payload vtypes.Metadata, err error) {
 	found, tokens, payload, _, _, err = DecodeMVGetResultAt(body, 0)
 	return found, tokens, payload, err
 }
 
 // DecodeMVGetResultV is DecodeMVGetResult plus the document's per-document CAS
 // version (0 for an absent document or a legacy result with no version block).
-func DecodeMVGetResultV(body []byte) (found bool, tokens [][]float32, payload vector.Metadata, version uint64, err error) {
+func DecodeMVGetResultV(body []byte) (found bool, tokens [][]float32, payload vtypes.Metadata, version uint64, err error) {
 	found, tokens, payload, version, _, err = DecodeMVGetResultAt(body, 0)
 	return found, tokens, payload, version, err
 }
@@ -1898,7 +1898,7 @@ func DecodeMVGetResultV(body []byte) (found bool, tokens [][]float32, payload ve
 // record per row after the row's id) so the per-row wire layout stays defined in
 // one place. MV has NO ttl. Token floats are deep-copied. Fails loud on
 // truncation, exactly like the original single-get decoder.
-func DecodeMVGetResultAt(body []byte, off int) (found bool, tokens [][]float32, meta vector.Metadata, version uint64, next int, err error) {
+func DecodeMVGetResultAt(body []byte, off int) (found bool, tokens [][]float32, meta vtypes.Metadata, version uint64, next int, err error) {
 	if len(body) < off+1 {
 		return false, nil, nil, 0, off, ErrVectorArgsTruncated
 	}
@@ -1965,7 +1965,7 @@ func DecodeMVGetResultAt(body []byte, off int) (found bool, tokens [][]float32, 
 		if len(body) < off+mlen {
 			return false, nil, nil, 0, off, ErrVectorArgsTruncated
 		}
-		m := make(vector.Metadata)
+		m := make(vtypes.Metadata)
 		if err := json.Unmarshal(body[off:off+mlen], &m); err != nil {
 			return false, nil, nil, 0, off, fmt.Errorf("ops: decode mv get payload: %w", err)
 		}
@@ -2000,7 +2000,7 @@ type MVGetBatchRow struct {
 	ID      uint64
 	Found   bool
 	Tokens  [][]float32
-	Meta    vector.Metadata
+	Meta    vtypes.Metadata
 	Version uint64 // per-document CAS version (>=1 for a found doc; 0 = absent/unknown)
 }
 
