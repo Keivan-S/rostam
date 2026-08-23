@@ -5,7 +5,7 @@ package ops
 import (
 	"testing"
 
-	"github.com/rostamlabs/rostam/grpcapi/pb"
+	"github.com/rostamlabs/rostam/sdk/pb"
 	"github.com/rostamlabs/rostam/vector"
 )
 
@@ -39,7 +39,7 @@ func TestQuerySourceBreadthBound(t *testing.T) {
 		Prefetch: flatLeavesPB(vector.MaxPrefetchSources),
 		K:        3,
 	}
-	if _, err := querySpecFromProto(atBoundFlat, 0); err != nil {
+	if _, err := QuerySpecFromProto(atBoundFlat, 0); err != nil {
 		t.Fatalf("flat spec at the bound (%d) should decode, got: %v", vector.MaxPrefetchSources, err)
 	}
 
@@ -49,7 +49,7 @@ func TestQuerySourceBreadthBound(t *testing.T) {
 		Prefetch: flatLeavesPB(vector.MaxPrefetchSources + 1),
 		K:        3,
 	}
-	if _, err := querySpecFromProto(tooManyFlat, 0); err != vector.ErrTooManyPrefetchSources {
+	if _, err := QuerySpecFromProto(tooManyFlat, 0); err != vector.ErrTooManyPrefetchSources {
 		t.Fatalf("over-wide flat spec err = %v, want ErrTooManyPrefetchSources", err)
 	}
 
@@ -59,13 +59,13 @@ func TestQuerySourceBreadthBound(t *testing.T) {
 		PrefetchSources: leafSourcesPB(vector.MaxPrefetchSources + 1),
 		K:               3,
 	}
-	if _, err := querySpecFromProto(tooManySources, 0); err != vector.ErrTooManyPrefetchSources {
+	if _, err := QuerySpecFromProto(tooManySources, 0); err != vector.ErrTooManyPrefetchSources {
 		t.Fatalf("over-wide prefetch_sources err = %v, want ErrTooManyPrefetchSources", err)
 	}
 
 	// NESTED node over the bound: the root is a valid 1-source spec whose single source
 	// is an over-wide sub-spec; the recursive decode (querySourceFromProto →
-	// querySpecFromProto) must reject the nested node.
+	// QuerySpecFromProto) must reject the nested node.
 	overWideSub := &pb.QuerySpec{
 		Mode:     pb.QueryMode_QUERY_MODE_FUSION,
 		Prefetch: flatLeavesPB(vector.MaxPrefetchSources + 1),
@@ -78,7 +78,7 @@ func TestQuerySourceBreadthBound(t *testing.T) {
 		},
 		K: 3,
 	}
-	if _, err := querySpecFromProto(parent, 0); err != vector.ErrTooManyPrefetchSources {
+	if _, err := QuerySpecFromProto(parent, 0); err != vector.ErrTooManyPrefetchSources {
 		t.Fatalf("nested over-wide node err = %v, want ErrTooManyPrefetchSources (recursion)", err)
 	}
 }

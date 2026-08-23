@@ -11,161 +11,12 @@ import (
 	"io"
 	"net"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/rostamlabs/rostam/cache"
-	"github.com/rostamlabs/rostam/ops"
-	"github.com/rostamlabs/rostam/server"
-	"github.com/rostamlabs/rostam/shard"
+	"github.com/rostamlabs/rostam/sdk/wire"
 )
-
-func startTestStack(t *testing.T) (string, func()) {
-	t.Helper()
-	reg := ops.NewRegistry()
-	if err := ops.RegisterBuiltins(reg); err != nil {
-		t.Fatal(err)
-	}
-	cc := cache.DefaultConfig()
-	cc.NumShards = 1
-	store, err := shard.New(shard.Config{
-		NodeID: "node1", DataDir: t.TempDir(),
-		Cache: cc, Ops: reg,
-		Bootstrap:       true,
-		RaftHeartbeatMs: 50, RaftElectionMs: 100, NoSync: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if store.IsLeader() {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	if !store.IsLeader() {
-		t.Fatal("store never became leader")
-	}
-
-	srv, err := server.New(server.Config{Addr: "127.0.0.1:0", Dispatcher: store})
-	if err != nil {
-		t.Fatal(err)
-	}
-	go func() { _ = srv.Serve() }()
-
-	return srv.Addr().String(), func() {
-		_ = srv.Close()
-		_ = store.Close()
-	}
-}
-
-func TestClientPutGet(t *testing.T) {
-	addr, stop := startTestStack(t)
-	defer stop()
-	c, err := New(Config{Servers: []string{addr}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = c.Close() }()
-
-	ctx := context.Background()
-	if _, err := c.Call(ctx, "put", ops.EncodePutArgs([]byte("k"), []byte("v"), 0)); err != nil {
-		t.Fatalf("Call put: %v", err)
-	}
-	res, err := c.Call(ctx, "get", ops.EncodeKeyArgs([]byte("k")))
-	if err != nil {
-		t.Fatalf("Call get: %v", err)
-	}
-	if !bytes.Equal(res, []byte("v")) {
-		t.Fatalf("get result = %q, want v", res)
-	}
-}
-
-func TestClientGetMissingReturnsErrNotFound(t *testing.T) {
-	addr, stop := startTestStack(t)
-	defer stop()
-	c, _ := New(Config{Servers: []string{addr}})
-	defer func() { _ = c.Close() }()
-	_, err := c.Call(context.Background(), "get", ops.EncodeKeyArgs([]byte("absent")))
-	if !errors.Is(err, ErrNotFound) {
-		t.Fatalf("err = %v, want ErrNotFound", err)
-	}
-}
-
-func TestClientUnknownOpReturnsRemoteError(t *testing.T) {
-	addr, stop := startTestStack(t)
-	defer stop()
-	c, _ := New(Config{Servers: []string{addr}})
-	defer func() { _ = c.Close() }()
-	_, err := c.Call(context.Background(), "no_such_op", nil)
-	var rErr *RemoteError
-	if !errors.As(err, &rErr) {
-		t.Fatalf("err type = %T (%v), want *RemoteError", err, err)
-	}
-	if rErr.Op != "no_such_op" || rErr.Msg == "" {
-		t.Fatalf("RemoteError = %+v", rErr)
-	}
-}
-
-func TestClientIncrAccumulates(t *testing.T) {
-	addr, stop := startTestStack(t)
-	defer stop()
-	c, _ := New(Config{Servers: []string{addr}})
-	defer func() { _ = c.Close() }()
-	ctx := context.Background()
-	for range 3 {
-		_, err := c.Call(ctx, "incr", ops.EncodeIncrArgs([]byte("counter"), 2))
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	res, _ := c.Call(ctx, "incr", ops.EncodeIncrArgs([]byte("counter"), -1))
-	v, _ := ops.DecodeIncrResult(res)
-	if v != 5 {
-		t.Fatalf("incr accumulated = %d, want 5", v)
-	}
-}
-
-func TestClientConcurrentCalls(t *testing.T) {
-	addr, stop := startTestStack(t)
-	defer stop()
-	c, _ := New(Config{Servers: []string{addr}, MaxConnsPerServer: 4})
-	defer func() { _ = c.Close() }()
-
-	var wg sync.WaitGroup
-	const goroutines = 16
-	const iters = 50
-	for g := range goroutines {
-		wg.Add(1)
-		go func(id int) {
-			defer wg.Done()
-			ctx := context.Background()
-			for i := range iters {
-				k := []byte{byte(id), byte(i)} //nolint:gosec // id and i are bounded by goroutines/iters constants (16, 50)
-				if _, err := c.Call(ctx, "put", ops.EncodePutArgs(k, []byte{1}, 0)); err != nil {
-					t.Errorf("put id=%d i=%d: %v", id, i, err)
-					return
-				}
-			}
-		}(g)
-	}
-	wg.Wait()
-}
-
-func TestClientCloseIdempotent(t *testing.T) {
-	addr, stop := startTestStack(t)
-	defer stop()
-	c, _ := New(Config{Servers: []string{addr}})
-	if err := c.Close(); err != nil {
-		t.Fatalf("Close 1: %v", err)
-	}
-	if err := c.Close(); err != nil {
-		t.Fatalf("Close 2: %v", err)
-	}
-}
 
 func acceptAndRespond(ln net.Listener, respond func([]byte) (uint8, []byte)) {
 	for {
@@ -364,7 +215,7 @@ func TestClientFallsBackWhenOpsNotConfigured(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = c.Close() }()
-	res, err := c.Call(context.Background(), "get", ops.EncodeKeyArgs([]byte("k")))
+	res, err := c.Call(context.Background(), "get", wire.EncodeKeyArgs([]byte("k")))
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
@@ -376,8 +227,8 @@ func TestClientFallsBackWhenOpsNotConfigured(t *testing.T) {
 func TestClientPickInitialTargetUsesTopology(t *testing.T) {
 	// Manually populate the topology cache; verify pickInitialTarget
 	// hashes to the right shard and returns its leader.
-	reg := ops.NewRegistry()
-	if err := ops.RegisterBuiltins(reg); err != nil {
+	reg := wire.NewRegistry()
+	if err := wire.RegisterRoutableBuiltins(reg); err != nil {
 		t.Fatal(err)
 	}
 	c, err := New(Config{
@@ -390,16 +241,16 @@ func TestClientPickInitialTargetUsesTopology(t *testing.T) {
 	}
 	defer func() { _ = c.Close() }()
 
-	c.topology.set(ops.Topology{
+	c.topology.set(wire.Topology{
 		NumShards: 4,
-		Members: []ops.TopologyMember{
+		Members: []wire.TopologyMember{
 			{NodeID: "n1", ServerAddr: "10.0.0.1:7001"},
 			{NodeID: "n2", ServerAddr: "10.0.0.2:7001"},
 		},
 		Leaders: []string{"10.0.0.1:7001", "10.0.0.2:7001", "10.0.0.1:7001", "10.0.0.2:7001"},
 	})
 
-	target := c.pickInitialTarget("get", ops.EncodeKeyArgs([]byte("k")))
+	target := c.pickInitialTarget("get", wire.EncodeKeyArgs([]byte("k")))
 	if target != "10.0.0.1:7001" && target != "10.0.0.2:7001" {
 		t.Errorf("target = %q, want a topology leader", target)
 	}
@@ -408,8 +259,8 @@ func TestClientPickInitialTargetUsesTopology(t *testing.T) {
 func TestClientPickInitialTargetFallsBackForShardlessOp(t *testing.T) {
 	// __ping__ has nil KeyExtractor — pickInitialTarget must fall back
 	// to firstServer regardless of topology.
-	reg := ops.NewRegistry()
-	if err := ops.RegisterBuiltins(reg); err != nil {
+	reg := wire.NewRegistry()
+	if err := wire.RegisterRoutableBuiltins(reg); err != nil {
 		t.Fatal(err)
 	}
 	c, err := New(Config{
@@ -421,7 +272,7 @@ func TestClientPickInitialTargetFallsBackForShardlessOp(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = c.Close() }()
-	c.topology.set(ops.Topology{
+	c.topology.set(wire.Topology{
 		NumShards: 2,
 		Leaders:   []string{"a:1", "b:1"},
 	})
@@ -439,7 +290,7 @@ func TestClientRefreshLoopFires(t *testing.T) {
 	var addr string
 	addr, stop := startFakeServer(t, func(_ []byte) (uint8, []byte) {
 		calls.Add(1)
-		top, _ := ops.EncodeTopology(ops.Topology{
+		top, _ := wire.EncodeTopology(wire.Topology{
 			NumShards: 1,
 			Leaders:   []string{addr},
 		})
@@ -447,8 +298,8 @@ func TestClientRefreshLoopFires(t *testing.T) {
 	})
 	defer stop()
 
-	reg := ops.NewRegistry()
-	if err := ops.RegisterBuiltins(reg); err != nil {
+	reg := wire.NewRegistry()
+	if err := wire.RegisterRoutableBuiltins(reg); err != nil {
 		t.Fatal(err)
 	}
 	c, err := New(Config{

@@ -13,7 +13,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/rostamlabs/rostam"
-	"github.com/rostamlabs/rostam/grpcapi/pb"
+	"github.com/rostamlabs/rostam/grpcapi/grpcsvc"
 	"github.com/rostamlabs/rostam/ops"
 	"github.com/rostamlabs/rostam/vector"
 )
@@ -131,13 +131,13 @@ func waitLeaderEmbedded(t *testing.T, s rostam.Store) {
 // dialGRPC opens an insecure gRPC client to addr and returns the vector
 // service client plus a cleanup closure. Copied (verbatim, no rostam refs)
 // from the root grpc_test.go because two moved transport tests use it.
-func dialGRPC(t *testing.T, addr string) (pb.VectorServiceClient, func()) {
+func dialGRPC(t *testing.T, addr string) (grpcsvc.VectorServiceClient, func()) {
 	t.Helper()
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	return pb.NewVectorServiceClient(conn), func() { _ = conn.Close() }
+	return grpcsvc.NewVectorServiceClient(conn), func() { _ = conn.Close() }
 }
 
 // must fails the test on a non-nil error. Copied from the root embedded_test.go

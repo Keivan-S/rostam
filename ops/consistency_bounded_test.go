@@ -9,16 +9,16 @@ import (
 
 // TestAppendReadOptsTrailerBoundedByteIdentical proves the additive contract:
 //   - rc==0 && opa==0 → base UNCHANGED (byte-identical to the legacy / no-trailer form);
-//   - rc∈{1,2} → byte-identical to the legacy appendReadOptsTrailer 3-byte form;
-//   - the wrapper appendReadOptsTrailer(base,rc,opa) == ...Bounded(base,rc,opa,0).
+//   - rc∈{1,2} → byte-identical to the legacy AppendReadOptsTrailer 3-byte form;
+//   - the wrapper AppendReadOptsTrailer(base,rc,opa) == ...Bounded(base,rc,opa,0).
 func TestAppendReadOptsTrailerBoundedByteIdentical(t *testing.T) {
 	base := []byte{0xAA, 0xBB, 0xCC}
 
 	// rc==0 && opa==0 → unchanged.
-	if got := appendReadOptsTrailerBounded(append([]byte(nil), base...), 0, 0, 0); !bytes.Equal(got, base) {
+	if got := AppendReadOptsTrailerBounded(append([]byte(nil), base...), 0, 0, 0); !bytes.Equal(got, base) {
 		t.Fatalf("rc=0,opa=0: got %x, want unchanged %x", got, base)
 	}
-	if got := appendReadOptsTrailer(append([]byte(nil), base...), 0, 0); !bytes.Equal(got, base) {
+	if got := AppendReadOptsTrailer(append([]byte(nil), base...), 0, 0); !bytes.Equal(got, base) {
 		t.Fatalf("wrapper rc=0,opa=0: got %x, want unchanged %x", got, base)
 	}
 
@@ -31,17 +31,17 @@ func TestAppendReadOptsTrailerBoundedByteIdentical(t *testing.T) {
 		{ConsistencyLinearizable, 7},
 		{0, 5},
 	} {
-		want := append(append([]byte(nil), base...), readOptsTrailerMarker, tc.rc, tc.opa)
-		legacy := appendReadOptsTrailer(append([]byte(nil), base...), tc.rc, tc.opa)
+		want := append(append([]byte(nil), base...), ReadOptsTrailerMarker, tc.rc, tc.opa)
+		legacy := AppendReadOptsTrailer(append([]byte(nil), base...), tc.rc, tc.opa)
 		if !bytes.Equal(legacy, want) {
 			t.Fatalf("rc=%d,opa=%d: legacy=%x, want %x", tc.rc, tc.opa, legacy, want)
 		}
-		bounded := appendReadOptsTrailerBounded(append([]byte(nil), base...), tc.rc, tc.opa, 0)
+		bounded := AppendReadOptsTrailerBounded(append([]byte(nil), base...), tc.rc, tc.opa, 0)
 		if !bytes.Equal(bounded, want) {
 			t.Fatalf("rc=%d,opa=%d: bounded(bound=0)=%x, want %x", tc.rc, tc.opa, bounded, want)
 		}
 		// A nonzero bound must NOT ride for non-bounded rc.
-		bounded2 := appendReadOptsTrailerBounded(append([]byte(nil), base...), tc.rc, tc.opa, 999)
+		bounded2 := AppendReadOptsTrailerBounded(append([]byte(nil), base...), tc.rc, tc.opa, 999)
 		if !bytes.Equal(bounded2, want) {
 			t.Fatalf("rc=%d,opa=%d: bounded(bound=999)=%x must drop bound, want %x", tc.rc, tc.opa, bounded2, want)
 		}
@@ -49,27 +49,27 @@ func TestAppendReadOptsTrailerBoundedByteIdentical(t *testing.T) {
 }
 
 // TestReadOptsTrailerBoundedRoundTrip proves the bound rides ONLY for rc==3 and
-// survives a decode round-trip via decodeReadOptsTrailerBounded.
+// survives a decode round-trip via DecodeReadOptsTrailerBounded.
 func TestReadOptsTrailerBoundedRoundTrip(t *testing.T) {
 	base := []byte{0x01, 0x02}
 	for _, bound := range []uint64{0, 1, 42, 1 << 40, ^uint64(0)} {
-		args := appendReadOptsTrailerBounded(append([]byte(nil), base...), ConsistencyBoundedStaleness, 3, bound)
+		args := AppendReadOptsTrailerBounded(append([]byte(nil), base...), ConsistencyBoundedStaleness, 3, bound)
 		// Layout: base | marker(0x03) | rc(3) | opa(3) | 8 bound bytes.
 		if len(args) != len(base)+3+8 {
 			t.Fatalf("bound=%d: len=%d, want %d", bound, len(args), len(base)+11)
 		}
-		if args[len(base)] != (readOptsTrailerMarker | readOptsStalenessBit) {
-			t.Fatalf("bound=%d: marker=%#x, want %#x", bound, args[len(base)], readOptsTrailerMarker|readOptsStalenessBit)
+		if args[len(base)] != (ReadOptsTrailerMarker | ReadOptsStalenessBit) {
+			t.Fatalf("bound=%d: marker=%#x, want %#x", bound, args[len(base)], ReadOptsTrailerMarker|ReadOptsStalenessBit)
 		}
-		rc, opa, gotBound, err := decodeReadOptsTrailerBounded(args, len(base))
+		rc, opa, gotBound, err := DecodeReadOptsTrailerBounded(args, len(base))
 		if err != nil {
 			t.Fatalf("bound=%d: decode err: %v", bound, err)
 		}
 		if rc != ConsistencyBoundedStaleness || opa != 3 || gotBound != bound {
 			t.Fatalf("bound=%d: rc=%d opa=%d bound=%d, want rc=3 opa=3 bound=%d", bound, rc, opa, gotBound, bound)
 		}
-		// decodeReadOptsTrailer (the 3-field view) still consumes/validates the bound.
-		rc2, opa2, err := decodeReadOptsTrailer(args, len(base))
+		// DecodeReadOptsTrailer (the 3-field view) still consumes/validates the bound.
+		rc2, opa2, err := DecodeReadOptsTrailer(args, len(base))
 		if err != nil || rc2 != ConsistencyBoundedStaleness || opa2 != 3 {
 			t.Fatalf("bound=%d: legacy decode rc=%d opa=%d err=%v", bound, rc2, opa2, err)
 		}
@@ -80,14 +80,14 @@ func TestReadOptsTrailerBoundedRoundTrip(t *testing.T) {
 // truncated 8-byte bound is corruption — fail loud, never a silent drop.
 func TestDecodeReadOptsTrailerBoundedFailLoud(t *testing.T) {
 	base := []byte{0x09}
-	full := appendReadOptsTrailerBounded(append([]byte(nil), base...), ConsistencyBoundedStaleness, 0, 0xDEADBEEF)
+	full := AppendReadOptsTrailerBounded(append([]byte(nil), base...), ConsistencyBoundedStaleness, 0, 0xDEADBEEF)
 	// Truncate the 8-byte bound (drop the last byte): marker+rc+opa present, bound short.
 	trunc := full[:len(full)-1]
-	if _, _, _, err := decodeReadOptsTrailerBounded(trunc, len(base)); err == nil {
+	if _, _, _, err := DecodeReadOptsTrailerBounded(trunc, len(base)); err == nil {
 		t.Fatal("truncated bound: want fail-loud error, got nil")
 	}
 	// Truncated rc/opa block (marker present, no rc/opa) still fails loud.
-	if _, _, _, err := decodeReadOptsTrailerBounded([]byte{readOptsTrailerMarker | readOptsStalenessBit}, 0); err == nil {
+	if _, _, _, err := DecodeReadOptsTrailerBounded([]byte{ReadOptsTrailerMarker | ReadOptsStalenessBit}, 0); err == nil {
 		t.Fatal("truncated rc/opa: want fail-loud error, got nil")
 	}
 }
@@ -99,7 +99,7 @@ func TestDecodeReadOptsTrailerBoundedFailLoud(t *testing.T) {
 func TestReadStalenessOf(t *testing.T) {
 	const wantBound = 12345
 	base := EncodeVectorGetArgs("coll", 7, 0)
-	getArgs := appendReadOptsTrailerBounded(base, ConsistencyBoundedStaleness, 0, wantBound)
+	getArgs := AppendReadOptsTrailerBounded(base, ConsistencyBoundedStaleness, 0, wantBound)
 
 	bound, ok := ReadStalenessOf("vector_get", getArgs)
 	if !ok {

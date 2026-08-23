@@ -449,17 +449,17 @@ func TestStoreSnapshotRaftPQ4RoundTrip(t *testing.T) {
 // TestPQ4ValidateGate asserts PQNBits is gated to {0,4,8} and only for QuantPQ.
 func TestPQ4ValidateGate(t *testing.T) {
 	ok := Config{Dim: 64, Metric: L2, M: 16, EfConstruction: 200, EfSearch: 64, Quant: QuantPQ, QuantPQM: 16, PQNBits: 4}
-	if err := ok.Validate(); err != nil {
+	if err := ValidateConfig(ok); err != nil {
 		t.Fatalf("PQNBits=4 should pass Validate: %v", err)
 	}
 	bad := ok
 	bad.PQNBits = 5
-	if err := bad.Validate(); err == nil {
+	if err := ValidateConfig(bad); err == nil {
 		t.Fatal("PQNBits=5 should be rejected by Validate")
 	}
 	eight := ok
 	eight.PQNBits = 8
-	if err := eight.Validate(); err != nil {
+	if err := ValidateConfig(eight); err != nil {
 		t.Fatalf("PQNBits=8 should pass Validate: %v", err)
 	}
 }

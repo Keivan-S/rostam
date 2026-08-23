@@ -192,7 +192,7 @@ func BenchmarkAdmitGateUnits(b *testing.B) {
 	})
 
 	b.Run("predicate", func(b *testing.B) {
-		pred, err := Filter{Op: FilterEq, Field: "bucket", Value: NewString("hit")}.Compile()
+		pred, err := CompileFilter(Filter{Op: FilterEq, Field: "bucket", Value: NewString("hit")})
 		if err != nil {
 			b.Fatal(err)
 		}

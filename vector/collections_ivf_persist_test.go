@@ -39,7 +39,7 @@ func TestEffectiveConfigIVFMmapPath(t *testing.T) {
 	}
 	// The effective config must round-trip through Validate (the gate must not reject
 	// an IVF-Flat Persistent config now that we only set MmapPath).
-	if verr := eff.Validate(); verr != nil {
+	if verr := ValidateConfig(eff); verr != nil {
 		t.Errorf("effective IVF config Validate = %v, want nil", verr)
 	}
 

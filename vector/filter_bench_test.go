@@ -97,7 +97,7 @@ func flFilters() []struct {
 func BenchmarkPredicateEval(b *testing.B) {
 	_, _, metas := filterBenchIndex(b)
 	for _, tc := range flFilters() {
-		pred, err := tc.f.Compile()
+		pred, err := CompileFilter(tc.f)
 		if err != nil {
 			b.Fatalf("%s compile: %v", tc.name, err)
 		}
@@ -121,7 +121,7 @@ func BenchmarkFilterCompile(b *testing.B) {
 		b.Run(tc.name, func(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				if _, err := tc.f.Compile(); err != nil {
+				if _, err := CompileFilter(tc.f); err != nil {
 					b.Fatal(err)
 				}
 			}

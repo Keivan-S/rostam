@@ -335,7 +335,7 @@ func TestValidateAnisotropicEta(t *testing.T) {
 	for _, e := range good {
 		c := base
 		c.AnisotropicEta = e
-		if err := c.Validate(); err != nil {
+		if err := ValidateConfig(c); err != nil {
 			t.Errorf("AnisotropicEta=%v: unexpected error %v", e, err)
 		}
 	}
@@ -343,7 +343,7 @@ func TestValidateAnisotropicEta(t *testing.T) {
 	for _, e := range bad {
 		c := base
 		c.AnisotropicEta = e
-		if err := c.Validate(); err != ErrInvalidAnisotropicEta {
+		if err := ValidateConfig(c); err != ErrInvalidAnisotropicEta {
 			t.Errorf("AnisotropicEta=%v: got err %v, want ErrInvalidAnisotropicEta", e, err)
 		}
 	}

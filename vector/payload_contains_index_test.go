@@ -95,7 +95,7 @@ func TestContainsKindMismatch(t *testing.T) {
 		t.Fatalf("contains perms(string '1') got %v, want empty (kind mismatch)", got)
 	}
 	// And confirm the predicate agrees.
-	pred, err := Filter{Op: FilterContains, Field: "perms", Value: NewString("1")}.Compile()
+	pred, err := CompileFilter(Filter{Op: FilterContains, Field: "perms", Value: NewString("1")})
 	if err != nil {
 		t.Fatal(err)
 	}

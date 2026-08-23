@@ -16,6 +16,69 @@ Notable user-visible changes. Entries that alter existing behaviour are marked
   between sweeps. Embedded (`rostam.CacheConfig.TTLSweepIntervalMs`) is unchanged
   by default — `0` still means the 1s library default; set it to opt in. See
   `docs/server/running.md`.
+- **The Go client is now its own module — `go get github.com/rostamlabs/rostam/client`
+  pulls no engine.** The client-facing leaf packages moved into a shared
+  `github.com/rostamlabs/rostam/sdk` module (`sdk/vtypes`, `sdk/wire` — was
+  `ops/wire`, `sdk/pb` — was `grpcapi/pb`), and `client` became its own module
+  requiring only `sdk`. So an external `go get` of the client resolves a small
+  graph (sdk + protobuf/xxhash/puddle/x/sync) and never downloads the engine
+  module or its `require`s. The `client` import path is **unchanged**. **Breaking
+  (direct importers of the moved packages only):** if you imported
+  `.../ops/wire`, `.../grpcapi/pb`, or `.../vtypes` directly, update to
+  `.../sdk/wire`, `.../sdk/pb`, `.../sdk/vtypes`. No wire or behaviour change.
+  See `docs/RELEASING_MODULES.md` for the tag order.
+
+- **New `vtypes` package: the engine-free vector data types.** The pure data
+  types of the vector API (`Config`, `Filter`, `Value`, `Metadata`, `QuerySpec`,
+  `Result`, `GroupOpts`, `OrderBy`, …) now live in
+  `github.com/rostamlabs/rostam/sdk/vtypes`; the `vector` package re-exports every
+  one via an alias, so `vector.Config` etc. keep working unchanged. This lets
+  the wire codec and network client depend on the types without pulling in the
+  engine — `client` and `ops/wire` now transitively import zero engine packages
+  (a prerequisite for a lightweight `go get .../client`). **Breaking (minor,
+  direct `vector`-package API only):** two exported engine-coupled methods became
+  free functions — `cfg.Validate()` → `vector.ValidateConfig(cfg)`,
+  `filter.Compile()` → `vector.CompileFilter(filter)`; if you call these on a
+  `vector.Config`/`vector.Filter` directly, switch to the function form. No wire
+  or behaviour change.
+
+- **Python client: collection handle.** `r.collection(name)` returns a handle
+  bound to one collection so its name stops being repeated on every call —
+  `r.collection("posts").search(vec, k=10)` instead of
+  `r.search("posts", vec, k=10)`. Mirrors the Go client's `client.Collection`;
+  construction does no I/O, and transport rules are preserved (e.g. `query` /
+  `delete_by_filter` still raise `TransportError` on a TCP client). Exported as
+  `rostam.Collection`. Additive — the flat API is unchanged.
+
+- **The Python client (`rostam-client` on PyPI) unifies on a single `Rostam`
+  class — v0.2.0 (Breaking).** The Python client is versioned and released
+  independently of the server/project (this changelog's `v0.3.0` entry
+  below) — `0.2.0` is the client's own version, not this project's.
+  `RostamClient` (HTTP) and the native-TCP `Rostam`/`RostamKV` pair used to be
+  two classes with two different vocabularies for the same server — one flat,
+  one nesting vector ops under `.vector`. Both collapse into one
+  `Rostam(target)`: the transport is chosen from the target string —
+  `http://`/`https://` for REST, `tcp://host:port` or a bare `host:port` for
+  the native binary protocol — and the vector API is flat (`r.search`,
+  `r.upsert`, `r.hybrid_text`, ...) on both transports. Key-value operations
+  move to `r.kv.*` and stay TCP-only: on an HTTP-connected client, any `r.kv`
+  operation (e.g. `r.kv.get(...)`) raises `TransportError` — reading `r.kv`
+  itself does not raise — as does any other op with no equivalent on the
+  connected transport (the general `query()` is HTTP-only; TCP callers use
+  `recommend()` instead). `RostamClient` and `RostamKV` are removed, not
+  deprecated — importing either now raises `ImportError`. Note `r.get` is
+  REPURPOSED, not preserved: on the old native `Rostam` class it was a KV
+  read; on the unified client it means vector point-get
+  (`r.get(collection, id, ...)`). KV reads move to `r.kv.get(...)`.
+
+  | Before | After |
+  | --- | --- |
+  | `RostamClient("http://host:8080")` | `Rostam("http://host:8080")` |
+  | `Rostam("host", 7000)` (native) | `Rostam("tcp://host:7000")` or `Rostam("host:7000")` |
+  | `r.vector.hybrid_text(...)` | `r.hybrid_text(...)` (flat) |
+  | `r.get("k")` (KV read) / `RostamKV` | `r.kv.get("k")` — `r.get` now means `r.get(collection, id, ...)` (vector point-get) |
+  | `query(prefetch=...)` on the native client | HTTP-only — raises `TransportError` on TCP; TCP callers use `recommend()` |
+
 - **Local ONNX embeddings (opt-in `-tags localembed`).** Rostam can now generate
   semantic embeddings in-process from a catalog of downloadable models
   (`minilm-l6-v2`, `bge-small-en-v1.5`, `gte-small`) with no cloud API. Select

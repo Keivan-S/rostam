@@ -5,7 +5,7 @@ package client
 import (
 	"context"
 
-	"github.com/rostamlabs/rostam/ops"
+	"github.com/rostamlabs/rostam/sdk/wire"
 )
 
 // RegisterWASM ships a compiled WASM module via __register_wasm__. The Client
@@ -28,7 +28,7 @@ import (
 // first registration. The key extractor is the other field that cannot be per
 // group — it is what COMPUTES the group index — and it is not frozen so much as
 // CONSTANT: every WASM op uses the same one, so there is no field to change. See
-// ops.WASMKeyExtractorHandle.
+// wire.WASMKeyExtractorHandle.
 //
 // The propose-time refusal is BEST-EFFORT — it is judged against the receiving
 // node's own install state, so a node that has not applied the original
@@ -88,8 +88,8 @@ import (
 // pushed from there to a majority of cluster members before anything is proposed,
 // and is fetched on demand by any member the push missed. r.Blob is derived from
 // module by the encoder, so the two can never disagree.
-func (c *Client) RegisterWASM(ctx context.Context, r ops.WASMRegistration, module []byte) (pushReport string, err error) {
-	reply, err := c.Call(ctx, "__register_wasm__", ops.EncodeWASMRegistrationRequest(r, module))
+func (c *Client) RegisterWASM(ctx context.Context, r wire.WASMRegistration, module []byte) (pushReport string, err error) {
+	reply, err := c.Call(ctx, "__register_wasm__", wire.EncodeWASMRegistrationRequest(r, module))
 	if err != nil {
 		return "", err
 	}

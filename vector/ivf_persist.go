@@ -388,7 +388,7 @@ func (ix *ivf) savePersist(metaPath string) error {
 // *ivf. Does NOT re-train or rebuild lists from scratch — everything is restored
 // verbatim.
 func openPersistIVF(cfg Config, metaPath string) (*ivf, error) {
-	if err := cfg.Validate(); err != nil {
+	if err := ValidateConfig(cfg); err != nil {
 		return nil, err
 	}
 	data, err := os.ReadFile(metaPath)

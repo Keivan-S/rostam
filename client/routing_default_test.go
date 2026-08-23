@@ -2,19 +2,20 @@
 package client
 
 import (
-	"context"
 	"testing"
 	"time"
 
-	"github.com/rostamlabs/rostam/ops"
+	"github.com/rostamlabs/rostam/sdk/wire"
 )
 
-// NewRouted wires routing; a keyed round-trip against a real node works.
+// NewRouted wires routing. This white-box assertion checks the wiring directly
+// (hasRoutingRegistry is unexported); New/NewRouted do not dial on construction,
+// so a never-dialed address suffices. The engine-backed keyed round-trip that
+// exercises the routed Call path lives in the root module's integration tests
+// (TestNewRoutedKeyedRoundTrip) because it needs a real node stack, which the
+// engine-free client module cannot import.
 func TestNewRoutedWiresRoutingRegistry(t *testing.T) {
-	addr, stop := startTestStack(t)
-	defer stop()
-
-	c, err := NewRouted(Config{Servers: []string{addr}})
+	c, err := NewRouted(Config{Servers: []string{"127.0.0.1:1"}}) // never dialed
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,19 +24,12 @@ func TestNewRoutedWiresRoutingRegistry(t *testing.T) {
 	if !c.hasRoutingRegistry() {
 		t.Fatal("NewRouted did not wire a routing registry")
 	}
-	ctx := context.Background()
-	if _, err := c.Call(ctx, "put", ops.EncodePutArgs([]byte("k"), []byte("v"), 0)); err != nil {
-		t.Fatalf("Call put via routed client: %v", err)
-	}
 }
 
 // The load-bearing invariant: plain New must NOT auto-wire routing (nil Ops means
 // "don't self-route"). This protects cluster/node.go peerClient's leader-pinned reads.
 func TestNewDoesNotAutoWireRouting(t *testing.T) {
-	addr, stop := startTestStack(t)
-	defer stop()
-
-	c, err := New(Config{Servers: []string{addr}})
+	c, err := New(Config{Servers: []string{"127.0.0.1:1"}}) // never dialed
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,8 +42,8 @@ func TestNewDoesNotAutoWireRouting(t *testing.T) {
 
 // A caller-supplied Ops registry is preserved by NewRouted (not overwritten).
 func TestNewRoutedPreservesSuppliedOps(t *testing.T) {
-	reg := ops.NewRegistry()
-	if err := ops.RegisterBuiltins(reg); err != nil {
+	reg := wire.NewRegistry()
+	if err := wire.RegisterRoutableBuiltins(reg); err != nil {
 		t.Fatal(err)
 	}
 	c, err := NewRouted(Config{

@@ -183,20 +183,20 @@ func TestOPQItersValidation(t *testing.T) {
 	// Out of range high.
 	c := base()
 	c.OPQIters = maxOPQIters + 1
-	if err := c.Validate(); err != ErrInvalidOPQIters {
+	if err := ValidateConfig(c); err != ErrInvalidOPQIters {
 		t.Fatalf("OPQIters=%d: err = %v, want ErrInvalidOPQIters", c.OPQIters, err)
 	}
 	// Negative.
 	c = base()
 	c.OPQIters = -1
-	if err := c.Validate(); err != ErrInvalidOPQIters {
+	if err := ValidateConfig(c); err != ErrInvalidOPQIters {
 		t.Fatalf("OPQIters=-1: err = %v, want ErrInvalidOPQIters", err)
 	}
 	// In-range (incl. the boundary and the default 0).
 	for _, v := range []int{0, 1, 5, maxOPQIters} {
 		c = base()
 		c.OPQIters = v
-		if err := c.Validate(); err != nil {
+		if err := ValidateConfig(c); err != nil {
 			t.Fatalf("OPQIters=%d should be valid, got %v", v, err)
 		}
 	}
@@ -308,7 +308,7 @@ func TestOPQItersMVHonored(t *testing.T) {
 		Dim: dim, M: 16, EfConstruction: 200, EfSearch: 64, Seed: seed,
 		Quant: QuantPQ, IVFTrainThreshold: 256, OPQ: true, OPQIters: 4,
 	}
-	if got := cfg.innerConfig().OPQIters; got != 4 {
+	if got := mvInnerConfig(cfg).OPQIters; got != 4 {
 		t.Fatalf("MV innerConfig did not inherit OPQIters: got %d want 4", got)
 	}
 	mv, err := NewMultiVectorIndex(cfg)

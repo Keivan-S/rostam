@@ -61,7 +61,7 @@ func TestMVScanResultRequiresVersionTrailer(t *testing.T) {
 	w32(0) // metaLen = 0, NO trailing version
 
 	if _, err := DecodeMVScanResult(b.Bytes()); err == nil {
-		t.Fatal("blob missing the required trailing version decoded without error, want errVectorArgsTruncated")
+		t.Fatal("blob missing the required trailing version decoded without error, want ErrVectorArgsTruncated")
 	}
 }
 

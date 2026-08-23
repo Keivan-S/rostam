@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/rostamlabs/rostam/cache"
+	"github.com/rostamlabs/rostam/sdk/wire"
 	"github.com/rostamlabs/rostam/vector"
 )
 
@@ -53,7 +54,11 @@ type TxContext struct {
 // TxContext (a nil receiver). Handlers that attribute node-wide state changes to
 // a shard group must treat it as "no group provenance" and record nothing —
 // never as group 0, which would be a false attribution.
-const NoShardIndex = -1
+//
+// Defined in the leaf (ops/wire) because wire's WASMNotResidentError carries a
+// Group that is NoShardIndex for a node-wide (no group provenance) resolution;
+// aliased here so every existing ops.NoShardIndex call site is unaffected.
+const NoShardIndex = wire.NoShardIndex
 
 // SetApplyStamp sets the leader-stamped apply clock and stamped-ness for the next
 // handler run (stamped=false, nowMs=0 to clear). Only fsm.applyEntryData calls it,

@@ -11,7 +11,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/rostamlabs/rostam/ops"
+	"github.com/rostamlabs/rostam/sdk/wire"
 )
 
 // Config governs a Client and its per-server pools.
@@ -70,12 +70,18 @@ type Config struct {
 	// Calls and cap head-of-line blocking behind a slow response.
 	PipelineConns int32
 
-	// Ops is the op registry for smart routing. If nil, the client
-	// falls back to the round-robin + NotLeader retry. The
-	// registry must contain the same KeyExtractor mappings as the
-	// server's registry; the typical setup shares one registry between
-	// server and client by calling ops.RegisterBuiltins on both.
-	Ops *ops.Registry
+	// Ops is the routing-only op registry for smart routing. If nil, the
+	// client falls back to round-robin + NotLeader retry. It is a
+	// *wire.Registry (routing metadata only, no handlers); the server uses a
+	// separate *ops.Registry (routing + handlers). They are DIFFERENT types
+	// and are never the same object — the client cannot import the server's
+	// cache-bound Handler/TxContext. What must match is the routing metadata:
+	// populate the client with wire.RegisterRoutableBuiltins (or use
+	// NewRouted, which does it) while the server uses ops.RegisterBuiltins —
+	// both draw from the shared wire.BuiltinOps table, so the mappings agree.
+	// To route from an already-built server registry, adapt it with
+	// (*ops.Registry).ExportRouting.
+	Ops *wire.Registry
 
 	// TopologyRefreshInterval is how often the background goroutine
 	// polls __topology__. Default 5s. Ignored when Ops == nil.

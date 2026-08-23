@@ -113,7 +113,7 @@ func TestRichFilterSearchCorrectness(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		pred, err := tc.f.Compile()
+		pred, err := CompileFilter(tc.f)
 		if err != nil {
 			t.Fatalf("%s: compile: %v", tc.name, err)
 		}
@@ -211,7 +211,7 @@ func TestNonIndexableRichFiltersFallBackToGraph(t *testing.T) {
 	if !ok {
 		t.Error("match: expected token-index narrowing (ok=true)")
 	}
-	mPred, err := matchF.Compile()
+	mPred, err := CompileFilter(matchF)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +256,7 @@ func TestNonIndexableRichFiltersFallBackToGraph(t *testing.T) {
 		query[j] = 0.1 * float32(j)
 	}
 	f := Filter{Op: FilterRegex, Field: "sku", Value: NewString("^AB-")}
-	pred, err := f.Compile()
+	pred, err := CompileFilter(f)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -359,7 +359,7 @@ func TestRichFilterBothSearchPaths(t *testing.T) {
 	// matches, and the end-to-end result must be EXACT vs brute force regardless
 	// of which path the planner picks.
 	matchF := Filter{Op: FilterMatch, Field: "title", Value: NewString("fox")}
-	pred, err := matchF.Compile()
+	pred, err := CompileFilter(matchF)
 	if err != nil {
 		t.Fatal(err)
 	}

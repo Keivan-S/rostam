@@ -6,26 +6,26 @@ import (
 	"context"
 	"strings"
 
-	"github.com/rostamlabs/rostam/ops"
-	"github.com/rostamlabs/rostam/vector"
+	"github.com/rostamlabs/rostam/sdk/vtypes"
+	"github.com/rostamlabs/rostam/sdk/wire"
 )
 
 // CreateRequest configures a new collection. Only Dim is required. Set FullText
 // to enable the server-side BM25 lane (required for HybridText).
 type CreateRequest struct {
 	Dim            int
-	Metric         vector.Metric // zero value = vector.Cosine
+	Metric         vtypes.Metric // zero value = vtypes.Cosine
 	M              int
 	EfConstruction int
 	EfSearch       int
 	Persistent     bool
-	FullText       *vector.FullTextConfig
+	FullText       *vtypes.FullTextConfig
 }
 
 // Create creates the collection backing this handle. If a collection with the
 // same name already exists, it returns ErrCollectionExists.
 func (col *Collection) Create(ctx context.Context, req CreateRequest) error {
-	cfg := vector.Config{
+	cfg := vtypes.Config{
 		Dim:            req.Dim,
 		Metric:         req.Metric,
 		M:              req.M,
@@ -34,7 +34,7 @@ func (col *Collection) Create(ctx context.Context, req CreateRequest) error {
 		Persistent:     req.Persistent,
 		FullText:       req.FullText,
 	}
-	_, err := col.c.Call(ctx, "vector_create_collection", ops.EncodeCreateCollectionArgs(col.name, cfg))
+	_, err := col.c.Call(ctx, "vector_create_collection", wire.EncodeCreateCollectionArgs(col.name, cfg))
 	return mapCreateErr(err)
 }
 
@@ -45,7 +45,7 @@ func (col *Collection) Create(ctx context.Context, req CreateRequest) error {
 // as a defensive translation in case that server contract ever changes; see
 // Get/Search for the paths where a missing collection actually surfaces.)
 func (col *Collection) Drop(ctx context.Context) error {
-	_, err := col.c.Call(ctx, "vector_drop_collection", ops.EncodeDropCollectionArgs(col.name))
+	_, err := col.c.Call(ctx, "vector_drop_collection", wire.EncodeDropCollectionArgs(col.name))
 	if isCollectionNotFound(err) {
 		return ErrCollectionNotFound
 	}

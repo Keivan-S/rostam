@@ -49,7 +49,7 @@ func TestRichFilterSearchArgsRoundtrip(t *testing.T) {
 	}
 	// The decoded filter must still compile (proves every op name resolved to a
 	// real op and every value is well-formed).
-	if _, cerr := got.Compile(); cerr != nil {
+	if _, cerr := vector.CompileFilter(got); cerr != nil {
 		t.Errorf("decoded filter does not compile: %v", cerr)
 	}
 }
@@ -67,7 +67,7 @@ func TestRichFilterScrollArgsRoundtrip(t *testing.T) {
 	if !reflect.DeepEqual(orig, got) {
 		t.Errorf("scroll filter roundtrip mismatch:\n orig=%+v\n got =%+v", orig, got)
 	}
-	if _, cerr := got.Compile(); cerr != nil {
+	if _, cerr := vector.CompileFilter(got); cerr != nil {
 		t.Errorf("decoded filter does not compile: %v", cerr)
 	}
 }
@@ -83,7 +83,7 @@ func TestRichFilterDeleteByFilterArgsRoundtrip(t *testing.T) {
 	if !reflect.DeepEqual(orig, got) {
 		t.Errorf("delete-by-filter roundtrip mismatch:\n orig=%+v\n got =%+v", orig, got)
 	}
-	if _, cerr := got.Compile(); cerr != nil {
+	if _, cerr := vector.CompileFilter(got); cerr != nil {
 		t.Errorf("decoded filter does not compile: %v", cerr)
 	}
 }
@@ -99,7 +99,7 @@ func TestRichFilterHybridArgsRoundtrip(t *testing.T) {
 	if !reflect.DeepEqual(orig, got.Filter) {
 		t.Errorf("hybrid filter roundtrip mismatch:\n orig=%+v\n got =%+v", orig, got.Filter)
 	}
-	if _, cerr := got.Filter.Compile(); cerr != nil {
+	if _, cerr := vector.CompileFilter(got.Filter); cerr != nil {
 		t.Errorf("decoded filter does not compile: %v", cerr)
 	}
 }
@@ -115,7 +115,7 @@ func TestRichFilterGroupArgsRoundtrip(t *testing.T) {
 	if !reflect.DeepEqual(orig, got.Filter) {
 		t.Errorf("group filter roundtrip mismatch:\n orig=%+v\n got =%+v", orig, got.Filter)
 	}
-	if _, cerr := got.Filter.Compile(); cerr != nil {
+	if _, cerr := vector.CompileFilter(got.Filter); cerr != nil {
 		t.Errorf("decoded filter does not compile: %v", cerr)
 	}
 }
@@ -333,7 +333,7 @@ func newRichFilterTx(t *testing.T) (*TxContext, []float32) {
 // encodeSearchArgsWithRawFilter builds a vector_search args blob whose filter
 // block carries an arbitrary raw JSON payload (used to inject a malformed
 // filter the normal encoder would never produce). It mirrors the wire layout of
-// EncodeVectorSearchArgsExt with vecFlagFilter set.
+// EncodeVectorSearchArgsExt with VecFlagFilter set.
 func encodeSearchArgsWithRawFilter(t *testing.T, collection string, k int, query []float32, filterJSON []byte) []byte {
 	t.Helper()
 	// Sanity: the injected JSON is well-formed JSON (only the op NAME is bogus),
@@ -341,12 +341,12 @@ func encodeSearchArgsWithRawFilter(t *testing.T, collection string, k int, query
 	if !json.Valid(filterJSON) {
 		t.Fatalf("test bug: injected filter JSON is not valid JSON: %s", filterJSON)
 	}
-	// Hand-encode the exact vector_search wire layout with vecFlagFilter set:
+	// Hand-encode the exact vector_search wire layout with VecFlagFilter set:
 	// [flags:u8][colLen:u8][col][k:u32][dim:u32][query][filterLen:u32][filterJSON]
 	var buf bytes.Buffer
 	var u32 [4]byte
 	putU32 := func(v uint32) { binary.BigEndian.PutUint32(u32[:], v); buf.Write(u32[:]) }
-	buf.WriteByte(vecFlagFilter)
+	buf.WriteByte(VecFlagFilter)
 	buf.WriteByte(byte(len(collection)))
 	buf.WriteString(collection)
 	putU32(uint32(k))

@@ -8,7 +8,8 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/rostamlabs/rostam/grpcapi/pb"
+	"github.com/rostamlabs/rostam/grpcapi/grpcsvc"
+	"github.com/rostamlabs/rostam/sdk/pb"
 )
 
 // mvTokens builds t token vectors of dim floats (a ColBERT-style token matrix).
@@ -33,7 +34,7 @@ const (
 
 // seedMVCollection creates an MV (late-interaction) collection and adds mvDocs
 // documents, each with mvTokPerDoc tokens, over the wire.
-func seedMVCollection(b *testing.B, cl pb.VectorServiceClient, name string) {
+func seedMVCollection(b *testing.B, cl grpcsvc.VectorServiceClient, name string) {
 	b.Helper()
 	ctx := context.Background()
 	if _, err := cl.MVCreateCollection(ctx, &pb.MVCreateRequest{
@@ -120,7 +121,7 @@ const namedBenchConfig = `{"title":{"dim":128},"image":{"dim":128,"metric":2}}`
 
 // seedNamedCollection creates a named (per-point multi-space) collection and
 // upserts n points with both named vectors over the wire.
-func seedNamedCollection(b *testing.B, cl pb.VectorServiceClient, name string, n int) {
+func seedNamedCollection(b *testing.B, cl grpcsvc.VectorServiceClient, name string, n int) {
 	b.Helper()
 	ctx := context.Background()
 	if _, err := cl.NamedCreate(ctx, &pb.NamedCreateRequest{Name: name, ConfigJson: namedBenchConfig}); err != nil {

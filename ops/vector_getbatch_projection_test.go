@@ -43,8 +43,8 @@ func TestHandleVectorGetBatchProjectionSkipsDenseCopy(t *testing.T) {
 		if err != nil {
 			t.Fatalf("DecodeVectorGetBatchArgs: %v", err)
 		}
-		withVec := flags&getFlagWithVector != 0
-		withPayload := flags&getFlagWithPayload != 0
+		withVec := flags&GetFlagWithVector != 0
+		withPayload := flags&GetFlagWithPayload != 0
 		rows := make([]GetBatchRow, 0, len(gids))
 		for _, id := range gids {
 			vec, meta, ttl, sparse, version, ok, err := tx.vectors.GetPointVersion(gname, id)

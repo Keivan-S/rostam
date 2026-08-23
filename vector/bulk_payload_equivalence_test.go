@@ -188,7 +188,7 @@ func bpLoadStaged(t *testing.T, name string, cfg Config, c *invCorpus, workers i
 // identically wrong answers.
 func bpExpected(t *testing.T, c *invCorpus, f Filter) []uint64 {
 	t.Helper()
-	pred, err := f.Compile()
+	pred, err := CompileFilter(f)
 	if err != nil {
 		t.Fatalf("compile filter: %v", err)
 	}

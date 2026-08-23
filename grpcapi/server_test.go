@@ -14,8 +14,8 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/rostamlabs/rostam/cache"
-	"github.com/rostamlabs/rostam/grpcapi/pb"
 	"github.com/rostamlabs/rostam/ops"
+	"github.com/rostamlabs/rostam/sdk/pb"
 	"github.com/rostamlabs/rostam/vector"
 )
 
@@ -1098,7 +1098,7 @@ func assertGRPCGeoFilter(t *testing.T, f vector.Filter) {
 	if r := f.And[0].Geo; r.CenterLat != 48.8566 || r.CenterLon != 2.3522 || r.RadiusM != 5000 {
 		t.Fatalf("geo_radius condition = %+v, want center (48.8566,2.3522) r=5000", r)
 	}
-	if _, err := f.Compile(); err != nil {
+	if _, err := vector.CompileFilter(f); err != nil {
 		t.Fatalf("decoded geo filter does not compile: %v", err)
 	}
 }

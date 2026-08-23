@@ -1,0 +1,196 @@
+syntax = "proto3";
+
+// Package rostam.v1 is the gRPC surface over Rostam's vector/RAG operations.
+// It mirrors the REST API (httpapi) and dispatches into the same op registry —
+// a second transport, not new engine logic. The recursive metadata filter and
+// the tagged metadata Value union are carried as JSON strings (filter_json /
+// metadata_json / key_json) rather than re-modeled in protobuf, reusing the
+// same JSON contract the binary wire codecs already use.
+//
+// The service is split into its own file/package (grpcsvc) from the message
+// definitions in rostam.proto (package pb) so that a caller who only needs
+// the protobuf MESSAGES (e.g. the Go client, which speaks the binary TCP
+// protocol and only borrows QuerySpec's wire encoding) does not transitively
+// pull in google.golang.org/grpc.
+package rostam.v1;
+
+import "sdk/pb/rostam.proto";
+
+option go_package = "github.com/rostamlabs/rostam/grpcapi/grpcsvc;grpcsvc";
+
+service VectorService {
+  rpc Health(HealthRequest) returns (HealthResponse);
+  rpc CreateCollection(CreateCollectionRequest) returns (CreateCollectionResponse);
+  rpc DropCollection(DropCollectionRequest) returns (DropCollectionResponse);
+  rpc Upsert(UpsertRequest) returns (UpsertResponse);
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
+
+  // Get-by-id retrieves a dense point: its vector + payload + remaining TTL.
+  // found=false is the not-found flag (absent/tombstoned/expired) — NOT a gRPC
+  // error — so a partitioned point-op can distinguish "not in this partition".
+  // with_vector/with_payload gate the two projections (both default true at the
+  // edge). The four payload RPCs mutate a point's payload in place (no delete+
+  // re-insert): SetPayload merges, OverwritePayload replaces the whole payload,
+  // DeletePayloadKeys removes listed keys, ClearPayload empties it. applied=false
+  // means the point was absent (→ NotFound at the edge).
+  rpc Get(GetRequest) returns (GetResponse);
+  // GetBatch retrieves MANY dense points by id in ONE op (the coordinator
+  // scatters the ids to their owning partitions, asks each only for its subset,
+  // and merges). A partial miss is NORMAL — absent ids come back in the missing
+  // list, NEVER a NotFound error (unlike single Get). points carry their id so a
+  // caller knows which point is which; with_vector/with_payload gate projections.
+  rpc GetBatch(GetBatchRequest) returns (GetBatchResponse);
+  rpc SetPayload(SetPayloadRequest) returns (PayloadResponse);
+  rpc OverwritePayload(SetPayloadRequest) returns (PayloadResponse);
+  rpc DeletePayloadKeys(DeletePayloadKeysRequest) returns (PayloadResponse);
+  rpc ClearPayload(ClearPayloadRequest) returns (PayloadResponse);
+
+  rpc Search(SearchRequest) returns (SearchResponse);
+  rpc SearchDocs(SearchRequest) returns (SearchDocsResponse);
+  rpc SearchGroups(SearchGroupsRequest) returns (SearchGroupsResponse);
+  rpc HybridSearch(HybridRequest) returns (SearchResponse);
+  // TextSearch runs a BM25 full-text search over a FullText collection: the server
+  // tokenizes + scores the raw query text and returns enriched documents (content +
+  // metadata), so it reuses SearchDocsResponse (like SearchDocs).
+  rpc TextSearch(TextSearchRequest) returns (SearchDocsResponse);
+  // HybridTextSearch fuses a dense KNN lane with a BM25 full-text lane (raw query
+  // text analyzed server-side). Results carry the fused score + dense distance plus
+  // the degraded/missing partition trailer — so it reuses SearchResponse (like
+  // HybridSearch).
+  rpc HybridTextSearch(HybridTextRequest) returns (SearchResponse);
+  // VectorQuery runs the unified Query API (Qdrant-parity): a QuerySpec carries a
+  // root leaf + N prefetch leaves + a combine mode (FUSION/RERANK) + fusion
+  // config. v1 = the dense family, single-level. Results carry the fused/reranked
+  // score + dense distance, plus the degraded/missing partition trailer — so it
+  // reuses SearchResponse (like HybridSearch).
+  rpc VectorQuery(VectorQueryRequest) returns (SearchResponse);
+  // NamedVectorQuery runs the unified Query API over a NAMED collection: the same
+  // QuerySpec (root + N prefetch leaves + FUSION/RERANK mode + fusion config), but
+  // EVERY leaf targets a named vector SPACE (NamedDenseLeaf / NamedSparseLeaf), so
+  // the N prefetch lanes fuse across >2 named spaces (the distinctive multi-space
+  // value v1 dense cannot deliver). Mirrors VectorQuery: it reuses SearchResponse
+  // (fused/reranked score + dense distance + the degraded/missing partition
+  // trailer) and rides the vector_named_query op. Distinct RPC from VectorQuery
+  // exactly as NamedHybridSearch is distinct from HybridSearch.
+  rpc NamedVectorQuery(NamedVectorQueryRequest) returns (SearchResponse);
+  // MVVectorQuery runs the unified Query API over a MULTI-VECTOR (late-interaction)
+  // collection: the same QuerySpec (root + N prefetch leaves + FUSION/RERANK mode +
+  // fusion config), but the leaves are MV-family leaves — a MaxSim leaf (MVMaxSimLeaf,
+  // carrying the token query matrix) and/or the doc-level sparse field (SparseLeaf,
+  // no space). Both MV lanes are score-descending. Mirrors VectorQuery /
+  // NamedVectorQuery: it reuses SearchResponse (fused/reranked score + the
+  // degraded/missing partition trailer) and rides the vector_mv_query op. Distinct
+  // RPC exactly as MVHybridSearch is distinct from HybridSearch.
+  rpc MVVectorQuery(MVVectorQueryRequest) returns (SearchResponse);
+  rpc DeleteByFilter(DeleteByFilterRequest) returns (DeleteByFilterResponse);
+
+  // Resplit re-partitions a collection offline (synchronous; quiesce writes
+  // first). ResplitCleanup drops the orphaned pre-resplit partitions.
+  rpc Resplit(ResplitRequest) returns (ResplitResponse);
+  rpc ResplitCleanup(ResplitCleanupRequest) returns (ResplitCleanupResponse);
+
+  // Reshard re-partitions a collection ONLINE (synchronous, but reads AND
+  // writes stay live for the duration — no quiesce). The orchestrator dual-
+  // writes to old+new gen during a streamed if-absent copy, then flips the
+  // catalog at cutover. ReshardAbort aborts an in-flight reshard pre-cutover.
+  rpc Reshard(ReshardRequest) returns (ReshardResponse);
+  rpc ReshardAbort(ReshardAbortRequest) returns (ReshardAbortResponse);
+
+  // Late interaction (multi-vector / ColBERT MaxSim).
+  rpc MVCreateCollection(MVCreateRequest) returns (MVCreateResponse);
+  rpc MVDropCollection(MVDropRequest) returns (MVDropResponse);
+  rpc MVAdd(MVAddRequest) returns (MVAddResponse);
+  rpc MVSearch(MVSearchRequest) returns (MVSearchResponse);
+  // MVHybridSearch fuses an MV collection's MaxSim (late-interaction dense) lane
+  // and its per-doc sparse lane into the top-k (cross-modality hybrid). Results
+  // carry the fused score + dense distance, mirroring NamedHybridSearch — so it
+  // reuses NamedSearchResponse.
+  rpc MVHybridSearch(MVHybridRequest) returns (NamedSearchResponse);
+  // MVScroll lists live multi-vector documents (id + payload, no token matrix)
+  // with cursor pagination. Mirrors the dense Scroll / NamedScroll surface.
+  rpc MVScroll(MVScrollRequest) returns (MVScrollResponse);
+  rpc MVDelete(MVDeleteRequest) returns (MVDeleteResponse);
+
+  // MV get-by-id + in-place payload mutation (see Get/SetPayload/.../ClearPayload
+  // for the dense equivalents; MVGet returns the doc's token matrix instead of a
+  // single vector). found/applied carry the not-found flag as above.
+  rpc MVGet(MVGetRequest) returns (MVGetResponse);
+  // MVGetBatch retrieves MANY multi-vector documents by id in ONE op (the
+  // coordinator scatters the ids to their owning partitions, asks each only for
+  // its subset, and merges). A partial miss is NORMAL — absent ids come back in
+  // the missing list, NEVER a NotFound error (unlike single MVGet). The MV clone
+  // of NamedGetBatch; each point carries its token matrix + payload (MV has NO
+  // ttl).
+  rpc MVGetBatch(MVGetBatchRequest) returns (MVGetBatchResponse);
+  rpc MVSetPayload(SetPayloadRequest) returns (PayloadResponse);
+  rpc MVOverwritePayload(SetPayloadRequest) returns (PayloadResponse);
+  rpc MVDeletePayloadKeys(DeletePayloadKeysRequest) returns (PayloadResponse);
+  rpc MVClearPayload(ClearPayloadRequest) returns (PayloadResponse);
+
+  rpc MVResplit(ResplitRequest) returns (ResplitResponse);
+  rpc MVResplitCleanup(ResplitCleanupRequest) returns (ResplitCleanupResponse);
+  // Online reshard for multi-vector collections (see Reshard/ReshardAbort).
+  rpc MVReshard(ReshardRequest) returns (ReshardResponse);
+  rpc MVReshardAbort(ReshardAbortRequest) returns (ReshardAbortResponse);
+
+  // Named vectors (Qdrant-style per-point multi-vector-space collections): a
+  // collection holds a MAP of named dense vector spaces, each its own HNSW
+  // index, sharing one per-point payload + id namespace. A point provides a map
+  // of named vectors; a search selects which named space to query. Mirrors the
+  // dense/MV transport surface; filter/metadata ride as JSON strings.
+  rpc NamedCreate(NamedCreateRequest) returns (NamedCreateResponse);
+  rpc NamedDrop(NamedDropRequest) returns (NamedDropResponse);
+  rpc NamedUpsert(NamedUpsertRequest) returns (NamedUpsertResponse);
+  rpc NamedSearch(NamedSearchRequest) returns (NamedSearchResponse);
+  rpc NamedSparseSearch(NamedSparseSearchRequest) returns (NamedSearchResponse);
+  rpc NamedHybridSearch(NamedHybridRequest) returns (NamedSearchResponse);
+  rpc NamedSearchDocs(NamedSearchRequest) returns (NamedSearchDocsResponse);
+  rpc NamedDelete(NamedDeleteRequest) returns (NamedDeleteResponse);
+
+  // Named get-by-id + in-place payload mutation (see Get/SetPayload/.../
+  // ClearPayload for the dense equivalents; NamedGet returns the per-point map of
+  // named-space -> vector instead of a single vector). found/applied carry the
+  // not-found flag as above. The payload is shared per point across spaces.
+  rpc NamedGet(NamedGetRequest) returns (NamedGetResponse);
+  // NamedGetBatch retrieves MANY named-vector points by id in ONE op (the
+  // coordinator scatters the ids to their owning partitions, asks each only for
+  // its subset, and merges). A partial miss is NORMAL — absent ids come back in
+  // the missing list, NEVER a NotFound error (unlike single NamedGet). The named
+  // clone of GetBatch; each point carries its per-space vectors map + payload +
+  // ttl_ms.
+  rpc NamedGetBatch(NamedGetBatchRequest) returns (NamedGetBatchResponse);
+  rpc NamedSetPayload(SetPayloadRequest) returns (PayloadResponse);
+  rpc NamedOverwritePayload(SetPayloadRequest) returns (PayloadResponse);
+  rpc NamedDeletePayloadKeys(DeletePayloadKeysRequest) returns (PayloadResponse);
+  rpc NamedClearPayload(ClearPayloadRequest) returns (PayloadResponse);
+
+  rpc NamedScroll(NamedScrollRequest) returns (NamedScrollResponse);
+  rpc Scroll(ScrollRequest) returns (ScrollResponse);
+  rpc NamedGetConfig(NamedGetConfigRequest) returns (NamedGetConfigResponse);
+
+  // Collection aliases (alias -> collection resolution + atomic swap). An alias
+  // is a name that resolves to a real collection, so data-plane RPCs on the
+  // alias transparently route to the target (resolution is in the engine). These
+  // RPCs are the alias-MANAGEMENT surface. AliasBatch applies a list of create/
+  // delete actions ATOMICALLY in one meta-Raft entry (the zero-downtime swap):
+  // {delete prod, create prod->v2} repoints with no undefined intermediate
+  // window. CreateAlias/DeleteAlias are single-action conveniences. ListAliases
+  // is a local read (optional collection filter). Validation errors (target
+  // missing / shadow / reserved char / target-is-alias) map to InvalidArgument.
+  rpc CreateAlias(CreateAliasRequest) returns (CreateAliasResponse);
+  rpc DeleteAlias(DeleteAliasRequest) returns (DeleteAliasResponse);
+  rpc ListAliases(ListAliasesRequest) returns (ListAliasesResponse);
+  rpc AliasBatch(AliasBatchRequest) returns (AliasBatchResponse);
+
+  // Online key-admin (add/revoke/list API keys at RUNTIME, no restart). These are
+  // admin-scope-gated coordinator virtual-ops (__keys_add__/__keys_revoke__/
+  // __keys_list__) intercepted at the dispatcher and applied to the node's live
+  // *vector.KeyRegistry (per-node-local in v1). The authorize gate classifies the
+  // three op names as admin, so a non-admin caller is denied before the registry
+  // is touched. SECURITY: KeysList returns ONLY the redacted view (fingerprint +
+  // tenant + scopes + cert_cn) — the raw token is NEVER serialized at any edge;
+  // KeysAdd/KeysRevoke return an empty ack and never echo the token.
+  rpc KeysAdd(KeysAddRequest) returns (KeysAck);
+  rpc KeysRevoke(KeysRevokeRequest) returns (KeysAck);
+  rpc KeysList(KeysListRequest) returns (KeysListResponse);
+}

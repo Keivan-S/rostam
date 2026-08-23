@@ -6,8 +6,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/rostamlabs/rostam/grpcapi/pb"
 	"github.com/rostamlabs/rostam/ops"
+	"github.com/rostamlabs/rostam/sdk/pb"
 )
 
 // TestTextSearchThreadsGlobalIDFIntoArgs proves GetGlobalIdf() rides into the

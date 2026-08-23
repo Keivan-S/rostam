@@ -53,7 +53,7 @@ func contentCorpus(t testing.TB, n int) *hnsw {
 // fails loudly instead of quietly agreeing with a broken search.
 func predicateMatchCount(t testing.TB, h *hnsw, f Filter) int {
 	t.Helper()
-	pred, err := f.Compile()
+	pred, err := CompileFilter(f)
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}

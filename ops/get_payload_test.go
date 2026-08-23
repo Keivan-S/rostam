@@ -29,7 +29,7 @@ func newGetPayloadTx(t *testing.T) (*TxContext, *vector.CollectionStore) {
 // --- codec round-trips: get args (shared by all families) ---
 
 func TestVectorGetArgsRoundtrip(t *testing.T) {
-	for _, flags := range []uint8{0, getFlagWithVector, getFlagWithPayload, GetFlagsBoth} {
+	for _, flags := range []uint8{0, GetFlagWithVector, GetFlagWithPayload, GetFlagsBoth} {
 		col, id, gotFlags, err := DecodeVectorGetArgs(EncodeVectorGetArgs("acme/docs", 42, flags))
 		if err != nil {
 			t.Fatalf("flags=%d: %v", flags, err)
@@ -249,9 +249,9 @@ func TestMVGetResultRoundtrip(t *testing.T) {
 	}
 }
 
-// --- per-row decoder splits (decodeNamedGetResultAt / decodeMVGetResultAt) ---
+// --- per-row decoder splits (DecodeNamedGetResultAt / DecodeMVGetResultAt) ---
 
-// decodeNamedGetResultAt at off=0 must produce the SAME decoded value as the
+// DecodeNamedGetResultAt at off=0 must produce the SAME decoded value as the
 // public DecodeNamedGetResult for a round-tripped record (faithful split), and
 // the returned next must point exactly past the record so two records encoded
 // back-to-back decode by advancing off.
@@ -261,9 +261,9 @@ func TestDecodeNamedGetResultAtFaithful(t *testing.T) {
 	body := EncodeNamedGetResult(true, vecs, payload, 3*time.Second, true, true)
 
 	// off=0 helper matches the public single-get decoder exactly.
-	found, gv, gp, ttlMs, _, next, err := decodeNamedGetResultAt(body, 0)
+	found, gv, gp, ttlMs, _, next, err := DecodeNamedGetResultAt(body, 0)
 	if err != nil || !found {
-		t.Fatalf("decodeNamedGetResultAt: found=%v err=%v", found, err)
+		t.Fatalf("DecodeNamedGetResultAt: found=%v err=%v", found, err)
 	}
 	pFound, pv, pp, pttl, perr := DecodeNamedGetResult(body)
 	if perr != nil || !pFound {
@@ -283,11 +283,11 @@ func TestDecodeNamedGetResultAtFaithful(t *testing.T) {
 	vecs2 := map[string][]float32{"body": {2, 2}}
 	body2 := EncodeNamedGetResult(true, vecs2, nil, time.Second, true, false)
 	two := append(append([]byte{}, body...), body2...)
-	f1, v1, _, _, _, n1, e1 := decodeNamedGetResultAt(two, 0)
+	f1, v1, _, _, _, n1, e1 := DecodeNamedGetResultAt(two, 0)
 	if e1 != nil || !f1 || !reflect.DeepEqual(v1, vecs) {
 		t.Fatalf("record 1: found=%v err=%v vecs=%+v", f1, e1, v1)
 	}
-	f2, v2, _, _, _, n2, e2 := decodeNamedGetResultAt(two, n1)
+	f2, v2, _, _, _, n2, e2 := DecodeNamedGetResultAt(two, n1)
 	if e2 != nil || !f2 || !reflect.DeepEqual(v2, vecs2) {
 		t.Fatalf("record 2: found=%v err=%v vecs=%+v", f2, e2, v2)
 	}
@@ -296,16 +296,16 @@ func TestDecodeNamedGetResultAtFaithful(t *testing.T) {
 	}
 }
 
-// decodeMVGetResultAt at off=0 must match DecodeMVGetResult and next must point
+// DecodeMVGetResultAt at off=0 must match DecodeMVGetResult and next must point
 // past the record (MV has no ttl).
 func TestDecodeMVGetResultAtFaithful(t *testing.T) {
 	tokens := [][]float32{{1, 0, 0, 0}, {0, 1, 0, 0}}
 	payload := vector.Metadata{"doc": vector.NewInt(5)}
 	body := EncodeMVGetResult(true, tokens, payload, true, true)
 
-	found, gt, gp, _, next, err := decodeMVGetResultAt(body, 0)
+	found, gt, gp, _, next, err := DecodeMVGetResultAt(body, 0)
 	if err != nil || !found {
-		t.Fatalf("decodeMVGetResultAt: found=%v err=%v", found, err)
+		t.Fatalf("DecodeMVGetResultAt: found=%v err=%v", found, err)
 	}
 	pFound, pt, pp, perr := DecodeMVGetResult(body)
 	if perr != nil || !pFound {
@@ -322,11 +322,11 @@ func TestDecodeMVGetResultAtFaithful(t *testing.T) {
 	tokens2 := [][]float32{{9, 9, 9, 9}}
 	body2 := EncodeMVGetResult(true, tokens2, nil, true, false)
 	two := append(append([]byte{}, body...), body2...)
-	f1, t1, _, _, n1, e1 := decodeMVGetResultAt(two, 0)
+	f1, t1, _, _, n1, e1 := DecodeMVGetResultAt(two, 0)
 	if e1 != nil || !f1 || !reflect.DeepEqual(t1, tokens) {
 		t.Fatalf("record 1: found=%v err=%v tokens=%+v", f1, e1, t1)
 	}
-	f2, t2, _, _, n2, e2 := decodeMVGetResultAt(two, n1)
+	f2, t2, _, _, n2, e2 := DecodeMVGetResultAt(two, n1)
 	if e2 != nil || !f2 || !reflect.DeepEqual(t2, tokens2) {
 		t.Fatalf("record 2: found=%v err=%v tokens=%+v", f2, e2, t2)
 	}

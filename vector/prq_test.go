@@ -434,7 +434,7 @@ func TestPRQHNSWPersistSurvives(t *testing.T) {
 		MmapPath:      filepath.Join(dir, "vecs.dat"),
 		GraphMmapPath: filepath.Join(dir, "graph.dat"),
 	}
-	if err := cfg.Validate(); err != nil {
+	if err := ValidateConfig(cfg); err != nil {
 		t.Fatalf("QuantPRQ + mmap config rejected: %v", err)
 	}
 	h, err := newHNSW(cfg)
@@ -498,27 +498,27 @@ func TestPRQHNSWPersistSurvives(t *testing.T) {
 // admits it, PRQLayers must be >= 0, QuantPQM must divide Dim, and OPQ is allowed.
 func TestPRQValidate(t *testing.T) {
 	base := Config{Dim: 64, M: 16, EfConstruction: 100, EfSearch: 32, Metric: L2, Quant: QuantPRQ, QuantPQM: 8}
-	if err := base.Validate(); err != nil {
+	if err := ValidateConfig(base); err != nil {
 		t.Fatalf("valid QuantPRQ rejected: %v", err)
 	}
 	withOPQ := base
 	withOPQ.OPQ = true
-	if err := withOPQ.Validate(); err != nil {
+	if err := ValidateConfig(withOPQ); err != nil {
 		t.Fatalf("QuantPRQ + OPQ rejected: %v", err)
 	}
 	withLayers := base
 	withLayers.PRQLayers = 3
-	if err := withLayers.Validate(); err != nil {
+	if err := ValidateConfig(withLayers); err != nil {
 		t.Fatalf("QuantPRQ PRQLayers=3 rejected: %v", err)
 	}
 	badLayers := base
 	badLayers.PRQLayers = -1
-	if err := badLayers.Validate(); err == nil {
+	if err := ValidateConfig(badLayers); err == nil {
 		t.Fatal("negative PRQLayers should be rejected")
 	}
 	badM := base
 	badM.QuantPQM = 7 // 64 % 7 != 0
-	if err := badM.Validate(); err == nil {
+	if err := ValidateConfig(badM); err == nil {
 		t.Fatal("QuantPQM not dividing Dim should be rejected")
 	}
 }

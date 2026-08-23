@@ -18,195 +18,11 @@ import (
 // re-scores the union of the prefetch candidates). v1 = the DENSE family,
 // single-level (no recursion); leaf kinds are dense + sparse.
 
-// LeafKind tags a QueryLeaf as a dense or a sparse query node.
-type LeafKind uint8
-
-const (
-	// LeafDense is a dense (float vector) query node, executed via SearchFiltered
-	// (distance-ascending) for a prefetch lane or filterFirstByID for a rerank
-	// root.
-	LeafDense LeafKind = iota
-	// LeafSparse is a sparse (indices/values) query node, executed via the sparse
-	// inverted-index lane (score-descending).
-	LeafSparse
-	// LeafMVMaxSim is a multi-vector late-interaction (MaxSim) query node for the
-	// MV family, executed via maxSimSearchLockedNow over the token query matrix
-	// (Tokens), score-descending. Only valid inside a (*MultiVectorIndex).Query;
-	// the MV doc-level sparse field reuses LeafSparse.
-	LeafMVMaxSim
-	// LeafRecommend is a RECOMMEND (Qdrant-parity, v1 AVERAGE_VECTOR, DENSE family)
-	// query node: search by positive/negative EXAMPLE point-ids (Positive/Negative).
-	// It is NEVER executed directly: a coordinator pre-pass resolves the example ids
-	// to their stored vectors, derives normalize(mean(positive) - mean(negative))
-	// (metric-aware) via deriveRecommendVector, and REWRITES this leaf into a
-	// LeafDense leaf (with the example ids excluded from the results) BEFORE the
-	// shared runQuerySpec runs. v1 is dense-only (a Space-bearing recommend leaf is
-	// rejected).
-	LeafRecommend
-	// LeafDiscover is a DISCOVER (Qdrant-parity, v1 DENSE family) query node: a
-	// target + context positive/negative example PAIRS guide a CUSTOM per-candidate
-	// scorer. Unlike LeafRecommend (which is rewritten into a dense leaf), discover
-	// is a REAL execLeaf with a per-candidate context-pair score (score-descending,
-	// ScoreDesc=true — like LeafMVMaxSim), executed via DiscoverVecs over the index
-	// candidates. The leaf carries the RESOLVED target/context VECTORS
-	// (DiscoverTarget / DiscoverContext) the execLeaf consumes; the UNRESOLVED
-	// target/context IDS (DiscoverTargetID / DiscoverContextIDs) are the input a
-	// coordinator pre-pass resolves into the vector fields before runQuerySpec runs.
-	// v1 is dense-only (a Space-bearing discover leaf is rejected).
-	LeafDiscover
-)
-
-// QueryMode selects how the root combines the prefetch lanes.
-type QueryMode uint8
-
-const (
-	// ModeFusion fuses the N prefetch lanes via the configured fusion method.
-	ModeFusion QueryMode = iota
-	// ModeRerank re-scores the UNION of the prefetch candidate ids by the ROOT
-	// leaf, restricted to that candidate set, returning the reranked top-k.
-	ModeRerank
-)
-
-// QueryLeaf is one query node: a dense or a sparse leaf. Kind selects which of
-// Dense / Sparse is populated. K is the leaf's own top-k; LaneK is the per-lane
-// candidate pool pulled before fusion/rerank (0 = the engine default
-// max(K,50)). Filter is the optional per-leaf metadata predicate (zero = no
-// filter). Space names the target NAMED vector space for the named-collection
-// Query API: empty ⇒ a dense-collection leaf (executed against the single dense
-// index), non-empty ⇒ a named-space leaf (executed against that configured
-// space via SearchNamed / SearchNamedSparse). A dense (*Collection).Query
-// rejects any Space-bearing leaf (fail loud — a dense collection has no named
-// spaces); a named (*NamedCollection).Query requires every leaf to carry one.
-type QueryLeaf struct {
-	Kind   LeafKind
-	Dense  []float32
-	Sparse SparseVector
-	Tokens [][]float32
-	K      int
-	Filter Filter
-	LaneK  int
-	Space  string
-	// Positive / Negative are the RECOMMEND example point-ids (LeafRecommend only):
-	// the coordinator resolves them to stored vectors and derives the dense query
-	// vector mean(Positive) - mean(Negative). Positive needs at least one id present
-	// in the collection; Negative is optional. Both ride the wire on the recommend
-	// leaf arm and are cleared when the leaf is rewritten to LeafDense.
-	Positive []uint64
-	Negative []uint64
-	// Strategy selects how a RECOMMEND leaf scores candidates (LeafRecommend only):
-	// RecommendAverageVector (default, 0) = the EXISTING derive-to-dense path (the
-	// leaf is rewritten to a LeafDense by the coordinator pre-pass — byte-identical
-	// to the pre-strategy recommend); RecommendBestScore (1) = a CUSTOM per-candidate
-	// max-similarity scorer (mirrors Discover): the leaf STAYS a LeafRecommend the
-	// execLeaf runs (RecommendVecs over RecPosVecs/RecNegVecs), score-descending
-	// (ScoreDesc=true). The zero value keeps AVERAGE_VECTOR.
-	Strategy RecommendStrategy
-	// RecPosVecs / RecNegVecs are the RESOLVED BEST_SCORE recommend example VECTORS
-	// (LeafRecommend + RecommendBestScore only): the coordinator resolves Positive/
-	// Negative ids → vectors and embeds them here (like Discover embeds its target/
-	// context vectors), so the best-score execLeaf scores candidates against them
-	// without re-resolving ids per partition. RecPosVecs needs at least one vector
-	// (the seed pool + max-positive similarity); RecNegVecs is optional (steers away).
-	RecPosVecs [][]float32
-	RecNegVecs [][]float32
-	// DiscoverTarget / DiscoverContext are the RESOLVED discover target + context-
-	// pair example VECTORS (LeafDiscover only): the discover execLeaf seeds its
-	// candidate pool from DiscoverTarget (or the mean of the pair positives when
-	// nil) and scores each candidate by the DiscoverContext pairs. The coordinator
-	// resolves the discover ids into these fields before runQuerySpec executes the
-	// leaf (or the client supplies the raw vectors directly).
-	DiscoverTarget  []float32
-	DiscoverContext []DiscoverPair
-	// DiscoverTargetID / DiscoverContextIDs are the UNRESOLVED discover target +
-	// context-pair example POINT-IDS (LeafDiscover only): the input the coordinator
-	// resolve pre-pass maps to DiscoverTarget / DiscoverContext. DiscoverTargetID is
-	// 0 or 1 id (the optional anchor; empty ⇒ seed from the context positives). When
-	// the leaf already carries DiscoverContext vectors and no ids, the resolve
-	// pre-pass is skipped.
-	DiscoverTargetID   []uint64
-	DiscoverContextIDs []ContextPair
-	// ScoreDesc tags this leaf's lane ORIENTATION: false = distance-ascending
-	// (the dense / named-dense hnsw lane, where Result.Distance is the rank key
-	// and Score is 0), true = score-descending (the sparse / named-sparse /
-	// MV-MaxSim / MV-sparse lanes, where Result.Score is the rank key). It is set
-	// at leaf construction from the leaf kind+family (dense=false, sparse=true;
-	// MV-MaxSim/MV-sparse=true). The shared fuse path (fuseLanes / foldUnionedLanes)
-	// reads lane0's orientation to pick Fuse (lane0 distance-asc — dense/named, so
-	// Fuse inverts lane0's distance into a score) vs FuseScoreLanes (lane0 score-
-	// desc — MV, so the already-score lane0 is NOT inverted); the per-lane
-	// fan-out truncation sort keys on it (distance-asc → Distance asc; score-desc
-	// → Score desc).
-	ScoreDesc bool
-}
-
-// QuerySource is one prefetch source in the (bounded) query tree: EITHER a flat
-// leaf (Leaf != nil, Spec == nil — the unchanged 1-level path used by every
-// dense/named/MV/recommend/discover query) OR a nested sub-query (Spec != nil,
-// Leaf == nil — a full QuerySpec whose own fused/reranked top-k becomes the
-// parent's lane; Qdrant multi-stage retrieval). Exactly one arm is set. A leaf
-// source is byte/behaviour-identical to the pre-recursion Prefetch []QueryLeaf
-// element; the spec source is the recursion. The decode-time
-// depth bound (maxQueryDepth, enforced in the ops codec) caps the nesting for
-// anti-DoS.
-type QuerySource struct {
-	Leaf *QueryLeaf
-	Spec *QuerySpec
-}
-
-// LeafSource wraps a plain leaf as a QuerySource{Leaf} — the 1-level form. Every
-// existing query (dense/named/MV/recommend/discover) builds its prefetch from leaf
-// sources, so this keeps callers that construct flat specs concise and the leaf
-// path byte-identical to the pre-recursion engine. Exported so the HTTP front end
-// (which builds the engine spec from JSON) and the ops codec can construct leaf
-// sources without reaching into the struct.
-func LeafSource(l QueryLeaf) QuerySource {
-	return QuerySource{Leaf: &l}
-}
-
-// IsLeaf reports whether this source is a flat leaf (the 1-level path). A
-// well-formed source is either a leaf or a nested spec; a leaf source returns its
-// Leaf via Leaf.
-func (s QuerySource) IsLeaf() bool { return s.Leaf != nil }
-
-// QuerySpec is the full unified query: a root leaf, N prefetch sources, the
-// combine mode, the fusion config, and the final top-k. The collection is NOT
-// part of the spec (it lives in the op header). A prefetch source is a leaf
-// (the 1-level path) or a nested QuerySpec (recursion). Today the engine executes
-// only leaf sources (the recursion EXECUTION is separate); a nested spec source is
-// decoded + carried but rejected at runQuerySpec until the recursion is wired.
-type QuerySpec struct {
-	Root     QueryLeaf
-	Prefetch []QuerySource
-	Mode     QueryMode
-	Method   FusionMethod
-	Alpha    float64
-	RRFK     int
-	K        int
-	// GroupBy / GroupSize make this a GROUPED query (Qdrant-parity group_by): when
-	// GroupBy != "" the final ordered top pool is collapsed by the GroupBy metadata
-	// field into the top-K GROUPS (ranked by best member), each with up to GroupSize
-	// hits — mirroring GroupOpts. K is reinterpreted as the number of GROUPS. An empty
-	// GroupBy ⇒ the existing flat-Results path (byte/behaviour-identical). v1 is
-	// DENSE-only (a Space-bearing / named / MV grouped query is rejected fail-loud).
-	GroupBy   string
-	GroupSize int
-}
-
-// QueryResult is the mode-tagged result of (*Collection).Query. In ModeFusion,
-// Lanes holds one unfused lane per prefetch leaf (in prefetch order) AND Fused
-// holds the locally-fused top-k (the P=1 direct answer; a cross-partition
-// coordinator instead unions Lanes and fuses globally). In ModeRerank, Fused
-// holds the reranked top-k and Lanes is nil.
-type QueryResult struct {
-	Mode  QueryMode
-	Fused []Result
-	Lanes [][]Result
-	// Groups is populated ONLY for a GROUPED query (spec.GroupBy != ""): the top-K
-	// groups (ranked by best member) collapsed from the ordered Fused pool by the
-	// GroupBy field via GroupDocuments. Empty (nil) for a flat query — the flat
-	// Fused/Lanes path is then byte/behaviour-identical to a non-grouped query.
-	Groups []Group
-}
+// The unified query data types (LeafKind, QueryMode, QueryLeaf, QuerySource,
+// QuerySpec, QueryResult), the LeafSource constructor + QuerySource.IsLeaf method,
+// the MaxPrefetchSources bound, and the ErrQuerySpecTooDeep /
+// ErrTooManyPrefetchSources sentinels now live in the engine-free vtypes leaf
+// package and are re-exported from vtypes_aliases.go.
 
 // Query API validation errors (fail-loud at the engine edge).
 var (
@@ -243,12 +59,6 @@ var (
 	// resolved context pairs nor context-pair ids (discover requires at least one
 	// context pair to score candidates).
 	ErrQueryDiscoverNoContext = errors.New("vector: discover query leaf has no context pairs")
-	// ErrQuerySpecTooDeep is returned when a nested query tree exceeds the maximum
-	// allowed prefetch nesting depth (anti-DoS): the ops codec enforces the bound at
-	// DECODE (a malicious deeply-nested spec is rejected before any engine work), and
-	// the engine guards defensively. The 1-level (flat leaf-source) path never
-	// approaches the bound.
-	ErrQuerySpecTooDeep = errors.New("vector: query spec nesting exceeds the maximum depth")
 	// ErrQueryNestedNotSupported is returned when a query FAMILY that does not yet
 	// support nested prefetch recursion (the NAMED and MV families in v1) encounters a
 	// nested QuerySpec prefetch source. The DENSE (*Collection).Query supports nested
@@ -262,14 +72,6 @@ var (
 	// dense payload accessor). A named/MV grouped query is rejected fail-loud rather
 	// than silently returning an ungrouped result; named/MV grouping is a follow-up.
 	ErrQueryGroupNotDense = errors.New("vector: grouped query (group_by) is dense-only (named/MV grouping is a follow-up)")
-	// ErrTooManyPrefetchSources is returned when a single query spec node carries more
-	// than MaxPrefetchSources prefetch sources (anti-DoS / OOM guard): an unbounded
-	// breadth of prefetch lanes would materialize an unbounded candidate union at
-	// fusion/rerank. Mirrors ErrQuerySpecTooDeep (the depth bound) for breadth: checked
-	// RECURSIVELY at every nested spec node, at BOTH the ops decode and the engine
-	// validation entry, so a malformed spec fails identically wherever it enters. A
-	// realistic query (a handful of lanes) never approaches the bound.
-	ErrTooManyPrefetchSources = errors.New("vector: query spec node has too many prefetch sources")
 )
 
 // MaxQueryDepthExec is the DEFENSIVE execution-side nesting bound, mirroring the
@@ -280,16 +82,6 @@ var (
 // the decode bound so a spec that decodes cleanly also executes. Exported so the
 // coordinator's mergeTreeFusionNode can mirror the same guard for in-memory specs.
 const MaxQueryDepthExec = 4
-
-// MaxPrefetchSources bounds the NUMBER of prefetch sources at any single query spec
-// node (breadth), the structural companion to maxQueryDepthExec (depth): together they
-// bound the per-level candidate materialization at fusion/rerank to
-// MaxPrefetchSources × MaxLanePool, so a pathological wide/deep spec cannot OOM the
-// coordinator. A node over this bound is rejected fail-loud (ErrTooManyPrefetchSources)
-// at every nesting level. Exported so the ops decode reads the SAME const as the engine
-// validation (single source of truth). Structural safety bound; promote to config in a
-// follow-up.
-const MaxPrefetchSources = 64
 
 // MaxLanePool clamps the per-lane candidate-pool size (leafLanePool / SourceLanePool):
 // a lane requesting LaneK above this is capped to this ceiling — exactly equivalent to
@@ -1759,7 +1551,7 @@ func (c *Collection) rerankByRoot(root QueryLeaf, cands []uint64, k int) ([]Resu
 	}
 	switch root.Kind {
 	case LeafDense:
-		pred, err := root.Filter.Compile()
+		pred, err := CompileFilter(root.Filter)
 		if err != nil {
 			return nil, err
 		}

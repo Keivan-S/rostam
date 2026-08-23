@@ -30,120 +30,10 @@ import (
 // Vectors are L2-normalized (the index is Cosine), so MaxSim's per-pair
 // similarity is a single dot product on the SIMD kernel.
 
-// MultiVectorConfig configures a MultiVectorIndex. Only the token dimensionality
-// is required; the rest take the standard HNSW defaults. The metric is always
-// Cosine — MaxSim is defined over normalized vectors.
-type MultiVectorConfig struct {
-	Dim            int   // token vector dimensionality, required
-	M              int   // graph degree (0 = default 16)
-	EfConstruction int   // build width (0 = default 200)
-	EfSearch       int   // query width (0 = default 64)
-	Seed           int64 // RNG seed for level assignment
-
-	// Quant selects token-vector quantization for the first-stage graph
-	// (QuantNone | QuantSQ8 | QuantBQ1). With Persistent, quantization moves the
-	// float32 token vectors off-heap into an mmap file (the memory win for large
-	// ColBERT token sets), leaving only the compact codes resident; MaxSim
-	// rerank still reads exact float32 from the mapping. A Persistent index
-	// defaults Quant to QuantSQ8 when unset.
-	Quant         QuantMode
-	RescoreFactor int // over-fetch multiple for quantized first-stage rescore (0 = default)
-
-	// FilterFirstRelativeBP mirrors the dense Config knob: the opt-in relative
-	// selectivity gate (basis points of the live DOCUMENT count; 0 = off = byte-
-	// identical). Threaded into the inner Config so the MV search filter-first gate
-	// (mvFilterFirstCands) honors it. Validated by newIndex (0..10000).
-	// Honored by named/MV SEARCH only; scroll and order_by remain bound to the
-	// absolute cap (a pre-existing limitation).
-	FilterFirstRelativeBP int `json:"filter_first_relative_bp,omitempty"`
-
-	// IndexType selects the inner token index's backing engine. IndexHNSW (0, the
-	// default) keeps the historical per-token graph index — a config that leaves
-	// IndexType (and the IVF knobs below) zero is byte/behaviour-identical to
-	// before. IndexIVF builds an IVF-Flat / IVF-PQ inner index, compressing the
-	// dominant MV memory cost (many token vectors per doc). The inner index is
-	// ALWAYS snapshot-persisted (IVF rejects mmap-Persistent), so innerConfig sets
-	// the inner Config Persistent=false for an IVF inner index — the maps mmap
-	// sidecar (doc/token bookkeeping) is independent and unaffected.
-	//
-	// NOTE: the MV inner index is built INCREMENTALLY (every token via Insert,
-	// never BuildConcurrent). An IVF inner index therefore DETERMINISTICALLY
-	// auto-trains once its live token count crosses IVFTrainThreshold (the engine's
-	// synchronous, under-lock auto-train trigger) — at which point IVF coarse
-	// pruning and IVF-PQ inner compression engage. Below the threshold it stays
-	// UNTRAINED and searches via exact brute force (CORRECT, uncompressed).
-	IndexType IndexType `json:"index_type,omitempty"`
-	// IVFNlist / IVFNprobe / IVFPQ / IVFPQM / IVFRerank / OPQ mirror the dense
-	// Config IVF knobs (see Config). Ignored unless IndexType == IndexIVF.
-	IVFNlist  int  `json:"ivf_nlist,omitempty"`
-	IVFNprobe int  `json:"ivf_nprobe,omitempty"`
-	IVFPQ     bool `json:"ivf_pq,omitempty"`
-	IVFPQM    int  `json:"ivf_pq_m,omitempty"`
-	IVFRerank bool `json:"ivf_rerank,omitempty"`
-	OPQ       bool `json:"opq,omitempty"`
-	// OPQIters mirrors the dense Config knob: full-OPQ iterative Procrustes
-	// refinement on the inner token index (0 = 1 = the v1 single-random-rotation
-	// behavior, byte-identical; > 1 = that many refine iterations). Ignored unless
-	// OPQ is set. Validated to [0, maxOPQIters] by the inner Config Validate.
-	OPQIters int `json:"opq_iters,omitempty"`
-	// IVFTrainThreshold mirrors the dense Config knob: the live token count at which
-	// the incrementally-built QUANTIZED inner index (IVF coarse/residual codebooks,
-	// or HNSW-PQ codebooks) deterministically auto-trains. 0 =
-	// defaultIVFTrainThreshold. Ignored for a non-quantized HNSW inner index.
-	IVFTrainThreshold int `json:"ivf_train_threshold,omitempty"`
-
-	// IVFDriftRetrain / IVFDriftGrowthFactor / IVFDriftFactor mirror the dense Config
-	// drift-retrain knobs (see Config): the inner IVF token index opts into
-	// deterministic auto-retrain-on-drift. Ignored unless IndexType == IndexIVF.
-	IVFDriftRetrain      bool    `json:"ivf_drift_retrain,omitempty"`
-	IVFDriftGrowthFactor float64 `json:"ivf_drift_growth_factor,omitempty"`
-	IVFDriftFactor       float64 `json:"ivf_drift_factor,omitempty"`
-
-	// PQDropVecs mirrors the dense Config knob (HNSW-PQ only, Quant == QuantPQ):
-	// once this collection's INCREMENTALLY-built HNSW-PQ inner index auto-trains
-	// (its live token count crosses IVFTrainThreshold), the resident float32 token
-	// vectors are DROPPED so only the M-byte codes stay resident (maximum
-	// compression; first-stage search becomes ADC-only, MaxSim rerank reconstructs
-	// approximate floats from the codes). Honored because the MV inner index is
-	// built incrementally (the float-drop folds into the auto-train). Requires
-	// Quant == QuantPQ (else ErrInvalidPQDropVecs at create, via
-	// innerConfig().Validate()). Default false => byte/behaviour-identical to today.
-	PQDropVecs bool `json:"pq_drop_vecs,omitempty"`
-
-	// Persistent enables the mmap-backed, instant-restart mode. When set, the
-	// store fills the file paths below; callers set only Quant (or leave it to
-	// default). Persistent requires Quant != QuantNone (mmap needs codes).
-	Persistent    bool
-	MmapPath      string // store-managed: token float32 vectors (mmap)
-	GraphMmapPath string // store-managed: level-0 graph slab (mmap)
-
-	// WAL enables the single-node WAL HEAP-checkpoint durability mode: each
-	// successful mutator is appended + fsync'd before returning, and open replays
-	// the WAL tail on top of a restored heap snapshot file. It is MUTUALLY EXCLUSIVE
-	// with Persistent (the mmap instant-restart mode) — WAL && Persistent is rejected
-	// (ErrInvalidWAL), mirroring the dense WAL rule. Forced OFF on the cluster path
-	// (Raft/SnapshotAll is the durability authority there). Heap-only when false and
-	// Persistent false (historical in-memory behavior). WALNoSync skips the per-op
-	// fsync (faster, weaker durability — for tests/throughput).
-	WAL       bool
-	WALNoSync bool
-
-	// SuppressSweep disables the background per-key-TTL sweeper (startSweeper becomes
-	// a no-op). Set by the persistent-cluster policy (effectiveClusterMVConfig,
-	// alongside the forced WAL=off): under Raft replication the wall-clock sweeper
-	// would diverge committed state across replicas whose clocks differ, so it is
-	// turned off and expired keys are filtered lazily at read time (client staleness
-	// only). Default false = single-node behavior (sweeper on), byte-identical (#4
-	// vector TTL determinism, B3a analog).
-	SuppressSweep bool
-
-	// Partitions is the number of partitions the collection is split into on the
-	// clustered backend. 0 or 1 = single-partition (default; routes by bare
-	// collection name exactly as before). >1 distributes documents by hash(id)%P
-	// across partitions and makes search a scatter-gather fan-out. Ignored by the
-	// single-node directStore (always treated as 1). Immutable after creation.
-	Partitions int
-}
+// MultiVectorConfig (the MultiVectorIndex configuration) now lives in the
+// engine-free vtypes leaf package and is re-exported from vtypes_aliases.go. Its
+// engine-coupled derivations (metaPath / mapsPath / mvInnerConfig) are the free
+// functions mvMetaPath / mvMapsPath / mvInnerConfig below.
 
 // MultiSearchOpts tunes a multi-vector search.
 type MultiSearchOpts struct {
@@ -171,13 +61,8 @@ type MultiSearchOpts struct {
 	Filter Filter
 }
 
-// MultiResult is one scored document from a multi-vector search. Score is the
-// MaxSim relevance (higher = better), not a distance.
-type MultiResult struct {
-	ID       uint64   `json:"id"`
-	Score    float32  `json:"score"`
-	Metadata Metadata `json:"metadata,omitempty"`
-}
+// MultiResult (one scored document from a multi-vector search) now lives in the
+// engine-free vtypes leaf package and is re-exported from vtypes_aliases.go.
 
 // MultiVectorIndex is a late-interaction index: many vectors per document, MaxSim
 // scoring. Safe for concurrent use.
@@ -488,28 +373,30 @@ func (m *MultiVectorIndex) retire(cleanup func()) {
 	}
 }
 
-// metaPath / mapsPath derive the instant-restart sidecar and the doc<->token
+// mvMetaPath / mvMapsPath derive the instant-restart sidecar and the doc<->token
 // maps sidecar from the store-managed vectors path (which ends in ".vecs").
-// Empty in non-persistent mode.
-func (cfg MultiVectorConfig) metaPath() string {
+// Empty in non-persistent mode. They are free functions (not methods) because
+// MultiVectorConfig is a data-only type in the engine-free vtypes leaf.
+func mvMetaPath(cfg MultiVectorConfig) string {
 	if cfg.MmapPath == "" {
 		return ""
 	}
 	return strings.TrimSuffix(cfg.MmapPath, ".vecs") + ".meta"
 }
 
-func (cfg MultiVectorConfig) mapsPath() string {
+func mvMapsPath(cfg MultiVectorConfig) string {
 	if cfg.MmapPath == "" {
 		return ""
 	}
 	return strings.TrimSuffix(cfg.MmapPath, ".vecs") + ".maps"
 }
 
-// innerConfig maps a MultiVectorConfig onto the Config of the inner token-vector
+// mvInnerConfig maps a MultiVectorConfig onto the Config of the inner token-vector
 // HNSW, filling HNSW defaults and the quantization / mmap backing. In Persistent
 // mode the float32 vectors are mmap-backed (off-heap) and quantization defaults
-// to SQ8.
-func (cfg MultiVectorConfig) innerConfig() Config {
+// to SQ8. A free function (not a method) because MultiVectorConfig is a data-only
+// type in the engine-free vtypes leaf.
+func mvInnerConfig(cfg MultiVectorConfig) Config {
 	m, efc, efs := cfg.M, cfg.EfConstruction, cfg.EfSearch
 	if m <= 0 {
 		m = 16
@@ -537,7 +424,7 @@ func (cfg MultiVectorConfig) innerConfig() Config {
 	}
 	// IVF / IVF-PQ inner index. IndexHNSW (the zero value) leaves these zero and
 	// the inner Config is byte-identical to before. The Config is Validated by
-	// newIndex (newHNSW/newIVF both call cfg.Validate()), so a bad IVF param fails
+	// newIndex (newHNSW/newIVF both call ValidateConfig(cfg)), so a bad IVF param fails
 	// loud at NewMultiVectorIndex.
 	c.IndexType = cfg.IndexType
 	c.IVFNlist = cfg.IVFNlist
@@ -597,8 +484,8 @@ func newMultiShell(cfg MultiVectorConfig, idx VectorIndex) *MultiVectorIndex {
 		dim:           cfg.Dim,
 		persistent:    cfg.Persistent,
 		suppressSweep: cfg.SuppressSweep,
-		metaPath:      cfg.metaPath(),
-		mapsPath:      cfg.mapsPath(),
+		metaPath:      mvMetaPath(cfg),
+		mapsPath:      mvMapsPath(cfg),
 		cfg:           cfg,
 	}
 }
@@ -617,9 +504,9 @@ func NewMultiVectorIndex(cfg MultiVectorConfig) (*MultiVectorIndex, error) {
 	// IndexIVF (IVF / IVF-PQ — compressing the dominant MV memory cost). IndexHNSW
 	// (the zero value) builds the historical inner graph index (byte/behaviour-
 	// identical). newIndex validates the inner Config (newHNSW/newIVF both call
-	// cfg.Validate()), so a bad inner IVF param fails loud here. innerConfig forces
+	// ValidateConfig(cfg)), so a bad inner IVF param fails loud here. mvInnerConfig forces
 	// the inner Persistent=false for an IVF inner index (snapshot-only).
-	idx, err := newIndex(cfg.innerConfig())
+	idx, err := newIndex(mvInnerConfig(cfg))
 	if err != nil {
 		return nil, err
 	}
@@ -1394,7 +1281,7 @@ func (m *MultiVectorIndex) mvHybridLanesLocked(query [][]float32, sparseQ *Spars
 			return nil, nil, verr
 		}
 	}
-	pred, cerr := opts.Filter.Compile()
+	pred, cerr := CompileFilter(opts.Filter)
 	if cerr != nil {
 		return nil, nil, cerr
 	}
@@ -1829,7 +1716,7 @@ func (m *MultiVectorIndex) Search(query [][]float32, k int, opts MultiSearchOpts
 	// filter compiles to a nil predicate: the hot path below stays
 	// byte/behaviour-identical to no-filter (pred == nil gates both the
 	// candidate-budget widen and the per-candidate check).
-	pred, err := opts.Filter.Compile()
+	pred, err := CompileFilter(opts.Filter)
 	if err != nil {
 		return nil, err
 	}
@@ -2012,30 +1899,9 @@ func maxSimScore(query [][]float32, docVecs [][]float32) float32 {
 // re-create new-generation partitions with the same configuration).
 func (m *MultiVectorIndex) Config() MultiVectorConfig { return m.cfg }
 
-// MultiScanRecord is a complete, live document exported by ScanDocuments:
-// everything an offline MV resplit needs to re-insert it into a re-hashed
-// generation (id, its token vectors, metadata). Tokens and Metadata are owned
-// deep copies, safe to retain and mutate without corrupting the index.
-type MultiScanRecord struct {
-	ID       uint64
-	Tokens   [][]float32 // one row per token vector; owned copies of the stored (normalized) vectors
-	Metadata Metadata    // owned copy; nil if none
-	Version  uint64      // per-document CAS version (0 if absent), carried so an MV reshard backfill reinserts version-preserving (mirror dense ScanRecord.Version)
-	// KeyExpires is the document's per-key payload TTL map (payload key -> ABSOLUTE
-	// unix-millis deadline), an OWNED clone of m.keyTTL[docID]. nil/empty when the
-	// document has no per-key TTL (the common case). It is carried through the MV
-	// scan codec and re-applied VERBATIM by the reshard backfill (NOT recomputed
-	// now+ttl) so resharded documents keep their original absolute deadlines
-	// time-stable. Mirrors dense ScanRecord.KeyExpires.
-	KeyExpires map[string]uint64
-	// Sparse is the document's OPTIONAL doc-level sparse vector, an OWNED clone of
-	// m.docSparse[docID]. nil when the document has no sparse vector (dense-only MV,
-	// the common case). It is carried through the MV scan codec and re-applied
-	// VERBATIM by the reshard backfill (MultiRestoreAddSparse / MultiAddIfAbsentVersionSparse)
-	// so resharded documents keep their sparse vector — without it the per-doc sparse
-	// field is silently dropped across reshard (the scan→reinsert copy loses it).
-	Sparse *SparseVector
-}
+// MultiScanRecord (a complete, live MV document exported by ScanDocuments) now
+// lives in the engine-free vtypes leaf package and is re-exported from
+// vtypes_aliases.go.
 
 // ScanDocuments enumerates every LIVE document as a self-contained
 // MultiScanRecord. A docID present in docTokens is live (the index has no
@@ -2097,7 +1963,7 @@ func (m *MultiVectorIndex) ScanDocuments() []MultiScanRecord {
 // id remains). The MV-family analogue of NamedCollection.ScrollDocsPage. Compiles
 // the filter so a malformed filter fails loud at the edge. See scrollPage.
 func (m *MultiVectorIndex) ScrollDocsPage(filter Filter, afterID uint64, hasAfter bool, limit int) (docs []Document, nextAfter uint64, hasMore bool, err error) {
-	pred, err := filter.Compile()
+	pred, err := CompileFilter(filter)
 	if err != nil {
 		return nil, 0, false, err // fail loud on a malformed filter
 	}
@@ -2115,7 +1981,7 @@ func (m *MultiVectorIndex) ScrollDocsPage(filter Filter, afterID uint64, hasAfte
 // v2 next-cursor. order == nil falls back to the id-ascending ScrollDocsPage path.
 // The MV-family analogue of Collection.ScrollDocsPageOrder.
 func (m *MultiVectorIndex) ScrollDocsPageOrder(filter Filter, order *OrderBy, afterID uint64, afterKey float64, hasAfter bool, limit int) (docs []Document, nextAfter uint64, hasMore bool, err error) {
-	pred, err := filter.Compile()
+	pred, err := CompileFilter(filter)
 	if err != nil {
 		return nil, 0, false, err // fail loud on a malformed filter
 	}

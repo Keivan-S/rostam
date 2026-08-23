@@ -374,7 +374,7 @@ func TestComplementGateArmsForMultiConjunctRanges(t *testing.T) {
 
 	// The equivalence of the two-conjunct gate is what makes arming it worth
 	// anything: it must reject exactly what the predicate rejects.
-	pred, err := both.Compile()
+	pred, err := CompileFilter(both)
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}

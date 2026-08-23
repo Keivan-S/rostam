@@ -42,8 +42,8 @@ func TestBM25StatsArgsRoundTrip(t *testing.T) {
 	}
 
 	// Truncation is fail-loud.
-	if _, _, _, _, _, err := DecodeBM25StatsArgs(base[:2]); !errors.Is(err, errVectorArgsTruncated) {
-		t.Fatalf("truncated args: err=%v want errVectorArgsTruncated", err)
+	if _, _, _, _, _, err := DecodeBM25StatsArgs(base[:2]); !errors.Is(err, ErrVectorArgsTruncated) {
+		t.Fatalf("truncated args: err=%v want ErrVectorArgsTruncated", err)
 	}
 }
 
@@ -69,8 +69,8 @@ func TestBM25StatsResultRoundTrip(t *testing.T) {
 		t.Fatalf("empty: n=%d tok=%d df=%v err=%v", n, tok, gotDF, err)
 	}
 
-	if _, _, _, err := DecodeBM25StatsResult(enc[:10]); !errors.Is(err, errVectorArgsTruncated) {
-		t.Fatalf("truncated result: err=%v want errVectorArgsTruncated", err)
+	if _, _, _, err := DecodeBM25StatsResult(enc[:10]); !errors.Is(err, ErrVectorArgsTruncated) {
+		t.Fatalf("truncated result: err=%v want ErrVectorArgsTruncated", err)
 	}
 }
 
@@ -88,9 +88,9 @@ func TestBM25StatsRouting(t *testing.T) {
 	if !ok || name != "default/mycoll" {
 		t.Fatalf("CollectionNameFor = (%q,%v) want default/mycoll,true", name, ok)
 	}
-	off, ok := collectionNameOffset("vector_bm25_stats")
+	off, ok := CollectionNameOffset("vector_bm25_stats")
 	if !ok || off != 0 {
-		t.Fatalf("collectionNameOffset = (%d,%v) want 0,true", off, ok)
+		t.Fatalf("CollectionNameOffset = (%d,%v) want 0,true", off, ok)
 	}
 	// ReadConsistencyOf must peek the rc for the phase-0 Linearizable barrier.
 	if rc, ok := ReadConsistencyOf("vector_bm25_stats", args); !ok || rc != ConsistencyLinearizable {

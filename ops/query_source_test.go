@@ -7,7 +7,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	"github.com/rostamlabs/rostam/grpcapi/pb"
+	"github.com/rostamlabs/rostam/sdk/pb"
 	"github.com/rostamlabs/rostam/vector"
 )
 
@@ -27,7 +27,7 @@ func TestQuerySourceFlatBackCompat(t *testing.T) {
 		Prefetch: []*pb.QueryLeaf{denseLeafPB([]float32{1, 0}), denseLeafPB([]float32{0, 1})},
 		K:        5,
 	}
-	spec, err := querySpecFromProto(p, 0)
+	spec, err := QuerySpecFromProto(p, 0)
 	if err != nil {
 		t.Fatalf("decode flat spec: %v", err)
 	}
@@ -56,7 +56,7 @@ func TestQuerySourceLeafOnlyEncodesFlat(t *testing.T) {
 		),
 		K: 3,
 	}
-	p, err := querySpecToProto(spec)
+	p, err := QuerySpecToProto(spec)
 	if err != nil {
 		t.Fatalf("encode leaf-only spec: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestQuerySourceNestedRoundTrip(t *testing.T) {
 		K: 4,
 	}
 
-	p, err := querySpecToProto(spec)
+	p, err := QuerySpecToProto(spec)
 	if err != nil {
 		t.Fatalf("encode nested spec: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestQuerySourceNestedRoundTrip(t *testing.T) {
 	if uerr := proto.Unmarshal(blob, &p2); uerr != nil {
 		t.Fatalf("unmarshal: %v", uerr)
 	}
-	got, derr := querySpecFromProto(&p2, 0)
+	got, derr := QuerySpecFromProto(&p2, 0)
 	if derr != nil {
 		t.Fatalf("decode nested spec: %v", derr)
 	}
@@ -155,20 +155,20 @@ func nestProto(depth int) *pb.QuerySpec {
 	return inner
 }
 
-// TestQuerySourceDepthBound: the decode-time depth bound (maxQueryDepth) rejects a
+// TestQuerySourceDepthBound: the decode-time depth bound (MaxQueryDepth) rejects a
 // nested tree deeper than the bound fail-loud with ErrQuerySpecTooDeep BEFORE any
 // engine work (anti-DoS); a tree AT the bound decodes fine.
 func TestQuerySourceDepthBound(t *testing.T) {
-	// At the bound: maxQueryDepth nested spec-levels (root at depth 0, the deepest
-	// spec source decoded at depth maxQueryDepth) must decode without error.
-	atBound := nestProto(maxQueryDepth)
-	if _, err := querySpecFromProto(atBound, 0); err != nil {
-		t.Fatalf("spec nested to the bound (%d) should decode, got: %v", maxQueryDepth, err)
+	// At the bound: MaxQueryDepth nested spec-levels (root at depth 0, the deepest
+	// spec source decoded at depth MaxQueryDepth) must decode without error.
+	atBound := nestProto(MaxQueryDepth)
+	if _, err := QuerySpecFromProto(atBound, 0); err != nil {
+		t.Fatalf("spec nested to the bound (%d) should decode, got: %v", MaxQueryDepth, err)
 	}
 
 	// One past the bound: ErrQuerySpecTooDeep, fail-loud at decode.
-	tooDeep := nestProto(maxQueryDepth + 1)
-	_, err := querySpecFromProto(tooDeep, 0)
+	tooDeep := nestProto(MaxQueryDepth + 1)
+	_, err := QuerySpecFromProto(tooDeep, 0)
 	if err != vector.ErrQuerySpecTooDeep {
 		t.Fatalf("over-deep spec err = %v, want ErrQuerySpecTooDeep", err)
 	}
