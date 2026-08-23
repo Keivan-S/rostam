@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
-package client
+package rostam
 
 import (
 	"context"
 	"errors"
 	"testing"
 
+	"github.com/rostamlabs/rostam/client"
 	"github.com/rostamlabs/rostam/sdk/vtypes"
 )
 
@@ -16,15 +17,15 @@ import (
 func TestGetOnMissingCollection(t *testing.T) {
 	addr, stop := startTestStack(t)
 	defer stop()
-	c, err := New(Config{Servers: []string{addr}})
+	c, err := client.New(client.Config{Servers: []string{addr}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = c.Close() }()
 
 	col := c.Collection("never-created")
-	_, err = col.Get(context.Background(), GetRequest{ID: 1})
-	if !errors.Is(err, ErrCollectionNotFound) {
+	_, err = col.Get(context.Background(), client.GetRequest{ID: 1})
+	if !errors.Is(err, client.ErrCollectionNotFound) {
 		t.Fatalf("Get on never-created collection = %v, want ErrCollectionNotFound", err)
 	}
 }
@@ -34,15 +35,15 @@ func TestGetOnMissingCollection(t *testing.T) {
 func TestGetBatchOnMissingCollection(t *testing.T) {
 	addr, stop := startTestStack(t)
 	defer stop()
-	c, err := New(Config{Servers: []string{addr}})
+	c, err := client.New(client.Config{Servers: []string{addr}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = c.Close() }()
 
 	col := c.Collection("never-created")
-	_, err = col.GetBatch(context.Background(), GetBatchRequest{IDs: []uint64{1, 2}})
-	if !errors.Is(err, ErrCollectionNotFound) {
+	_, err = col.GetBatch(context.Background(), client.GetBatchRequest{IDs: []uint64{1, 2}})
+	if !errors.Is(err, client.ErrCollectionNotFound) {
 		t.Fatalf("GetBatch on never-created collection = %v, want ErrCollectionNotFound", err)
 	}
 }
@@ -52,14 +53,14 @@ func TestGetAndGetBatch(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	if err := col.Upsert(ctx, WriteRequest{
+	if err := col.Upsert(ctx, client.WriteRequest{
 		ID: 1, Vector: []float32{0.1, 0.2, 0.3, 0.4},
 		Metadata: vtypes.Metadata{"title": vtypes.NewString("Hello")},
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	p, err := col.Get(ctx, GetRequest{ID: 1, WithVector: true, WithPayload: true})
+	p, err := col.Get(ctx, client.GetRequest{ID: 1, WithVector: true, WithPayload: true})
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -67,11 +68,11 @@ func TestGetAndGetBatch(t *testing.T) {
 		t.Fatalf("Get returned %+v", p)
 	}
 
-	if _, err := col.Get(ctx, GetRequest{ID: 999, WithVector: true}); err != ErrNotFound {
+	if _, err := col.Get(ctx, client.GetRequest{ID: 999, WithVector: true}); err != client.ErrNotFound {
 		t.Fatalf("Get missing = %v, want ErrNotFound", err)
 	}
 
-	resp, err := col.GetBatch(ctx, GetBatchRequest{IDs: []uint64{1, 999}, WithVector: true, WithPayload: true})
+	resp, err := col.GetBatch(ctx, client.GetBatchRequest{IDs: []uint64{1, 999}, WithVector: true, WithPayload: true})
 	if err != nil {
 		t.Fatalf("GetBatch: %v", err)
 	}
@@ -89,7 +90,7 @@ func TestScroll(t *testing.T) {
 	ctx := context.Background()
 
 	for _, id := range []uint64{1, 2, 3} {
-		if err := col.Upsert(ctx, WriteRequest{
+		if err := col.Upsert(ctx, client.WriteRequest{
 			ID: id, Vector: []float32{0.1, 0.2, 0.3, 0.4},
 			Content:  "doc",
 			Metadata: vtypes.Metadata{"title": vtypes.NewString("Hello")},
@@ -98,7 +99,7 @@ func TestScroll(t *testing.T) {
 		}
 	}
 
-	resp, err := col.Scroll(ctx, ScrollRequest{Filter: vtypes.Filter{}, Limit: 10})
+	resp, err := col.Scroll(ctx, client.ScrollRequest{Filter: vtypes.Filter{}, Limit: 10})
 	if err != nil {
 		t.Fatalf("Scroll: %v", err)
 	}
