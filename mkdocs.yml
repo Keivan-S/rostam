@@ -19,6 +19,7 @@ docs_dir: docs
 #                            would hand an attacker a prioritised list.
 exclude_docs: |
   superpowers/
+  RELEASING_MODULES.md
 
 theme:
   name: material

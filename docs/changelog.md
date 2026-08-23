@@ -5,10 +5,22 @@ Notable user-visible changes. Entries that alter existing behaviour are marked
 
 ## Unreleased
 
+- **The Go client is now its own module — `go get github.com/rostamlabs/rostam/client`
+  pulls no engine.** The client-facing leaf packages moved into a shared
+  `github.com/rostamlabs/rostam/sdk` module (`sdk/vtypes`, `sdk/wire` — was
+  `ops/wire`, `sdk/pb` — was `grpcapi/pb`), and `client` became its own module
+  requiring only `sdk`. So an external `go get` of the client resolves a small
+  graph (sdk + protobuf/xxhash/puddle/x/sync) and never downloads the engine
+  module or its `require`s. The `client` import path is **unchanged**. **Breaking
+  (direct importers of the moved packages only):** if you imported
+  `.../ops/wire`, `.../grpcapi/pb`, or `.../vtypes` directly, update to
+  `.../sdk/wire`, `.../sdk/pb`, `.../sdk/vtypes`. No wire or behaviour change.
+  See `docs/RELEASING_MODULES.md` for the tag order.
+
 - **New `vtypes` package: the engine-free vector data types.** The pure data
   types of the vector API (`Config`, `Filter`, `Value`, `Metadata`, `QuerySpec`,
   `Result`, `GroupOpts`, `OrderBy`, …) now live in
-  `github.com/rostamlabs/rostam/vtypes`; the `vector` package re-exports every
+  `github.com/rostamlabs/rostam/sdk/vtypes`; the `vector` package re-exports every
   one via an alias, so `vector.Config` etc. keep working unchanged. This lets
   the wire codec and network client depend on the types without pulling in the
   engine — `client` and `ops/wire` now transitively import zero engine packages
