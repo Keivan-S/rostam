@@ -25,9 +25,12 @@ so a `client` tag whose `sdk` version is untagged is unresolvable.
 To verify a client tag is engine-free before announcing it:
 
 ```sh
-cd client && GOWORK=off go list -m -f '{{.Path}}' all \
-  | grep -qx 'github.com/rostamlabs/rostam' \
-  && echo "FAIL: engine in graph" || echo "PASS: engine-free"
+cd client
+paths=$(GOWORK=off go list -m -f '{{.Path}}' all) || { echo "FAIL: go list errored"; exit 1; }
+if printf '%s\n' "$paths" | grep -qx 'github.com/rostamlabs/rostam'; then
+  echo "FAIL: engine in graph"; exit 1
+fi
+echo "PASS: engine-free"
 ```
 
 (CI's `test-client-module` job runs this on every PR.)
