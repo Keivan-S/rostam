@@ -7,8 +7,8 @@ import (
 	"encoding/json"
 	"strconv"
 
-	"github.com/rostamlabs/rostam/sdk/wire"
 	"github.com/rostamlabs/rostam/sdk/vtypes"
+	"github.com/rostamlabs/rostam/sdk/wire"
 )
 
 // SearchResponse carries ranked results plus explicit degraded-partition info.

@@ -15,8 +15,8 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/rostamlabs/rostam"
-	"github.com/rostamlabs/rostam/sdk/pb"
 	"github.com/rostamlabs/rostam/ops"
+	"github.com/rostamlabs/rostam/sdk/pb"
 )
 
 // Strict-linearizable reads: prove read_consistency=2 (Linearizable)

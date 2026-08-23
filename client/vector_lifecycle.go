@@ -6,8 +6,8 @@ import (
 	"context"
 	"strings"
 
-	"github.com/rostamlabs/rostam/sdk/wire"
 	"github.com/rostamlabs/rostam/sdk/vtypes"
+	"github.com/rostamlabs/rostam/sdk/wire"
 )
 
 // CreateRequest configures a new collection. Only Dim is required. Set FullText

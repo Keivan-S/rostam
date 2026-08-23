@@ -38,3 +38,8 @@ hand-edit an import path across the tree, do NOT let a blanket rewrite touch the
 serialized descriptor in `*.pb.go` — the `go_package` string is length-prefixed,
 so shortening it corrupts the descriptor (a `slice bounds` panic at init).
 Regenerate with the proto toolchain instead.
+
+Note: `sdk/pb/service.proto` (the gRPC service) generates into the **root**
+module's `grpcapi/grpcsvc` package (`go_package = .../grpcapi/grpcsvc`), not into
+`sdk`. So regenerating it writes across a module boundary — expected, but keep
+the `go_package` option and the output location in sync.

@@ -17,8 +17,8 @@ import (
 
 	"github.com/rostamlabs/rostam"
 	"github.com/rostamlabs/rostam/grpcapi"
-	"github.com/rostamlabs/rostam/sdk/pb"
 	"github.com/rostamlabs/rostam/httpapi"
+	"github.com/rostamlabs/rostam/sdk/pb"
 )
 
 // TestRemoteScrollCursorPaginationHTTP drives cursor pagination end-to-end over

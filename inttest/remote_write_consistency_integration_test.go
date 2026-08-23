@@ -16,8 +16,8 @@ import (
 
 	"github.com/rostamlabs/rostam"
 	"github.com/rostamlabs/rostam/grpcapi"
-	"github.com/rostamlabs/rostam/sdk/pb"
 	"github.com/rostamlabs/rostam/httpapi"
+	"github.com/rostamlabs/rostam/sdk/pb"
 )
 
 // TestRemoteWriteConsistencyHTTP proves the TRANSPORT plumbing for tunable write
