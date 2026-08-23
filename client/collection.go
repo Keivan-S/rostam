@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/rostamlabs/rostam/ops/wire"
+	"github.com/rostamlabs/rostam/sdk/wire"
 )
 
 // Collection is a typed, name-scoped handle for vector operations against a

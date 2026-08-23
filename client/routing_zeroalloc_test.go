@@ -8,7 +8,7 @@ import (
 	"net"
 	"testing"
 
-	"github.com/rostamlabs/rostam/ops/wire"
+	"github.com/rostamlabs/rostam/sdk/wire"
 )
 
 // echoOKServer accepts connections and, for every request frame it reads,

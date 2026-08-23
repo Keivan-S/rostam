@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/rostamlabs/rostam/ops/wire"
+	"github.com/rostamlabs/rostam/sdk/wire"
 )
 
 // OpKind, KeyExtractor, KeyExtractorInto, and RouteLayout are aliases onto the

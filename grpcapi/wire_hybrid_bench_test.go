@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/rostamlabs/rostam/grpcapi/grpcsvc"
-	"github.com/rostamlabs/rostam/grpcapi/pb"
+	"github.com/rostamlabs/rostam/sdk/pb"
 )
 
 const (

@@ -11,7 +11,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/rostamlabs/rostam/ops/wire"
+	"github.com/rostamlabs/rostam/sdk/wire"
 )
 
 // Config governs a Client and its per-server pools.

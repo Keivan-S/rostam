@@ -2,7 +2,7 @@
 
 package ops
 
-import "github.com/rostamlabs/rostam/ops/wire"
+import "github.com/rostamlabs/rostam/sdk/wire"
 
 // This file re-exports the ops/wire leaf's client-safe wire-codec surface under
 // their original ops.* names, so every existing server-side call site (cluster,

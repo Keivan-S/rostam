@@ -2,7 +2,7 @@
 
 package vector
 
-import "github.com/rostamlabs/rostam/vtypes"
+import "github.com/rostamlabs/rostam/sdk/vtypes"
 
 // This file re-exports the engine-free data types that now live in the vtypes
 // leaf package, so the engine and every existing caller compile unchanged while

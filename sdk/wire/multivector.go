@@ -9,7 +9,7 @@ import (
 	"math"
 	"slices"
 
-	"github.com/rostamlabs/rostam/vtypes"
+	"github.com/rostamlabs/rostam/sdk/vtypes"
 )
 
 // encodeMatrix serializes a [][]float32 as [rows:u32]{[dim:u32][floats]}.

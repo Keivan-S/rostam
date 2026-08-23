@@ -13,8 +13,8 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/rostamlabs/rostam/authz"
-	"github.com/rostamlabs/rostam/grpcapi/pb"
 	"github.com/rostamlabs/rostam/ops"
+	"github.com/rostamlabs/rostam/sdk/pb"
 	"github.com/rostamlabs/rostam/vector"
 )
 

@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	pb "github.com/rostamlabs/rostam/grpcapi/pb"
+	pb "github.com/rostamlabs/rostam/sdk/pb"
 	"github.com/rostamlabs/rostam/vector"
 )
 

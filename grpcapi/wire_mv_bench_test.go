@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/rostamlabs/rostam/grpcapi/grpcsvc"
-	"github.com/rostamlabs/rostam/grpcapi/pb"
+	"github.com/rostamlabs/rostam/sdk/pb"
 )
 
 // mvTokens builds t token vectors of dim floats (a ColBERT-style token matrix).

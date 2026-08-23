@@ -22,7 +22,7 @@
 package grpcsvc
 
 import (
-	pb "github.com/rostamlabs/rostam/grpcapi/pb"
+	pb "github.com/rostamlabs/rostam/sdk/pb"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"

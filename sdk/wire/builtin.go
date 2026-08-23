@@ -7,7 +7,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/rostamlabs/rostam/vtypes"
+	"github.com/rostamlabs/rostam/sdk/vtypes"
 )
 
 // ErrShortArgs indicates the args byte slice is shorter than expected.

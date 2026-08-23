@@ -8,7 +8,7 @@ import (
 
 	"github.com/cespare/xxhash/v2"
 
-	"github.com/rostamlabs/rostam/ops/wire"
+	"github.com/rostamlabs/rostam/sdk/wire"
 )
 
 // TestPickInitialTargetClientSharding verifies the client-side sharding fast

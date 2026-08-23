@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
-package client
+package rostam
 
 import (
 	"context"
 	"errors"
 	"testing"
 
-	"github.com/rostamlabs/rostam/vtypes"
+	"github.com/rostamlabs/rostam/client"
+	"github.com/rostamlabs/rostam/sdk/vtypes"
 )
 
 // TestSearchOnMissingCollection confirms Search surfaces the server's
@@ -15,15 +16,15 @@ import (
 func TestSearchOnMissingCollection(t *testing.T) {
 	addr, stop := startTestStack(t)
 	defer stop()
-	c, err := New(Config{Servers: []string{addr}})
+	c, err := client.New(client.Config{Servers: []string{addr}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = c.Close() }()
 
 	col := c.Collection("never-created")
-	_, err = col.Search(context.Background(), SearchRequest{Query: []float32{1, 0, 0, 0}, K: 5})
-	if !errors.Is(err, ErrCollectionNotFound) {
+	_, err = col.Search(context.Background(), client.SearchRequest{Query: []float32{1, 0, 0, 0}, K: 5})
+	if !errors.Is(err, client.ErrCollectionNotFound) {
 		t.Fatalf("Search on never-created collection = %v, want ErrCollectionNotFound", err)
 	}
 }
@@ -33,30 +34,30 @@ func TestSearchOnMissingCollection(t *testing.T) {
 func TestSearchDocsOnMissingCollection(t *testing.T) {
 	addr, stop := startTestStack(t)
 	defer stop()
-	c, err := New(Config{Servers: []string{addr}})
+	c, err := client.New(client.Config{Servers: []string{addr}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = c.Close() }()
 
 	col := c.Collection("never-created")
-	_, err = col.SearchDocs(context.Background(), SearchDocsRequest{Query: []float32{1, 0, 0, 0}, K: 5})
-	if !errors.Is(err, ErrCollectionNotFound) {
+	_, err = col.SearchDocs(context.Background(), client.SearchDocsRequest{Query: []float32{1, 0, 0, 0}, K: 5})
+	if !errors.Is(err, client.ErrCollectionNotFound) {
 		t.Fatalf("SearchDocs on never-created collection = %v, want ErrCollectionNotFound", err)
 	}
 }
 
-func seedSearchable(t *testing.T) (*Collection, func()) {
+func seedSearchable(t *testing.T) (*client.Collection, func()) {
 	t.Helper()
 	addr, stop := startTestStack(t)
-	c, err := New(Config{Servers: []string{addr}})
+	c, err := client.New(client.Config{Servers: []string{addr}})
 	if err != nil {
 		stop()
 		t.Fatal(err)
 	}
 	col := c.Collection("posts")
 	ctx := context.Background()
-	if err := col.Create(ctx, CreateRequest{
+	if err := col.Create(ctx, client.CreateRequest{
 		Dim: 4, Metric: vtypes.Cosine,
 		FullText: &vtypes.FullTextConfig{Analyzer: "english"},
 	}); err != nil {
@@ -64,7 +65,7 @@ func seedSearchable(t *testing.T) (*Collection, func()) {
 		stop()
 		t.Fatal(err)
 	}
-	pts := []PointInput{
+	pts := []client.PointInput{
 		{ID: 1, Vector: []float32{1, 0, 0, 0}, Content: "golang concurrency",
 			Metadata: vtypes.Metadata{"tag": vtypes.NewString("lang")}},
 		{ID: 2, Vector: []float32{0, 1, 0, 0}, Content: "vector search engines",
@@ -85,7 +86,7 @@ func TestSearchAndHybridText(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	resp, err := col.Search(ctx, SearchRequest{Query: []float32{1, 0, 0, 0}, K: 2})
+	resp, err := col.Search(ctx, client.SearchRequest{Query: []float32{1, 0, 0, 0}, K: 2})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -93,7 +94,7 @@ func TestSearchAndHybridText(t *testing.T) {
 		t.Fatalf("Search results = %+v, want id 1 first", resp.Results)
 	}
 
-	hr, err := col.HybridText(ctx, HybridTextRequest{
+	hr, err := col.HybridText(ctx, client.HybridTextRequest{
 		Dense: []float32{0, 0, 1, 0}, Text: "keyword ranking", K: 2,
 	})
 	if err != nil {
@@ -109,7 +110,7 @@ func TestSearchDocs(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	resp, err := col.SearchDocs(ctx, SearchDocsRequest{Query: []float32{1, 0, 0, 0}, K: 1})
+	resp, err := col.SearchDocs(ctx, client.SearchDocsRequest{Query: []float32{1, 0, 0, 0}, K: 1})
 	if err != nil {
 		t.Fatalf("SearchDocs: %v", err)
 	}
@@ -129,7 +130,7 @@ func TestSearchGroups(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	resp, err := col.SearchGroups(ctx, GroupSearchRequest{
+	resp, err := col.SearchGroups(ctx, client.GroupSearchRequest{
 		Query: []float32{0, 1, 0, 0}, K: 5, GroupBy: "tag", GroupSize: 2, FetchK: 10,
 	})
 	if err != nil {

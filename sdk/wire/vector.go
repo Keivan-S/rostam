@@ -12,7 +12,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/rostamlabs/rostam/vtypes"
+	"github.com/rostamlabs/rostam/sdk/vtypes"
 )
 
 // ErrVectorArgsTruncated is returned by Decode* when the args bytes are

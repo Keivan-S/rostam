@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-package client
+package rostam
 
 import (
 	"bytes"
@@ -9,7 +9,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/rostamlabs/rostam/ops/wire"
+	"github.com/rostamlabs/rostam/client"
+	"github.com/rostamlabs/rostam/sdk/wire"
 )
 
 // TestPipelinedCallParity: with pipelining on, a simple put/get round-trips
@@ -17,7 +18,7 @@ import (
 func TestPipelinedCallParity(t *testing.T) {
 	addr, stop := startTestStack(t)
 	defer stop()
-	c, err := New(Config{Servers: []string{addr}, PipelineDepth: 32})
+	c, err := client.New(client.Config{Servers: []string{addr}, PipelineDepth: 32})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +46,7 @@ func TestPipelinedResponsesMatchCallersUnderLoad(t *testing.T) {
 	addr, stop := startTestStack(t)
 	defer stop()
 	// Deep pipeline, only 2 conns → heavy multiplexing of many in-flight wire.
-	c, err := New(Config{Servers: []string{addr}, PipelineDepth: 64, PipelineConns: 2})
+	c, err := client.New(client.Config{Servers: []string{addr}, PipelineDepth: 64, PipelineConns: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,10 +91,10 @@ func TestPipelinedResponsesMatchCallersUnderLoad(t *testing.T) {
 func TestPipelinedNotFoundAndRemoteError(t *testing.T) {
 	addr, stop := startTestStack(t)
 	defer stop()
-	c, _ := New(Config{Servers: []string{addr}, PipelineDepth: 16})
+	c, _ := client.New(client.Config{Servers: []string{addr}, PipelineDepth: 16})
 	defer func() { _ = c.Close() }()
 
-	if _, err := c.Call(context.Background(), "get", wire.EncodeKeyArgs([]byte("absent"))); err != ErrNotFound {
+	if _, err := c.Call(context.Background(), "get", wire.EncodeKeyArgs([]byte("absent"))); err != client.ErrNotFound {
 		t.Fatalf("missing key err = %v, want ErrNotFound", err)
 	}
 	if _, err := c.Call(context.Background(), "no_such_op", nil); err == nil {

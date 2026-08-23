@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/rostamlabs/rostam/ops/wire"
+	"github.com/rostamlabs/rostam/sdk/wire"
 )
 
 func TestTopologyCacheGetReturnsNilWhenEmpty(t *testing.T) {

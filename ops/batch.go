@@ -2,7 +2,7 @@
 
 package ops
 
-import "github.com/rostamlabs/rostam/ops/wire"
+import "github.com/rostamlabs/rostam/sdk/wire"
 
 // handlePutBatch applies every put in the batch within one TxContext — one Raft
 // log entry / fsync / round-trip / apply for the whole batch.

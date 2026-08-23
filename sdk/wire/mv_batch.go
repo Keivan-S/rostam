@@ -5,7 +5,7 @@ package wire
 import (
 	"errors"
 
-	"github.com/rostamlabs/rostam/vtypes"
+	"github.com/rostamlabs/rostam/sdk/vtypes"
 )
 
 // errMVAddBatchTruncated is returned when vector_mv_add_batch args are shorter
