@@ -3,6 +3,15 @@
 Notable user-visible changes. Entries that alter existing behaviour are marked
 **Breaking** and say what to do about it.
 
+## v0.4.1 — 2026-08-24
+
+- **Fix the Docker image build after the module split.** The server image's
+  `go mod download` layer copied only the root `go.mod`/`go.sum`, but the root
+  module now has `replace` directives to the in-repo `sdk` and `client` modules,
+  so the download step failed reading `sdk/go.mod`/`client/go.mod`. The
+  Dockerfiles now copy the sub-module manifests and `go.work` before download.
+  (v0.4.0 shipped binaries + PyPI but no Docker images; v0.4.1 completes it.)
+
 ## v0.4.0 — 2026-08-24
 
 - **Security: bump `google.golang.org/grpc` to v1.82.1.** Addresses
