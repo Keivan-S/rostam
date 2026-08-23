@@ -13,8 +13,8 @@ Notable user-visible changes. Entries that alter existing behaviour are marked
   the wire codec and network client depend on the types without pulling in the
   engine — `client` and `ops/wire` now transitively import zero engine packages
   (a prerequisite for a lightweight `go get .../client`). **Breaking (minor,
-  direct `vector`-package API only):** three engine-coupled methods became free
-  functions — `cfg.Validate()` → `vector.ValidateConfig(cfg)`,
+  direct `vector`-package API only):** two exported engine-coupled methods became
+  free functions — `cfg.Validate()` → `vector.ValidateConfig(cfg)`,
   `filter.Compile()` → `vector.CompileFilter(filter)`; if you call these on a
   `vector.Config`/`vector.Filter` directly, switch to the function form. No wire
   or behaviour change.

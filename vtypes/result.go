@@ -34,7 +34,7 @@ const (
 // valid: RRF fusion, rrfK=60, dense/sparse candidate pools sized from k.
 type HybridOpts struct {
 	Filter  Filter       // metadata predicate; zero = no filter
-	Method  FusionMethod // FusionRRF (default) or FusionWeighted
+	Method  FusionMethod // FusionRRF (default), FusionWeighted, or FusionDBSF
 	Alpha   float64      // weighted only: dense weight in [0,1] (0 → treated as 0.5 default by HybridSearch)
 	RRFK    int          // RRF constant; 0 = default 60
 	DenseK  int          // dense-lane candidate pool; 0 = max(k, 50)
