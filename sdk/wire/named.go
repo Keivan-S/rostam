@@ -10,7 +10,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/rostamlabs/rostam/vtypes"
+	"github.com/rostamlabs/rostam/sdk/vtypes"
 )
 
 // EncodeNamedCreateArgs serializes a vector_named_create_collection request.

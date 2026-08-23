@@ -5,7 +5,7 @@ package client
 import (
 	"context"
 
-	"github.com/rostamlabs/rostam/ops/wire"
+	"github.com/rostamlabs/rostam/sdk/wire"
 )
 
 // RegisterWASM ships a compiled WASM module via __register_wasm__. The Client

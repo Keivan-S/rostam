@@ -2,7 +2,7 @@
 
 package ops
 
-import "github.com/rostamlabs/rostam/ops/wire"
+import "github.com/rostamlabs/rostam/sdk/wire"
 
 // Topology, TopologyMember, and TopologySource are aliases onto the leaf
 // (ops/wire) definitions: the wire types are the client-safe wire codec (the Go

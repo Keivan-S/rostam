@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/rostamlabs/rostam/vtypes"
+	"github.com/rostamlabs/rostam/sdk/vtypes"
 )
 
 // TestGetOnMissingCollection confirms Get surfaces the server's distinguishable

@@ -8,7 +8,7 @@ syntax = "proto3";
 // same JSON contract the binary wire codecs already use.
 package rostam.v1;
 
-option go_package = "github.com/rostamlabs/rostam/grpcapi/pb;pb";
+option go_package = "github.com/rostamlabs/rostam/sdk/pb;pb";
 
 // ---- named vectors ----
 

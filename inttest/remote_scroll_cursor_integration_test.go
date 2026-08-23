@@ -17,7 +17,7 @@ import (
 
 	"github.com/rostamlabs/rostam"
 	"github.com/rostamlabs/rostam/grpcapi"
-	"github.com/rostamlabs/rostam/grpcapi/pb"
+	"github.com/rostamlabs/rostam/sdk/pb"
 	"github.com/rostamlabs/rostam/httpapi"
 )
 

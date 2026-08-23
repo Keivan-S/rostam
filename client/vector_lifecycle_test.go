@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/rostamlabs/rostam/vtypes"
+	"github.com/rostamlabs/rostam/sdk/vtypes"
 )
 
 func TestCollectionCreateAndDrop(t *testing.T) {

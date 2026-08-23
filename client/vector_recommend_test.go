@@ -6,8 +6,8 @@ import (
 	"encoding/binary"
 	"testing"
 
-	"github.com/rostamlabs/rostam/ops/wire"
-	"github.com/rostamlabs/rostam/vtypes"
+	"github.com/rostamlabs/rostam/sdk/wire"
+	"github.com/rostamlabs/rostam/sdk/vtypes"
 )
 
 // decodeOpFrame strips the wire's [opNameLen:1][opName][argsLen:4][args]

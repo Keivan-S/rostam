@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/rostamlabs/rostam/ops/wire"
+	"github.com/rostamlabs/rostam/sdk/wire"
 	"github.com/rostamlabs/rostam/vector"
 )
 

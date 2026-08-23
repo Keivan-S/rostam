@@ -15,7 +15,7 @@ import (
 
 	"github.com/rostamlabs/rostam/cache"
 	"github.com/rostamlabs/rostam/grpcapi/grpcsvc"
-	"github.com/rostamlabs/rostam/grpcapi/pb"
+	"github.com/rostamlabs/rostam/sdk/pb"
 	"github.com/rostamlabs/rostam/ops"
 	"github.com/rostamlabs/rostam/vector"
 )

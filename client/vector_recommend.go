@@ -6,8 +6,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/rostamlabs/rostam/ops/wire"
-	"github.com/rostamlabs/rostam/vtypes"
+	"github.com/rostamlabs/rostam/sdk/wire"
+	"github.com/rostamlabs/rostam/sdk/vtypes"
 )
 
 // RecommendRequest recommends points similar to a set of positive examples and

@@ -9,8 +9,8 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	"github.com/rostamlabs/rostam/grpcapi/pb"
-	"github.com/rostamlabs/rostam/vtypes"
+	"github.com/rostamlabs/rostam/sdk/pb"
+	"github.com/rostamlabs/rostam/sdk/vtypes"
 )
 
 // parseFilterJSON decodes a per-leaf metadata filter from its JSON string. An

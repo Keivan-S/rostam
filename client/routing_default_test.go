@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rostamlabs/rostam/ops/wire"
+	"github.com/rostamlabs/rostam/sdk/wire"
 )
 
 // NewRouted wires routing; a keyed round-trip against a real node works.

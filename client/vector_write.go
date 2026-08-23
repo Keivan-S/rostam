@@ -7,8 +7,8 @@ import (
 	"errors"
 	"time"
 
-	"github.com/rostamlabs/rostam/ops/wire"
-	"github.com/rostamlabs/rostam/vtypes"
+	"github.com/rostamlabs/rostam/sdk/wire"
+	"github.com/rostamlabs/rostam/sdk/vtypes"
 )
 
 // WriteRequest is the payload for Insert and Upsert.

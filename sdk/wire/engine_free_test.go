@@ -14,7 +14,7 @@ import (
 // ops/wire would remove that cover, and this gate keeps the boundary honest on
 // its own.
 func TestWireIsEngineFree(t *testing.T) {
-	out, err := exec.Command("go", "list", "-deps", "github.com/rostamlabs/rostam/ops/wire").Output()
+	out, err := exec.Command("go", "list", "-deps", "github.com/rostamlabs/rostam/sdk/wire").Output()
 	if err != nil {
 		t.Fatalf("go list -deps ops/wire: %v", err)
 	}

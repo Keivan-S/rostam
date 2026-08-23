@@ -5,7 +5,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/rostamlabs/rostam/vtypes"
+	"github.com/rostamlabs/rostam/sdk/vtypes"
 )
 
 func mustCollection(t *testing.T) (*Collection, func()) {

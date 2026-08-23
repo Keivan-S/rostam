@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rostamlabs/rostam/ops/wire"
+	"github.com/rostamlabs/rostam/sdk/wire"
 )
 
 func TestConfigDefaults(t *testing.T) {

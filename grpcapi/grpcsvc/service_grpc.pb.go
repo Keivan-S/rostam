@@ -23,7 +23,7 @@ package grpcsvc
 
 import (
 	context "context"
-	pb "github.com/rostamlabs/rostam/grpcapi/pb"
+	pb "github.com/rostamlabs/rostam/sdk/pb"
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"

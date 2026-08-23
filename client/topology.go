@@ -5,7 +5,7 @@ package client
 import (
 	"sync/atomic"
 
-	"github.com/rostamlabs/rostam/ops/wire"
+	"github.com/rostamlabs/rostam/sdk/wire"
 )
 
 // topologyCache holds an atomic snapshot of the cluster topology.

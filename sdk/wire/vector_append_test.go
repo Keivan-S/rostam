@@ -7,7 +7,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/rostamlabs/rostam/vtypes"
+	"github.com/rostamlabs/rostam/sdk/vtypes"
 )
 
 // oracleVectorSearchArgsNoFilter hand-builds the no-filter vector_search wire

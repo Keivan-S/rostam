@@ -2,7 +2,7 @@
 
 package ops
 
-import "github.com/rostamlabs/rostam/ops/wire"
+import "github.com/rostamlabs/rostam/sdk/wire"
 
 // handleMVAddBatch applies a batch of version/deadline-preserving MV restore-adds
 // in one op. Each record is applied via MultiRestoreAddSparse exactly as the

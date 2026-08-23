@@ -14,7 +14,7 @@ syntax = "proto3";
 // pull in google.golang.org/grpc.
 package rostam.v1;
 
-import "grpcapi/pb/rostam.proto";
+import "sdk/pb/rostam.proto";
 
 option go_package = "github.com/rostamlabs/rostam/grpcapi/grpcsvc;grpcsvc";
 

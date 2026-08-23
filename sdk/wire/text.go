@@ -9,7 +9,7 @@ import (
 	"math"
 	"sort"
 
-	"github.com/rostamlabs/rostam/vtypes"
+	"github.com/rostamlabs/rostam/sdk/vtypes"
 )
 
 // Full-text (BM25) search op codecs. These mirror the dense/hybrid search wire

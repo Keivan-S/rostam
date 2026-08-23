@@ -16,7 +16,7 @@ import (
 	"github.com/rostamlabs/rostam/cache"
 	"github.com/rostamlabs/rostam/client"
 	"github.com/rostamlabs/rostam/ops"
-	"github.com/rostamlabs/rostam/ops/wire"
+	"github.com/rostamlabs/rostam/sdk/wire"
 	"github.com/rostamlabs/rostam/server"
 	"github.com/rostamlabs/rostam/shard"
 )

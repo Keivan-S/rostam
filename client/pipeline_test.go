@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/rostamlabs/rostam/ops/wire"
+	"github.com/rostamlabs/rostam/sdk/wire"
 )
 
 // TestPipelinedCallParity: with pipelining on, a simple put/get round-trips
