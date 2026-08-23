@@ -5,6 +5,11 @@ Notable user-visible changes. Entries that alter existing behaviour are marked
 
 ## Unreleased
 
+- **Security: bump `google.golang.org/grpc` to v1.82.1.** Addresses
+  GHSA-hrxh-6v49-42gf (a DoS in the xDS RBAC / HTTP/2 server paths) present in
+  v1.81.1. The gRPC API surface is unchanged.
+
+
 - **Configurable TTL sweep interval, with a calmer default (`-ttl-sweep-interval`).**
   The per-shard background reaper that reclaims memory from expired TTL keys is
   now operator-tunable, and the server default relaxes from 1s to **30s** — 1s
