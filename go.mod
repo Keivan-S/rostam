@@ -7,13 +7,14 @@ require github.com/cespare/xxhash/v2 v2.3.0
 require (
 	github.com/bytecodealliance/wasmtime-go/v45 v45.0.0
 	github.com/hashicorp/raft v1.7.3
-	github.com/jackc/puddle/v2 v2.2.2
 	github.com/panjf2000/gnet/v2 v2.10.0
 	github.com/yalue/onnxruntime_go v1.34.0
 	golang.org/x/sys v0.46.0
 	google.golang.org/grpc v1.81.1
 	google.golang.org/protobuf v1.36.12
 )
+
+require github.com/jackc/puddle/v2 v2.2.2 // indirect
 
 require (
 	github.com/armon/go-metrics v0.4.1 // indirect
@@ -26,6 +27,7 @@ require (
 	github.com/mattn/go-colorable v0.1.12 // indirect
 	github.com/mattn/go-isatty v0.0.14 // indirect
 	github.com/panjf2000/ants/v2 v2.12.1 // indirect
+	github.com/rostamlabs/rostam/client v0.0.0-00010101000000-000000000000
 	github.com/rostamlabs/rostam/sdk v0.0.0-00010101000000-000000000000
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
@@ -38,3 +40,5 @@ require (
 )
 
 replace github.com/rostamlabs/rostam/sdk => ./sdk
+
+replace github.com/rostamlabs/rostam/client => ./client

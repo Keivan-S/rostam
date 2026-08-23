@@ -10212,7 +10212,7 @@ const file_grpcapi_pb_rostam_proto_rawDesc = "" +
 	"\x11QUERY_MODE_RERANK\x10\x01*K\n" +
 	"\x11RecommendStrategy\x12\x1c\n" +
 	"\x18RECOMMEND_AVERAGE_VECTOR\x10\x00\x12\x18\n" +
-	"\x14RECOMMEND_BEST_SCORE\x10\x01B,Z*github.com/rostamlabs/rostam/sdk/pb;pbb\x06proto3"
+	"\x14RECOMMEND_BEST_SCORE\x10\x01B(Z&github.com/rostamlabs/rostam/sdk/pb;pbb\x06proto3"
 
 var (
 	file_grpcapi_pb_rostam_proto_rawDescOnce sync.Once
