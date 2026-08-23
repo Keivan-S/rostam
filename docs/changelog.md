@@ -5,6 +5,8 @@ Notable user-visible changes. Entries that alter existing behaviour are marked
 
 ## Unreleased
 
+## v0.4.0 — 2026-08-24
+
 - **Security: bump `google.golang.org/grpc` to v1.82.1.** Addresses
   GHSA-hrxh-6v49-42gf (a DoS in the xDS RBAC / HTTP/2 server paths) present in
   v1.81.1. The gRPC API surface is unchanged.
