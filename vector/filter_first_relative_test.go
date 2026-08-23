@@ -128,7 +128,7 @@ func TestRelativeGateAdmitsAboveAbsoluteCap(t *testing.T) {
 	corpus, metas := buildRelativeCorpus(t, h, n, dim)
 
 	sel := Filter{Op: FilterEq, Field: "g", Value: NewInt(0)}
-	pred, err := sel.Compile()
+	pred, err := CompileFilter(sel)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -362,7 +362,7 @@ func TestRelativeGateIVFAdmitsAboveAbsoluteCap(t *testing.T) {
 	}
 
 	sel := Filter{Op: FilterEq, Field: "g", Value: NewInt(0)}
-	pred, err := sel.Compile()
+	pred, err := CompileFilter(sel)
 	if err != nil {
 		t.Fatal(err)
 	}

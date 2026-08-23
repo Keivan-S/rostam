@@ -139,7 +139,7 @@ func (h *hnsw) Discover(k int, opts DiscoverOpts) ([]Result, error) {
 	if opts.Target != nil && len(opts.Target) != h.cfg.Dim {
 		return nil, ErrDimMismatch
 	}
-	pred, err := opts.Filter.Compile()
+	pred, err := CompileFilter(opts.Filter)
 	if err != nil {
 		return nil, err
 	}
@@ -189,7 +189,7 @@ func (h *hnsw) DiscoverVecs(k int, opts DiscoverVecsOpts) ([]Result, error) {
 	if opts.Target != nil && len(opts.Target) != h.cfg.Dim {
 		return nil, ErrDimMismatch
 	}
-	pred, err := opts.Filter.Compile()
+	pred, err := CompileFilter(opts.Filter)
 	if err != nil {
 		return nil, err
 	}
@@ -225,7 +225,7 @@ func (h *hnsw) RecommendVecs(k int, opts RecommendVecsOpts) ([]Result, error) {
 	if len(opts.Positive) == 0 {
 		return nil, ErrNoRecommendExamples
 	}
-	pred, err := opts.Filter.Compile()
+	pred, err := CompileFilter(opts.Filter)
 	if err != nil {
 		return nil, err
 	}

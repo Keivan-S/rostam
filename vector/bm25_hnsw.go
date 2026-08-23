@@ -185,7 +185,7 @@ func (h *hnsw) buildTextLanes(dense []float32, query string, k int, opts HybridO
 	if len(dense) > 0 && len(dense) != h.cfg.Dim {
 		return nil, nil, nil, ErrDimMismatch
 	}
-	pred, err := opts.Filter.Compile()
+	pred, err := CompileFilter(opts.Filter)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -260,7 +260,7 @@ func (h *hnsw) buildTextLanesGlobal(dense []float32, query string, k int, opts H
 	if len(dense) > 0 && len(dense) != h.cfg.Dim {
 		return nil, nil, nil, ErrDimMismatch
 	}
-	pred, err := opts.Filter.Compile()
+	pred, err := CompileFilter(opts.Filter)
 	if err != nil {
 		return nil, nil, nil, err
 	}

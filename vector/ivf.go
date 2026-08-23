@@ -1695,7 +1695,7 @@ func (ix *ivf) SearchInto(dst []Result, query []float32, k int, filter Filter) (
 	if k <= 0 {
 		return dst, nil
 	}
-	pred, err := filter.Compile()
+	pred, err := CompileFilter(filter)
 	if err != nil {
 		return dst, err
 	}
@@ -1731,7 +1731,7 @@ func (ix *ivf) SearchFilteredWith(dst []Result, query []float32, k int, filter F
 	if k <= 0 {
 		return dst, nil
 	}
-	pred, err := filter.Compile()
+	pred, err := CompileFilter(filter)
 	if err != nil {
 		return dst, err
 	}
@@ -2498,7 +2498,7 @@ func (ix *ivf) buildLanes(dense []float32, sparse SparseVector, k int, opts Hybr
 	if err := sparse.Validate(); err != nil {
 		return nil, nil, err
 	}
-	pred, err := opts.Filter.Compile()
+	pred, err := CompileFilter(opts.Filter)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -2575,7 +2575,7 @@ func (ix *ivf) SearchMMR(query []float32, k int, opts MMROpts) ([]Result, error)
 			fetchK = 50
 		}
 	}
-	pred, err := opts.Filter.Compile()
+	pred, err := CompileFilter(opts.Filter)
 	if err != nil {
 		return nil, err
 	}
@@ -2736,7 +2736,7 @@ func (ix *ivf) Discover(k int, opts DiscoverOpts) ([]Result, error) {
 	if opts.Target != nil && len(opts.Target) != ix.cfg.Dim {
 		return nil, ErrDimMismatch
 	}
-	pred, err := opts.Filter.Compile()
+	pred, err := CompileFilter(opts.Filter)
 	if err != nil {
 		return nil, err
 	}
@@ -2780,7 +2780,7 @@ func (ix *ivf) DiscoverVecs(k int, opts DiscoverVecsOpts) ([]Result, error) {
 	if opts.Target != nil && len(opts.Target) != ix.cfg.Dim {
 		return nil, ErrDimMismatch
 	}
-	pred, err := opts.Filter.Compile()
+	pred, err := CompileFilter(opts.Filter)
 	if err != nil {
 		return nil, err
 	}
@@ -2808,7 +2808,7 @@ func (ix *ivf) RecommendVecs(k int, opts RecommendVecsOpts) ([]Result, error) {
 	if len(opts.Positive) == 0 {
 		return nil, ErrNoRecommendExamples
 	}
-	pred, err := opts.Filter.Compile()
+	pred, err := CompileFilter(opts.Filter)
 	if err != nil {
 		return nil, err
 	}
@@ -2899,7 +2899,7 @@ func (ix *ivf) GroupCandidates(query []float32, opts GroupOpts) ([]Document, err
 	if fetchK <= 0 {
 		fetchK = 50
 	}
-	pred, err := opts.Filter.Compile()
+	pred, err := CompileFilter(opts.Filter)
 	if err != nil {
 		return nil, err
 	}
@@ -3045,7 +3045,7 @@ func (ix *ivf) effectiveFilterFirstLimit(liveCount int) int {
 // scrollDocs enumerates live docs satisfying filter, id-ascending (mirror
 // hnsw.scrollDocs).
 func (ix *ivf) scrollDocs(filter Filter, limit int) ([]Document, error) {
-	pred, err := filter.Compile()
+	pred, err := CompileFilter(filter)
 	if err != nil {
 		return nil, err
 	}

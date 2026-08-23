@@ -1760,7 +1760,7 @@ func parseFilter(s string) (vector.Filter, error) {
 	if err := json.Unmarshal([]byte(s), &f); err != nil {
 		return vector.Filter{}, err
 	}
-	if _, err := f.Compile(); err != nil {
+	if _, err := vector.CompileFilter(f); err != nil {
 		return vector.Filter{}, err
 	}
 	return f, nil

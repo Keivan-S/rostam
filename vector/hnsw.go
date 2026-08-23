@@ -3260,7 +3260,7 @@ func (h *hnsw) searchIntoWith(dst []Result, query []float32, k int, filter Filte
 	if k <= 0 {
 		return dst, nil
 	}
-	pred, err := filter.Compile()
+	pred, err := CompileFilter(filter)
 	if err != nil {
 		return dst, err
 	}
@@ -3781,7 +3781,7 @@ func (h *hnsw) buildLanes(dense []float32, sparse SparseVector, k int, opts Hybr
 	if err := sparse.Validate(); err != nil {
 		return nil, nil, err
 	}
-	pred, err := opts.Filter.Compile()
+	pred, err := CompileFilter(opts.Filter)
 	if err != nil {
 		return nil, nil, err
 	}

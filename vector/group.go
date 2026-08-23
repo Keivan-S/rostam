@@ -67,7 +67,7 @@ func (h *hnsw) GroupCandidates(query []float32, opts GroupOpts) ([]Document, err
 	if fetchK <= 0 {
 		fetchK = 50
 	}
-	pred, err := opts.Filter.Compile()
+	pred, err := CompileFilter(opts.Filter)
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +170,7 @@ func (h *hnsw) SearchGroups(query []float32, k int, opts GroupOpts) ([]Group, er
 	}
 	fetchK := resolveGroupFetchK(k, groupSize, opts.FetchK)
 
-	pred, err := opts.Filter.Compile()
+	pred, err := CompileFilter(opts.Filter)
 	if err != nil {
 		return nil, err
 	}

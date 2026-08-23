@@ -1394,7 +1394,7 @@ func (m *MultiVectorIndex) mvHybridLanesLocked(query [][]float32, sparseQ *Spars
 			return nil, nil, verr
 		}
 	}
-	pred, cerr := opts.Filter.Compile()
+	pred, cerr := CompileFilter(opts.Filter)
 	if cerr != nil {
 		return nil, nil, cerr
 	}
@@ -1829,7 +1829,7 @@ func (m *MultiVectorIndex) Search(query [][]float32, k int, opts MultiSearchOpts
 	// filter compiles to a nil predicate: the hot path below stays
 	// byte/behaviour-identical to no-filter (pred == nil gates both the
 	// candidate-budget widen and the per-candidate check).
-	pred, err := opts.Filter.Compile()
+	pred, err := CompileFilter(opts.Filter)
 	if err != nil {
 		return nil, err
 	}
@@ -2097,7 +2097,7 @@ func (m *MultiVectorIndex) ScanDocuments() []MultiScanRecord {
 // id remains). The MV-family analogue of NamedCollection.ScrollDocsPage. Compiles
 // the filter so a malformed filter fails loud at the edge. See scrollPage.
 func (m *MultiVectorIndex) ScrollDocsPage(filter Filter, afterID uint64, hasAfter bool, limit int) (docs []Document, nextAfter uint64, hasMore bool, err error) {
-	pred, err := filter.Compile()
+	pred, err := CompileFilter(filter)
 	if err != nil {
 		return nil, 0, false, err // fail loud on a malformed filter
 	}
@@ -2115,7 +2115,7 @@ func (m *MultiVectorIndex) ScrollDocsPage(filter Filter, afterID uint64, hasAfte
 // v2 next-cursor. order == nil falls back to the id-ascending ScrollDocsPage path.
 // The MV-family analogue of Collection.ScrollDocsPageOrder.
 func (m *MultiVectorIndex) ScrollDocsPageOrder(filter Filter, order *OrderBy, afterID uint64, afterKey float64, hasAfter bool, limit int) (docs []Document, nextAfter uint64, hasMore bool, err error) {
-	pred, err := filter.Compile()
+	pred, err := CompileFilter(filter)
 	if err != nil {
 		return nil, 0, false, err // fail loud on a malformed filter
 	}

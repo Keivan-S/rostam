@@ -1939,7 +1939,7 @@ func assertGeoFilter(t *testing.T, f vector.Filter) {
 	if len(f.And[2].Geo.Polygon) != 8 {
 		t.Fatalf("geo_polygon vertices = %v, want flat slice of len 8", f.And[2].Geo.Polygon)
 	}
-	if _, err := f.Compile(); err != nil {
+	if _, err := vector.CompileFilter(f); err != nil {
 		t.Fatalf("decoded geo filter does not compile: %v", err)
 	}
 }

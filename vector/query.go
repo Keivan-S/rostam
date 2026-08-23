@@ -1759,7 +1759,7 @@ func (c *Collection) rerankByRoot(root QueryLeaf, cands []uint64, k int) ([]Resu
 	}
 	switch root.Kind {
 	case LeafDense:
-		pred, err := root.Filter.Compile()
+		pred, err := CompileFilter(root.Filter)
 		if err != nil {
 			return nil, err
 		}

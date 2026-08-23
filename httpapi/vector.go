@@ -1317,7 +1317,7 @@ func validTopK(w http.ResponseWriter, k int) bool {
 // on a compile failure — so a malformed filter never reaches the engine and, in
 // particular, never triggers an over-broad delete_by_filter.
 func validFilter(w http.ResponseWriter, f vector.Filter) bool {
-	if _, err := f.Compile(); err != nil {
+	if _, err := vector.CompileFilter(f); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return false
 	}

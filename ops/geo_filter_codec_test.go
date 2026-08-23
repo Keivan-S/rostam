@@ -45,7 +45,7 @@ func TestGeoFilterSearchArgsRoundtrip(t *testing.T) {
 	if !reflect.DeepEqual(orig, got) {
 		t.Errorf("search geo-filter roundtrip mismatch:\n orig=%+v\n got =%+v", orig, got)
 	}
-	if _, cerr := got.Compile(); cerr != nil {
+	if _, cerr := vector.CompileFilter(got); cerr != nil {
 		t.Errorf("decoded geo filter does not compile: %v", cerr)
 	}
 }
@@ -63,7 +63,7 @@ func TestGeoFilterScrollArgsRoundtrip(t *testing.T) {
 	if !reflect.DeepEqual(orig, got) {
 		t.Errorf("scroll geo-filter roundtrip mismatch:\n orig=%+v\n got =%+v", orig, got)
 	}
-	if _, cerr := got.Compile(); cerr != nil {
+	if _, cerr := vector.CompileFilter(got); cerr != nil {
 		t.Errorf("decoded geo filter does not compile: %v", cerr)
 	}
 }
@@ -80,7 +80,7 @@ func TestGeoFilterDeleteByFilterArgsRoundtrip(t *testing.T) {
 	if !reflect.DeepEqual(orig, got) {
 		t.Errorf("delete-by-filter geo roundtrip mismatch:\n orig=%+v\n got =%+v", orig, got)
 	}
-	if _, cerr := got.Compile(); cerr != nil {
+	if _, cerr := vector.CompileFilter(got); cerr != nil {
 		t.Errorf("decoded geo filter does not compile: %v", cerr)
 	}
 }
@@ -96,7 +96,7 @@ func TestGeoFilterHybridArgsRoundtrip(t *testing.T) {
 	if !reflect.DeepEqual(orig, got.Filter) {
 		t.Errorf("hybrid geo-filter roundtrip mismatch:\n orig=%+v\n got =%+v", orig, got.Filter)
 	}
-	if _, cerr := got.Filter.Compile(); cerr != nil {
+	if _, cerr := vector.CompileFilter(got.Filter); cerr != nil {
 		t.Errorf("decoded geo filter does not compile: %v", cerr)
 	}
 }
@@ -112,7 +112,7 @@ func TestGeoFilterGroupArgsRoundtrip(t *testing.T) {
 	if !reflect.DeepEqual(orig, got.Filter) {
 		t.Errorf("group geo-filter roundtrip mismatch:\n orig=%+v\n got =%+v", orig, got.Filter)
 	}
-	if _, cerr := got.Filter.Compile(); cerr != nil {
+	if _, cerr := vector.CompileFilter(got.Filter); cerr != nil {
 		t.Errorf("decoded geo filter does not compile: %v", cerr)
 	}
 }

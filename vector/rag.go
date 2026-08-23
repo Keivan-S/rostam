@@ -208,7 +208,7 @@ func (h *hnsw) scrollDocs(filter Filter, limit int) ([]Document, error) {
 // the walk stops at `limit` collected docs — and snapshot reuse keeps repeated
 // pages warm.
 func (h *hnsw) scrollDocsWith(filter Filter, limit int, metaOf func(id uint64) Metadata) ([]Document, error) {
-	pred, err := filter.Compile()
+	pred, err := CompileFilter(filter)
 	if err != nil {
 		return nil, err
 	}

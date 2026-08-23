@@ -22,6 +22,9 @@ type (
 	Config            = vtypes.Config
 	NamedVectorParams = vtypes.NamedVectorParams
 	QuantStore        = vtypes.QuantStore
+	FilterOp          = vtypes.FilterOp
+	Filter            = vtypes.Filter
+	GeoCondition      = vtypes.GeoCondition
 )
 
 // Moved constants (values preserved verbatim, so wire/snapshot encodings are
@@ -55,6 +58,29 @@ const (
 
 	QuantInRAM = vtypes.QuantInRAM
 	QuantMmap  = vtypes.QuantMmap
+
+	FilterAnd        = vtypes.FilterAnd
+	FilterOr         = vtypes.FilterOr
+	FilterNot        = vtypes.FilterNot
+	FilterEq         = vtypes.FilterEq
+	FilterNe         = vtypes.FilterNe
+	FilterGt         = vtypes.FilterGt
+	FilterGte        = vtypes.FilterGte
+	FilterLt         = vtypes.FilterLt
+	FilterLte        = vtypes.FilterLte
+	FilterIn         = vtypes.FilterIn
+	FilterContains   = vtypes.FilterContains
+	FilterMatch      = vtypes.FilterMatch
+	FilterRegex      = vtypes.FilterRegex
+	FilterIsEmpty    = vtypes.FilterIsEmpty
+	FilterIsNull     = vtypes.FilterIsNull
+	FilterDtGt       = vtypes.FilterDtGt
+	FilterDtGte      = vtypes.FilterDtGte
+	FilterDtLt       = vtypes.FilterDtLt
+	FilterDtLte      = vtypes.FilterDtLte
+	FilterGeoRadius  = vtypes.FilterGeoRadius
+	FilterGeoBox     = vtypes.FilterGeoBox
+	FilterGeoPolygon = vtypes.FilterGeoPolygon
 )
 
 // Moved error sentinels (value aliases preserve errors.Is identity) and the
