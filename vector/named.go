@@ -405,7 +405,7 @@ func NewNamedCollection(name string, cfg map[string]NamedVectorParams) (*NamedCo
 		// Construct via newIndex so a space can select IndexIVF (IVF / IVF-PQ);
 		// IndexHNSW (the zero value) builds the historical per-space graph index
 		// (byte/behaviour-identical). newIndex validates the per-space Config
-		// (newHNSW/newIVF both call cfg.Validate()), so a bad IVF param fails loud.
+		// (newHNSW/newIVF both call ValidateConfig(cfg)), so a bad IVF param fails loud.
 		idx, err := newIndex(namedToConfig(p))
 		if err != nil {
 			// Roll back any sub-indexes already built.

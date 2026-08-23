@@ -575,7 +575,7 @@ type NamedVectorParams struct {
 	// OPQIters mirrors the dense Config knob: full-OPQ iterative Procrustes
 	// refinement (0 = 1 = the v1 single-random-rotation behavior, byte-identical;
 	// > 1 = that many refine iterations). Ignored unless OPQ is set. Validated to
-	// [0, maxOPQIters] by toConfig().Validate() at NewNamedCollection.
+	// [0, maxOPQIters] by ValidateConfig(namedToConfig(...)) at NewNamedCollection.
 	OPQIters int `json:"opq_iters,omitempty"`
 	// IVFTrainThreshold mirrors the dense Config knob: the live-vector count at
 	// which this space's incrementally-built QUANTIZED index (IVF coarse/residual
@@ -587,7 +587,7 @@ type NamedVectorParams struct {
 	// drift-retrain knobs (see Config): an IVF space opts into deterministic
 	// auto-retrain-on-drift. Ignored unless IndexType == IndexIVF. The named create
 	// path is JSON-carried (these flow through the spaces config JSON), validated by
-	// toConfig().Validate() at NewNamedCollection.
+	// ValidateConfig(namedToConfig(...)) at NewNamedCollection.
 	IVFDriftRetrain      bool    `json:"ivf_drift_retrain,omitempty"`
 	IVFDriftGrowthFactor float64 `json:"ivf_drift_growth_factor,omitempty"`
 	IVFDriftFactor       float64 `json:"ivf_drift_factor,omitempty"`
@@ -598,7 +598,7 @@ type NamedVectorParams struct {
 	// only the M-byte codes stay resident (maximum compression; search becomes
 	// ADC-only). Honored because the named inner HNSW auto-trains incrementally
 	// (the float-drop folds into that auto-train). Requires Quant == QuantPQ (else
-	// ErrInvalidPQDropVecs at create, via toConfig().Validate()). Default false =>
+	// ErrInvalidPQDropVecs at create, via ValidateConfig(namedToConfig(...))). Default false =>
 	// byte/behaviour-identical to today's exact-rescore named PQ-HNSW.
 	PQDropVecs bool `json:"pq_drop_vecs,omitempty"`
 

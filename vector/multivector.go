@@ -32,7 +32,7 @@ import (
 
 // MultiVectorConfig (the MultiVectorIndex configuration) now lives in the
 // engine-free vtypes leaf package and is re-exported from vtypes_aliases.go. Its
-// engine-coupled derivations (metaPath / mapsPath / innerConfig) are the free
+// engine-coupled derivations (metaPath / mapsPath / mvInnerConfig) are the free
 // functions mvMetaPath / mvMapsPath / mvInnerConfig below.
 
 // MultiSearchOpts tunes a multi-vector search.
@@ -424,7 +424,7 @@ func mvInnerConfig(cfg MultiVectorConfig) Config {
 	}
 	// IVF / IVF-PQ inner index. IndexHNSW (the zero value) leaves these zero and
 	// the inner Config is byte-identical to before. The Config is Validated by
-	// newIndex (newHNSW/newIVF both call cfg.Validate()), so a bad IVF param fails
+	// newIndex (newHNSW/newIVF both call ValidateConfig(cfg)), so a bad IVF param fails
 	// loud at NewMultiVectorIndex.
 	c.IndexType = cfg.IndexType
 	c.IVFNlist = cfg.IVFNlist
@@ -504,7 +504,7 @@ func NewMultiVectorIndex(cfg MultiVectorConfig) (*MultiVectorIndex, error) {
 	// IndexIVF (IVF / IVF-PQ — compressing the dominant MV memory cost). IndexHNSW
 	// (the zero value) builds the historical inner graph index (byte/behaviour-
 	// identical). newIndex validates the inner Config (newHNSW/newIVF both call
-	// cfg.Validate()), so a bad inner IVF param fails loud here. innerConfig forces
+	// ValidateConfig(cfg)), so a bad inner IVF param fails loud here. mvInnerConfig forces
 	// the inner Persistent=false for an IVF inner index (snapshot-only).
 	idx, err := newIndex(mvInnerConfig(cfg))
 	if err != nil {

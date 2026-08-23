@@ -73,7 +73,7 @@ func namedToConfig(p NamedVectorParams) Config {
 	c.QuantizedBuild = p.QuantizedBuild
 	// IVF / IVF-PQ knobs (ignored by newHNSW when IndexType == IndexHNSW). The
 	// per-space Config is Validated by newIndex (newHNSW/newIVF both call
-	// cfg.Validate()), so a bad IVF param fails loud at NewNamedCollection.
+	// ValidateConfig(cfg)), so a bad IVF param fails loud at NewNamedCollection.
 	c.IndexType = p.IndexType
 	c.IVFNlist = p.IVFNlist
 	c.IVFNprobe = p.IVFNprobe
@@ -87,7 +87,7 @@ func namedToConfig(p NamedVectorParams) Config {
 	c.IVFDriftGrowthFactor = p.IVFDriftGrowthFactor
 	c.IVFDriftFactor = p.IVFDriftFactor
 	// PQDropVecs (HNSW-PQ only) folds the float-drop into this space's incremental
-	// auto-train. Validated QuantPQ-only by the toConfig().Validate() in
+	// auto-train. Validated QuantPQ-only by the ValidateConfig(namedToConfig(...)) in
 	// validateNamedVectors / newIndex (ErrInvalidPQDropVecs otherwise).
 	c.PQDropVecs = p.PQDropVecs
 	return c
