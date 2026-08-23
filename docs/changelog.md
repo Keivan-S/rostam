@@ -3,8 +3,6 @@
 Notable user-visible changes. Entries that alter existing behaviour are marked
 **Breaking** and say what to do about it.
 
-## Unreleased
-
 ## v0.4.0 — 2026-08-24
 
 - **Security: bump `google.golang.org/grpc` to v1.82.1.** Addresses
