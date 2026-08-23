@@ -5,7 +5,7 @@ package wire
 import (
 	"errors"
 
-	"github.com/rostamlabs/rostam/vector"
+	"github.com/rostamlabs/rostam/vtypes"
 )
 
 // errMVAddBatchTruncated is returned when vector_mv_add_batch args are shorter
@@ -24,7 +24,7 @@ var errMVAddBatchTruncated = errors.New("ops: mv add-batch args truncated")
 // to that partition's shard. handleMVAddBatch applies the whole batch in ONE op
 // (one Raft commit), so an offline MV resplit copies a partition's docs in a
 // single commit instead of one commit per document.
-func EncodeMVAddBatchArgs(collection string, recs []vector.MultiScanRecord) []byte {
+func EncodeMVAddBatchArgs(collection string, recs []vtypes.MultiScanRecord) []byte {
 	body := EncodeMVScanResult(recs)
 	buf := make([]byte, 0, 1+len(collection)+len(body))
 	buf = append(buf, byte(len(collection)))
@@ -34,7 +34,7 @@ func EncodeMVAddBatchArgs(collection string, recs []vector.MultiScanRecord) []by
 }
 
 // DecodeMVAddBatchArgs reads args produced by EncodeMVAddBatchArgs.
-func DecodeMVAddBatchArgs(args []byte) (string, []vector.MultiScanRecord, error) {
+func DecodeMVAddBatchArgs(args []byte) (string, []vtypes.MultiScanRecord, error) {
 	if len(args) < 1 {
 		return "", nil, errMVAddBatchTruncated
 	}

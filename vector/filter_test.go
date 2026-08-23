@@ -11,7 +11,7 @@ import (
 
 func compileOrFail(t *testing.T, f Filter) Predicate {
 	t.Helper()
-	p, err := f.Compile()
+	p, err := CompileFilter(f)
 	if err != nil {
 		t.Fatalf("Compile(%+v): %v", f, err)
 	}
@@ -144,7 +144,7 @@ func TestFilterComposition(t *testing.T) {
 }
 
 func TestFilterZeroCompilesToNil(t *testing.T) {
-	p, err := (Filter{}).Compile()
+	p, err := CompileFilter(Filter{})
 	if err != nil {
 		t.Fatalf("zero filter Compile: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestFilterCompileErrors(t *testing.T) {
 		{Op: FilterOp(250), Field: "x", Value: NewInt(1)},                  // unknown op
 	}
 	for i, f := range cases {
-		if _, err := f.Compile(); err == nil {
+		if _, err := CompileFilter(f); err == nil {
 			t.Errorf("case %d (%+v): Compile err = nil, want error", i, f)
 		}
 	}
@@ -287,7 +287,7 @@ func TestFilterRegex(t *testing.T) {
 	}
 
 	// Invalid pattern -> compile error.
-	if _, err := (Filter{Op: FilterRegex, Field: "sku", Value: NewString("(")}).Compile(); err == nil {
+	if _, err := CompileFilter(Filter{Op: FilterRegex, Field: "sku", Value: NewString("(")}); err == nil {
 		t.Error("invalid regex should produce a Compile error")
 	}
 }
@@ -413,7 +413,7 @@ func TestFilterDatetime(t *testing.T) {
 
 	// Invalid RFC3339 literal -> compile error.
 	for _, op := range []FilterOp{FilterDtGt, FilterDtGte, FilterDtLt, FilterDtLte} {
-		if _, err := (Filter{Op: op, Field: "created", Value: NewString("nope")}).Compile(); err == nil {
+		if _, err := CompileFilter(Filter{Op: op, Field: "created", Value: NewString("nope")}); err == nil {
 			t.Errorf("invalid RFC3339 for %s should produce a Compile error", mustOpName(op))
 		}
 	}
@@ -591,7 +591,7 @@ func TestFilterGeoCompileErrors(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if _, err := c.f.Compile(); err == nil {
+			if _, err := CompileFilter(c.f); err == nil {
 				t.Errorf("Compile(%s) err = nil, want error", c.name)
 			}
 		})

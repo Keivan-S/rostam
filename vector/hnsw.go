@@ -388,7 +388,7 @@ func (h *hnsw) SetNowFunc(fn func() int64) {
 
 // newHNSW constructs an HNSW index. Returns ErrInvalid* if cfg is malformed.
 func newHNSW(cfg Config) (*hnsw, error) {
-	if err := cfg.Validate(); err != nil {
+	if err := ValidateConfig(cfg); err != nil {
 		return nil, err
 	}
 	seed := cfg.Seed
@@ -2531,7 +2531,7 @@ func (h *hnsw) Get(id uint64) (vec []float32, meta Metadata, ttl time.Duration, 
 		}
 	}
 	if sv := h.arena.Sparse(slot); sv != nil {
-		sparse = sv.clone() // clone: arena owns the pointer
+		sparse = sv.Clone() // clone: arena owns the pointer
 	}
 	return vec, meta, ttl, sparse, version, true
 }
@@ -2571,7 +2571,7 @@ func (h *hnsw) GetProjected(id uint64, withVec, withPayload bool) (vec []float32
 	}
 	if withPayload {
 		if sv := h.arena.Sparse(slot); sv != nil {
-			sparse = sv.clone() // clone: arena owns the pointer
+			sparse = sv.Clone() // clone: arena owns the pointer
 		}
 	}
 	return vec, meta, ttl, sparse, version, true
@@ -2607,7 +2607,7 @@ func (h *hnsw) GetInto(dst []float32, id uint64) (vec []float32, meta Metadata, 
 		}
 	}
 	if sv := h.arena.Sparse(slot); sv != nil {
-		sparse = sv.clone() // clone: arena owns the pointer
+		sparse = sv.Clone() // clone: arena owns the pointer
 	}
 	return vec, meta, ttl, sparse, version, true
 }
@@ -3260,7 +3260,7 @@ func (h *hnsw) searchIntoWith(dst []Result, query []float32, k int, filter Filte
 	if k <= 0 {
 		return dst, nil
 	}
-	pred, err := filter.Compile()
+	pred, err := CompileFilter(filter)
 	if err != nil {
 		return dst, err
 	}
@@ -3781,7 +3781,7 @@ func (h *hnsw) buildLanes(dense []float32, sparse SparseVector, k int, opts Hybr
 	if err := sparse.Validate(); err != nil {
 		return nil, nil, err
 	}
-	pred, err := opts.Filter.Compile()
+	pred, err := CompileFilter(opts.Filter)
 	if err != nil {
 		return nil, nil, err
 	}

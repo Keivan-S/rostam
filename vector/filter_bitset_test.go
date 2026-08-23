@@ -643,7 +643,7 @@ func TestOrderingIndexAgreesWithThePredicateForNaN(t *testing.T) {
 		if !ok {
 			t.Fatalf("op %d: orderingSet declined", op)
 		}
-		pred, err := Filter{Op: op, Field: "score", Value: NewFloat(3)}.Compile()
+		pred, err := CompileFilter(Filter{Op: op, Field: "score", Value: NewFloat(3)})
 		if err != nil {
 			t.Fatalf("compile: %v", err)
 		}
@@ -665,7 +665,7 @@ func TestOrderingIndexAgreesWithThePredicateForNaN(t *testing.T) {
 			}
 		}
 		// A NaN BOUND matches nothing and narrows nothing.
-		if pred, err := (Filter{Op: op, Field: "score", Value: NewFloat(math.NaN())}).Compile(); err != nil {
+		if pred, err := CompileFilter(Filter{Op: op, Field: "score", Value: NewFloat(math.NaN())}); err != nil {
 			t.Fatalf("compile nan bound: %v", err)
 		} else {
 			for _, v := range vals {
@@ -754,7 +754,7 @@ func TestAdmitGateUsesOrderingSets(t *testing.T) {
 		{Op: FilterMatch, Field: "text", Value: NewString("dog")},
 		{Op: FilterLt, Field: "size", Value: NewInt(6)},
 	}}
-	pred, err := f.Compile()
+	pred, err := CompileFilter(f)
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}
@@ -1129,7 +1129,7 @@ func TestAdmitGateUnderConcurrentLinkers(t *testing.T) {
 	)
 	h := gateCorpus(t, n, dim)
 	filter := Filter{Op: FilterEq, Field: "color", Value: NewString("red")}
-	pred, err := filter.Compile()
+	pred, err := CompileFilter(filter)
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}

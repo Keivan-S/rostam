@@ -544,7 +544,7 @@ func (c *Collection) SearchText(query string, k int, filter Filter) ([]Document,
 	if !ok || !h.FullTextEnabled() {
 		return nil, ErrFullTextDisabled
 	}
-	pred, err := filter.Compile()
+	pred, err := CompileFilter(filter)
 	if err != nil {
 		return nil, err
 	}
@@ -601,7 +601,7 @@ func (c *Collection) SearchTextGlobal(query string, k int, filter Filter, g BM25
 	if !ok || !h.FullTextEnabled() {
 		return nil, ErrFullTextDisabled
 	}
-	pred, err := filter.Compile()
+	pred, err := CompileFilter(filter)
 	if err != nil {
 		return nil, err
 	}
@@ -621,7 +621,7 @@ func (c *Collection) SearchTextGlobalDocs(query string, k int, filter Filter, g 
 	if !ok || !h.FullTextEnabled() {
 		return nil, ErrFullTextDisabled
 	}
-	pred, err := filter.Compile()
+	pred, err := CompileFilter(filter)
 	if err != nil {
 		return nil, err
 	}
@@ -949,7 +949,7 @@ func (c *Collection) ScrollDocs(filter Filter, limit int) ([]Document, error) {
 // remains). The deep-pagination resume-after-id primitive backing the partition
 // fan-out. See hnsw.scrollPage.
 func (c *Collection) ScrollDocsPage(filter Filter, afterID uint64, hasAfter bool, limit int) (docs []Document, nextAfter uint64, hasMore bool, err error) {
-	pred, err := filter.Compile()
+	pred, err := CompileFilter(filter)
 	if err != nil {
 		return nil, 0, false, err // fail loud on a malformed filter (matches ScrollDocs)
 	}
@@ -969,7 +969,7 @@ func (c *Collection) ScrollDocsPage(filter Filter, afterID uint64, hasAfter bool
 // order == nil falls back to the plain id-ascending ScrollDocsPage path (so callers
 // can pass a possibly-nil order uniformly).
 func (c *Collection) ScrollDocsPageOrder(filter Filter, order *OrderBy, afterID uint64, afterKey float64, hasAfter bool, limit int) (docs []Document, nextAfter uint64, hasMore bool, err error) {
-	pred, err := filter.Compile()
+	pred, err := CompileFilter(filter)
 	if err != nil {
 		return nil, 0, false, err
 	}
@@ -988,7 +988,7 @@ func (c *Collection) ScanVectors() []ScanRecord { return c.idx.scanVectors() }
 // chunks of a document), returning the count removed. The deletes are WAL-logged.
 // A zero/match-all filter is rejected (ErrEmptyFilter).
 func (c *Collection) DeleteByFilter(filter Filter) (int, error) {
-	pred, err := filter.Compile()
+	pred, err := CompileFilter(filter)
 	if err != nil {
 		return 0, err
 	}
@@ -1229,7 +1229,7 @@ func (c *Collection) DeleteCASAt(id uint64, cas CASCond, nowMs int64) (bool, err
 // replicated delete-by-filter selects and tombstones the SAME id set on every
 // replica (#4 vector TTL determinism).
 func (c *Collection) DeleteByFilterAt(filter Filter, nowMs int64) (int, error) {
-	pred, err := filter.Compile()
+	pred, err := CompileFilter(filter)
 	if err != nil {
 		return 0, err
 	}

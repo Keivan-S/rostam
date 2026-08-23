@@ -136,7 +136,7 @@ func TestColumnMatchesPredicateSlotBySlot(t *testing.T) {
 	capacity := h.arena.Capacity()
 
 	for _, tc := range columnFilters() {
-		pred, err := tc.f.Compile()
+		pred, err := CompileFilter(tc.f)
 		if err != nil {
 			t.Fatalf("%s: compile: %v", tc.name, err)
 		}
@@ -256,7 +256,7 @@ func TestColumnTracksPayloadMutations(t *testing.T) {
 		}
 	}
 
-	pred, err := f.Compile()
+	pred, err := CompileFilter(f)
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}
@@ -463,7 +463,7 @@ func TestColumnUnderConcurrentReadersAndWriters(t *testing.T) {
 
 	// And the column must still agree with the predicate afterwards.
 	f := filters[2]
-	pred, err := f.Compile()
+	pred, err := CompileFilter(f)
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}
@@ -858,7 +858,7 @@ func TestColumnCoversSlotsAddedAfterTheBuild(t *testing.T) {
 		t.Fatalf("column length %d did not grow past the build-time %d", len(col), before)
 	}
 	f := Filter{Op: FilterGte, Field: "seq", Value: NewInt(300)}
-	pred, err := f.Compile()
+	pred, err := CompileFilter(f)
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}

@@ -7,7 +7,7 @@ import (
 	"fmt"
 
 	"github.com/rostamlabs/rostam/ops/wire"
-	"github.com/rostamlabs/rostam/vector"
+	"github.com/rostamlabs/rostam/vtypes"
 )
 
 // RecommendRequest recommends points similar to a set of positive examples and
@@ -17,9 +17,9 @@ import (
 type RecommendRequest struct {
 	Positive    []uint64
 	Negative    []uint64
-	Strategy    vector.RecommendStrategy // zero = RecommendAverageVector
+	Strategy    vtypes.RecommendStrategy // zero = RecommendAverageVector
 	K           int
-	Filter      vector.Filter
+	Filter      vtypes.Filter
 	Consistency Consistency
 }
 
@@ -41,19 +41,19 @@ type RecommendRequest struct {
 // RERANK result DecodeQueryResultDegraded expects. Against a single
 // coordinator-less node, the fused result cannot be decoded.
 func (col *Collection) Recommend(ctx context.Context, req RecommendRequest) (SearchResponse, error) {
-	leaf := vector.QueryLeaf{
-		Kind:      vector.LeafRecommend,
+	leaf := vtypes.QueryLeaf{
+		Kind:      vtypes.LeafRecommend,
 		Positive:  req.Positive,
 		Negative:  req.Negative,
 		Strategy:  req.Strategy,
-		ScoreDesc: req.Strategy == vector.RecommendBestScore,
+		ScoreDesc: req.Strategy == vtypes.RecommendBestScore,
 		K:         req.K,
 		Filter:    req.Filter,
 	}
-	spec := vector.QuerySpec{
-		Mode:     vector.ModeFusion,
+	spec := vtypes.QuerySpec{
+		Mode:     vtypes.ModeFusion,
 		K:        req.K,
-		Prefetch: []vector.QuerySource{vector.LeafSource(leaf)},
+		Prefetch: []vtypes.QuerySource{vtypes.LeafSource(leaf)},
 	}
 	return col.Query(ctx, QueryRequest{Spec: spec, Consistency: req.Consistency})
 }
@@ -61,7 +61,7 @@ func (col *Collection) Recommend(ctx context.Context, req RecommendRequest) (Sea
 // QueryRequest is the power-user escape hatch: run any QuerySpec (multi-leaf
 // fusion, rerank, discover) directly.
 type QueryRequest struct {
-	Spec        vector.QuerySpec
+	Spec        vtypes.QuerySpec
 	Consistency Consistency
 }
 

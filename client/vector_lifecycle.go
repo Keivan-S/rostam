@@ -7,25 +7,25 @@ import (
 	"strings"
 
 	"github.com/rostamlabs/rostam/ops/wire"
-	"github.com/rostamlabs/rostam/vector"
+	"github.com/rostamlabs/rostam/vtypes"
 )
 
 // CreateRequest configures a new collection. Only Dim is required. Set FullText
 // to enable the server-side BM25 lane (required for HybridText).
 type CreateRequest struct {
 	Dim            int
-	Metric         vector.Metric // zero value = vector.Cosine
+	Metric         vtypes.Metric // zero value = vtypes.Cosine
 	M              int
 	EfConstruction int
 	EfSearch       int
 	Persistent     bool
-	FullText       *vector.FullTextConfig
+	FullText       *vtypes.FullTextConfig
 }
 
 // Create creates the collection backing this handle. If a collection with the
 // same name already exists, it returns ErrCollectionExists.
 func (col *Collection) Create(ctx context.Context, req CreateRequest) error {
-	cfg := vector.Config{
+	cfg := vtypes.Config{
 		Dim:            req.Dim,
 		Metric:         req.Metric,
 		M:              req.M,

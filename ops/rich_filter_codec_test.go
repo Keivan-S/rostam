@@ -49,7 +49,7 @@ func TestRichFilterSearchArgsRoundtrip(t *testing.T) {
 	}
 	// The decoded filter must still compile (proves every op name resolved to a
 	// real op and every value is well-formed).
-	if _, cerr := got.Compile(); cerr != nil {
+	if _, cerr := vector.CompileFilter(got); cerr != nil {
 		t.Errorf("decoded filter does not compile: %v", cerr)
 	}
 }
@@ -67,7 +67,7 @@ func TestRichFilterScrollArgsRoundtrip(t *testing.T) {
 	if !reflect.DeepEqual(orig, got) {
 		t.Errorf("scroll filter roundtrip mismatch:\n orig=%+v\n got =%+v", orig, got)
 	}
-	if _, cerr := got.Compile(); cerr != nil {
+	if _, cerr := vector.CompileFilter(got); cerr != nil {
 		t.Errorf("decoded filter does not compile: %v", cerr)
 	}
 }
@@ -83,7 +83,7 @@ func TestRichFilterDeleteByFilterArgsRoundtrip(t *testing.T) {
 	if !reflect.DeepEqual(orig, got) {
 		t.Errorf("delete-by-filter roundtrip mismatch:\n orig=%+v\n got =%+v", orig, got)
 	}
-	if _, cerr := got.Compile(); cerr != nil {
+	if _, cerr := vector.CompileFilter(got); cerr != nil {
 		t.Errorf("decoded filter does not compile: %v", cerr)
 	}
 }
@@ -99,7 +99,7 @@ func TestRichFilterHybridArgsRoundtrip(t *testing.T) {
 	if !reflect.DeepEqual(orig, got.Filter) {
 		t.Errorf("hybrid filter roundtrip mismatch:\n orig=%+v\n got =%+v", orig, got.Filter)
 	}
-	if _, cerr := got.Filter.Compile(); cerr != nil {
+	if _, cerr := vector.CompileFilter(got.Filter); cerr != nil {
 		t.Errorf("decoded filter does not compile: %v", cerr)
 	}
 }
@@ -115,7 +115,7 @@ func TestRichFilterGroupArgsRoundtrip(t *testing.T) {
 	if !reflect.DeepEqual(orig, got.Filter) {
 		t.Errorf("group filter roundtrip mismatch:\n orig=%+v\n got =%+v", orig, got.Filter)
 	}
-	if _, cerr := got.Filter.Compile(); cerr != nil {
+	if _, cerr := vector.CompileFilter(got.Filter); cerr != nil {
 		t.Errorf("decoded filter does not compile: %v", cerr)
 	}
 }

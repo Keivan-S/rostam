@@ -82,7 +82,7 @@ func concatPages(pages []pageRecord) []uint64 {
 
 func hnswScrollFn(h *hnsw) scrollFn {
 	return func(filter Filter, afterID uint64, hasAfter bool, limit int) ([]Document, uint64, bool) {
-		pred, err := filter.Compile()
+		pred, err := CompileFilter(filter)
 		if err != nil {
 			panic(err)
 		}
@@ -92,7 +92,7 @@ func hnswScrollFn(h *hnsw) scrollFn {
 
 func ivfScrollFn(ix *ivf) scrollFn {
 	return func(filter Filter, afterID uint64, hasAfter bool, limit int) ([]Document, uint64, bool) {
-		pred, err := filter.Compile()
+		pred, err := CompileFilter(filter)
 		if err != nil {
 			panic(err)
 		}
@@ -242,7 +242,7 @@ func TestScrollFilterFirstGate(t *testing.T) {
 	for _, p := range scrollDataset(total) {
 		insertScroll(t, h, p.id, ptMeta(p))
 	}
-	pred, _ := acceleratedEq.Compile()
+	pred, _ := CompileFilter(acceleratedEq)
 	h.mu.RLock()
 	cands, ok := h.filterFirstScrollCandsLocked(acceleratedEq, pred, nil)
 	h.mu.RUnlock()
@@ -261,7 +261,7 @@ func TestScrollFilterFirstGate(t *testing.T) {
 	// Non-accelerable filters decline.
 	for _, f := range []Filter{fallbackNe, fallbackRange, fallbackIn,
 		{Op: FilterRegex, Field: "kind", Value: NewString("^even$")}} {
-		fp, _ := f.Compile()
+		fp, _ := CompileFilter(f)
 		h.mu.RLock()
 		_, ok := h.filterFirstScrollCandsLocked(f, fp, nil)
 		h.mu.RUnlock()
@@ -428,7 +428,7 @@ func TestScrollFilterFirstOrderByResult(t *testing.T) {
 	}
 	order := &OrderBy{Key: "n", Desc: false}
 	filter := acceleratedEq // engages order_by filter-first (narrows the order rows)
-	pred, err := filter.Compile()
+	pred, err := CompileFilter(filter)
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}

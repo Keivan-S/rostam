@@ -163,7 +163,7 @@ func concatOrderPages(pages []orderPageRecord) []uint64 {
 
 func hnswOrderScrollFn(h *hnsw) orderScrollFn {
 	return func(filter Filter, order *OrderBy, afterID uint64, afterKey float64, hasAfter bool, limit int) ([]Document, uint64, bool) {
-		pred, err := filter.Compile()
+		pred, err := CompileFilter(filter)
 		if err != nil {
 			panic(err)
 		}
@@ -173,7 +173,7 @@ func hnswOrderScrollFn(h *hnsw) orderScrollFn {
 
 func ivfOrderScrollFn(ix *ivf) orderScrollFn {
 	return func(filter Filter, order *OrderBy, afterID uint64, afterKey float64, hasAfter bool, limit int) ([]Document, uint64, bool) {
-		pred, err := filter.Compile()
+		pred, err := CompileFilter(filter)
 		if err != nil {
 			panic(err)
 		}
@@ -183,7 +183,7 @@ func ivfOrderScrollFn(ix *ivf) orderScrollFn {
 
 func namedOrderScrollFn(nc *NamedCollection) orderScrollFn {
 	return func(filter Filter, order *OrderBy, afterID uint64, afterKey float64, hasAfter bool, limit int) ([]Document, uint64, bool) {
-		pred, err := filter.Compile()
+		pred, err := CompileFilter(filter)
 		if err != nil {
 			panic(err)
 		}
@@ -193,7 +193,7 @@ func namedOrderScrollFn(nc *NamedCollection) orderScrollFn {
 
 func mvOrderScrollFn(m *MultiVectorIndex) orderScrollFn {
 	return func(filter Filter, order *OrderBy, afterID uint64, afterKey float64, hasAfter bool, limit int) ([]Document, uint64, bool) {
-		pred, err := filter.Compile()
+		pred, err := CompileFilter(filter)
 		if err != nil {
 			panic(err)
 		}
@@ -389,7 +389,7 @@ func TestOrderFilterFirstHNSWGate(t *testing.T) {
 		insertScroll(t, h, p.id, m)
 	}
 	order := &OrderBy{Key: "o", Kind: OrderNumeric, Desc: false}
-	pred, _ := acceleratedEq.Compile()
+	pred, _ := CompileFilter(acceleratedEq)
 	h.mu.RLock()
 	rows, ok := h.filterFirstOrderRowsLocked(acceleratedEq, pred, nil, order)
 	h.mu.RUnlock()
@@ -411,7 +411,7 @@ func TestOrderFilterFirstHNSWGate(t *testing.T) {
 	// Non-accelerable filters decline.
 	for _, f := range []Filter{fallbackNe, fallbackRange, fallbackIn,
 		{Op: FilterRegex, Field: "kind", Value: NewString("^even$")}} {
-		fp, _ := f.Compile()
+		fp, _ := CompileFilter(f)
 		h.mu.RLock()
 		_, dok := h.filterFirstOrderRowsLocked(f, fp, nil, order)
 		h.mu.RUnlock()

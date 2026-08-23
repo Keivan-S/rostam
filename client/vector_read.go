@@ -7,14 +7,14 @@ import (
 	"encoding/json"
 
 	"github.com/rostamlabs/rostam/ops/wire"
-	"github.com/rostamlabs/rostam/vector"
+	"github.com/rostamlabs/rostam/vtypes"
 )
 
 // Point is a stored point returned by reads.
 type Point struct {
 	ID       uint64
 	Vector   []float32
-	Metadata vector.Metadata
+	Metadata vtypes.Metadata
 	TTLMs    uint64
 	Version  uint64
 }
@@ -112,13 +112,13 @@ type Document struct {
 	Distance float32
 	Score    float32
 	Content  string
-	Metadata vector.Metadata
+	Metadata vtypes.Metadata
 }
 
 // ScrollRequest pages through a collection's points in id order (or resuming
 // from a prior page's Cursor), applying an optional filter.
 type ScrollRequest struct {
-	Filter vector.Filter
+	Filter vtypes.Filter
 	Limit  int
 	Cursor string
 }
@@ -151,9 +151,9 @@ func (col *Collection) Scroll(ctx context.Context, req ScrollRequest) (ScrollRes
 	}
 	out := ScrollResponse{NextCursor: nextCursor}
 	for _, d := range docs {
-		var meta vector.Metadata
+		var meta vtypes.Metadata
 		if len(d.Metadata) > 0 {
-			meta = make(vector.Metadata)
+			meta = make(vtypes.Metadata)
 			if err := json.Unmarshal(d.Metadata, &meta); err != nil {
 				return ScrollResponse{}, err
 			}

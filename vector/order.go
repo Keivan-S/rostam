@@ -11,30 +11,9 @@ import (
 	"time"
 )
 
-// OrderKind is the value-type of an order_by field, chosen explicitly on the wire
-// (NOT inferred at runtime) so the decode is deterministic and there is no
-// mixed-type ambiguity.
-//
-//   - OrderNumeric  (0, the zero value / default): int or float, read via
-//     numericValue into a float64 key. Datetime shares this float64 path.
-//   - OrderDatetime (1): a datetime stored as unix-ms in an int Value; read
-//     identically to OrderNumeric (int-ms -> float64). The kind exists for the
-//     caller's semantics + the start_from RFC3339 lowering; the extraction is the
-//     numeric float64 path. Kept distinct from OrderNumeric for wire clarity.
-//   - OrderString   (2): a string/keyword field, read via stringValue into a
-//     string key with a lexicographic (string, id) total order + a v3 cursor.
-//
-// The engine branches on OrderString vs the float64 kinds; OrderNumeric and
-// OrderDatetime are byte/behaviour-identical to the pre-existing numeric/datetime
-// path (OrderDatetime was previously carried by the IsDatetime bool, which is
-// retained — see OrderBy).
-type OrderKind uint8
-
-const (
-	OrderNumeric  OrderKind = 0
-	OrderDatetime OrderKind = 1
-	OrderString   OrderKind = 2
-)
+// OrderKind (and its OrderNumeric / OrderDatetime / OrderString constants), the
+// OrderBy struct, and the OrderVal tuple element now live in the engine-free
+// vtypes leaf package and are re-exported from vtypes_aliases.go.
 
 // ErrEmptyOrderKey is returned by ParseOrderBy when an order_by is requested with an
 // empty key. Transports map it to a 400 / InvalidArgument.
@@ -103,61 +82,6 @@ func ParseOrderBy(key string, desc, isDatetime, isString bool, startNumeric *flo
 		o.HasStart = true
 	}
 	return o, nil
-}
-
-// OrderBy describes a scroll's ordering: paginate the result set by an arbitrary
-// NUMERIC (int/float) or DATETIME payload field instead of the default
-// id-ascending order. It is a plain value type threaded through the engine scroll
-// call (it is wired into the index scrollPage signature).
-//
-//   - Key         the (possibly dotted) payload field name to order by.
-//   - Desc        descending order on the field value when true; ascending when false.
-//   - IsDatetime  the field is a datetime stored as unix-ms in an int Value;
-//     it is read via OrderKey exactly like a numeric int (int-ms → float64).
-//   - StartFrom   an optional initial value bound (Qdrant `start_from`): the first
-//     page begins at this field value. Only meaningful when HasStart.
-//   - HasStart    whether StartFrom is set.
-//
-// Missing-field policy is EXCLUDE (Qdrant default): a point whose order field is
-// absent or non-numeric (numeric/datetime) / non-string (string) is omitted from an
-// order_by scroll (see OrderKey / OrderStringKey).
-//
-//   - Kind         the value-type of the field (OrderNumeric default / OrderDatetime
-//     / OrderString). OrderString switches the engine onto the lexicographic
-//     (stringValue, id) total order + a v3 cursor; the numeric/datetime float64 path
-//     is unchanged. IsDatetime is retained for back-compat (the datetime float64
-//     path); a string order sets Kind=OrderString and IsDatetime is irrelevant.
-//   - ResumeStr/HasResumeStr  the v3 cursor's resume STRING key (the string analogue
-//     of the float64 resume that rides the engine's afterKey param). Only meaningful
-//     when Kind==OrderString && HasResumeStr; the page returns rows strictly after
-//     (ResumeStr, afterID) in the order direction. Page 1 has neither.
-//   - Tail        the MULTI-KEY extension: the ordered secondary/tertiary sort keys
-//     (Tail[0] is the 2nd key, Tail[1] the 3rd, …). The OrderBy itself is the PRIMARY
-//     (key[0]); the full ordered key list is the head + Tail. EMPTY/nil Tail ⇒ exactly
-//     the single-key path (byte/behaviour-identical: a single-key order still emits a
-//     v2/v3 cursor, never v4, and uses the single Key/StrKey fast path). A non-empty
-//     Tail switches the engine onto the TUPLE-LEXICOGRAPHIC total order
-//     (OrderLessTuple/OrderAfterTuple) + the v4 cursor. Each Tail key carries its own
-//     Kind+Desc (mixed kinds per key allowed); StartFrom/HasStart and ResumeStr are
-//     primary-only (multi-key resume rides the v4 cursor tuple, threaded via the
-//     primary's ResumeKeys — see below). Tail keys' StartFrom/Resume* fields are
-//     ignored (the tuple resume is the v4 cursor, decoded into ResumeKeys).
-//   - ResumeKeys/HasResumeKeys  the v4 cursor's resume TUPLE (one OrderVal per key,
-//     including the primary at index 0). Only meaningful when len(Tail)>0 &&
-//     HasResumeKeys; the page returns rows strictly after the (k1,…,kN, afterID)
-//     position in the tuple-lexicographic order. Page 1 has neither.
-type OrderBy struct {
-	Key           string
-	Desc          bool
-	IsDatetime    bool
-	Kind          OrderKind
-	StartFrom     float64
-	HasStart      bool
-	ResumeStr     string
-	HasResumeStr  bool
-	Tail          []OrderBy
-	ResumeKeys    []OrderVal
-	HasResumeKeys bool
 }
 
 // orderKeyList returns the full ordered sort-key list for an OrderBy: the primary
@@ -307,18 +231,6 @@ func OrderLess(aKey float64, aID uint64, bKey float64, bID uint64, desc bool) bo
 // is true.
 func OrderAfter(curKey float64, curID uint64, key float64, id uint64, desc bool) bool {
 	return OrderLess(curKey, curID, key, id, desc)
-}
-
-// OrderVal is one typed key value in a MULTI-KEY order tuple: a float64 for
-// OrderNumeric/OrderDatetime (Num; Str unused) or a string for OrderString (Str; Num
-// unused). Kind selects which field is live so the tuple comparator dispatches per key
-// (mixed kinds per key are allowed). It is the per-key element of OrderedID.Keys and
-// the v4 cursor's resume tuple. OrderVal is comparable (no slices), so OrderedID stays
-// comparable for the single-key fast path's struct equality in tests.
-type OrderVal struct {
-	Num  float64
-	Str  string
-	Kind OrderKind
 }
 
 // OrderedID pairs an ordering key with its point id for sorting a scroll page.

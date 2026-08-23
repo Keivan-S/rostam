@@ -320,40 +320,40 @@ func TestIVFPQConfigValidation(t *testing.T) {
 	c := base()
 	c.IndexType = IndexHNSW
 	c.IVFPQ = true
-	if err := c.Validate(); err != ErrInvalidIVFPQ {
+	if err := ValidateConfig(c); err != ErrInvalidIVFPQ {
 		t.Fatalf("IVFPQ on HNSW: err = %v, want ErrInvalidIVFPQ", err)
 	}
 	// IVFRerank also requires IVF.
 	c = base()
 	c.IndexType = IndexHNSW
 	c.IVFRerank = true
-	if err := c.Validate(); err != ErrInvalidIVFPQ {
+	if err := ValidateConfig(c); err != ErrInvalidIVFPQ {
 		t.Fatalf("IVFRerank on HNSW: err = %v, want ErrInvalidIVFPQ", err)
 	}
 	// Indivisible m rejected.
 	c = base()
 	c.IVFPQ = true
 	c.IVFPQM = 7 // 32 % 7 != 0
-	if err := c.Validate(); err != ErrInvalidIVFPQM {
+	if err := ValidateConfig(c); err != ErrInvalidIVFPQM {
 		t.Fatalf("indivisible m: err = %v, want ErrInvalidIVFPQM", err)
 	}
 	// Negative m rejected.
 	c = base()
 	c.IVFPQM = -1
-	if err := c.Validate(); err != ErrInvalidIVFPQM {
+	if err := ValidateConfig(c); err != ErrInvalidIVFPQM {
 		t.Fatalf("negative m: err = %v, want ErrInvalidIVFPQM", err)
 	}
 	// m == 0 (default) + IVFPQ valid.
 	c = base()
 	c.IVFPQ = true
-	if err := c.Validate(); err != nil {
+	if err := ValidateConfig(c); err != nil {
 		t.Fatalf("IVFPQ m=0 default: unexpected err %v", err)
 	}
 	// Divisible m valid.
 	c = base()
 	c.IVFPQ = true
 	c.IVFPQM = 8
-	if err := c.Validate(); err != nil {
+	if err := ValidateConfig(c); err != nil {
 		t.Fatalf("IVFPQ m=8: unexpected err %v", err)
 	}
 }

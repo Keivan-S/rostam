@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/rostamlabs/rostam/vector"
+	"github.com/rostamlabs/rostam/vtypes"
 )
 
 // TestGetOnMissingCollection confirms Get surfaces the server's distinguishable
@@ -54,7 +54,7 @@ func TestGetAndGetBatch(t *testing.T) {
 
 	if err := col.Upsert(ctx, WriteRequest{
 		ID: 1, Vector: []float32{0.1, 0.2, 0.3, 0.4},
-		Metadata: vector.Metadata{"title": vector.NewString("Hello")},
+		Metadata: vtypes.Metadata{"title": vtypes.NewString("Hello")},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -92,13 +92,13 @@ func TestScroll(t *testing.T) {
 		if err := col.Upsert(ctx, WriteRequest{
 			ID: id, Vector: []float32{0.1, 0.2, 0.3, 0.4},
 			Content:  "doc",
-			Metadata: vector.Metadata{"title": vector.NewString("Hello")},
+			Metadata: vtypes.Metadata{"title": vtypes.NewString("Hello")},
 		}); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	resp, err := col.Scroll(ctx, ScrollRequest{Filter: vector.Filter{}, Limit: 10})
+	resp, err := col.Scroll(ctx, ScrollRequest{Filter: vtypes.Filter{}, Limit: 10})
 	if err != nil {
 		t.Fatalf("Scroll: %v", err)
 	}

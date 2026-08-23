@@ -66,25 +66,9 @@ func (h *hnsw) Recommend(k int, opts RecommendOpts) ([]Result, error) {
 	return out, nil
 }
 
-// RecommendStrategy selects how a recommend query scores candidates. It mirrors
-// Qdrant's recommend strategy enum: AverageVector derives ONE query vector
-// mean(positive) - mean(negative) (the default — a dense rewrite); BestScore
-// scores each candidate by a custom per-candidate max-similarity merge over the
-// positive/negative example vectors (NOT a derived vector — a real scorer, like
-// Discover). The zero value is RecommendAverageVector so an un-strategied
-// recommend leaf is byte/behaviour-identical to the original AVERAGE_VECTOR path.
-type RecommendStrategy uint8
-
-const (
-	// RecommendAverageVector (default, 0) is the original recommend: derive
-	// normalize(mean(positive) - mean(negative)) → a dense query. Byte-identical to
-	// the pre-strategy recommend path.
-	RecommendAverageVector RecommendStrategy = iota
-	// RecommendBestScore scores each candidate by merge(max_sim_to_any_positive,
-	// max_sim_to_any_negative) — a custom per-candidate scorer (mirrors Discover's
-	// custom scorer), score-descending.
-	RecommendBestScore
-)
+// RecommendStrategy and its RecommendAverageVector / RecommendBestScore constants
+// now live in the engine-free vtypes leaf package and are re-exported from
+// vtypes_aliases.go.
 
 // RecommendVecsOpts configures a BEST_SCORE recommend whose positive/negative
 // example vectors are already RESOLVED to floats (the Query API leaf form). It is

@@ -101,7 +101,7 @@ func removeClusterMVFiles(cfg MultiVectorConfig) {
 	if cfg.MmapPath == "" {
 		return
 	}
-	for _, p := range []string{cfg.MmapPath, cfg.GraphMmapPath, cfg.metaPath(), cfg.mapsPath()} {
+	for _, p := range []string{cfg.MmapPath, cfg.GraphMmapPath, mvMetaPath(cfg), mvMapsPath(cfg)} {
 		_ = os.Remove(p)
 	}
 }
@@ -234,7 +234,7 @@ func (s *CollectionStore) loadMultiVector(canonical, cfgPath string) error {
 
 	eff := s.withMVPaths(canonical, cfg)
 	var idx *MultiVectorIndex
-	if _, statErr := os.Stat(eff.metaPath()); statErr == nil {
+	if _, statErr := os.Stat(mvMetaPath(eff)); statErr == nil {
 		idx, err = openPersistentMultiVector(eff)
 	} else {
 		idx, err = NewMultiVectorIndex(eff)
@@ -356,7 +356,7 @@ func (s *CollectionStore) DropMultiVector(name string) error {
 	// the single-node files (mmap Persistent + WAL heap-checkpoint) and the cluster
 	// generation files (no-ops if absent — a heap-only collection has none).
 	idx.retire(func() {
-		for _, p := range []string{cfgPath, vecs, graph, eff.metaPath(), eff.mapsPath(), wsnap, wwal} {
+		for _, p := range []string{cfgPath, vecs, graph, mvMetaPath(eff), mvMapsPath(eff), wsnap, wwal} {
 			_ = os.Remove(p)
 		}
 		removeClusterMVFiles(idxCfg)

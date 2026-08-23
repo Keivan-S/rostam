@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/rostamlabs/rostam/vector"
+	"github.com/rostamlabs/rostam/vtypes"
 )
 
 func TestCollectionCreateAndDrop(t *testing.T) {
@@ -22,13 +22,13 @@ func TestCollectionCreateAndDrop(t *testing.T) {
 	col := c.Collection("posts")
 	if err := col.Create(ctx, CreateRequest{
 		Dim:      4,
-		Metric:   vector.Cosine,
-		FullText: &vector.FullTextConfig{Analyzer: "english"},
+		Metric:   vtypes.Cosine,
+		FullText: &vtypes.FullTextConfig{Analyzer: "english"},
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	// Second create of the same name must surface ErrCollectionExists.
-	err = col.Create(ctx, CreateRequest{Dim: 4, Metric: vector.Cosine})
+	err = col.Create(ctx, CreateRequest{Dim: 4, Metric: vtypes.Cosine})
 	if !errors.Is(err, ErrCollectionExists) {
 		t.Fatalf("second Create: want ErrCollectionExists, got %v", err)
 	}

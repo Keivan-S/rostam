@@ -925,8 +925,8 @@ func TestVectorSearchArgsExtRoundtrip(t *testing.T) {
 		t.Fatal("filter decoded as zero, want eq tenant=acme")
 	}
 	m := vector.Metadata{"tenant": vector.NewString("acme")}
-	wantPred, _ := filter.Compile()
-	gotPred, _ := gotFilter.Compile()
+	wantPred, _ := vector.CompileFilter(filter)
+	gotPred, _ := vector.CompileFilter(gotFilter)
 	if wantPred(m) != gotPred(m) {
 		t.Error("roundtripped filter disagrees with original")
 	}

@@ -7,7 +7,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/rostamlabs/rostam/vector"
+	"github.com/rostamlabs/rostam/vtypes"
 )
 
 // ErrShortArgs indicates the args byte slice is shorter than expected.
@@ -189,11 +189,11 @@ func DecodeIncrResult(b []byte) (int64, error) {
 // (empty Tail / no ResumeKeys); a multi-key ScrollOrder fills OrderBy.Tail + ResumeKeys so
 // the engine's tuple comparator + v4 seek run. Shared by the leaf engine and the
 // coordinator fan-out (rostam.scrollOrderByFromOps) so they agree on the order.
-func ScrollOrderToOrderBy(o *ScrollOrder) *vector.OrderBy {
+func ScrollOrderToOrderBy(o *ScrollOrder) *vtypes.OrderBy {
 	if o == nil {
 		return nil
 	}
-	ob := &vector.OrderBy{
+	ob := &vtypes.OrderBy{
 		Key:          o.Key,
 		Desc:         o.Desc,
 		IsDatetime:   o.IsDatetime,
@@ -204,14 +204,14 @@ func ScrollOrderToOrderBy(o *ScrollOrder) *vector.OrderBy {
 		HasResumeStr: o.HasResumeStr,
 	}
 	if len(o.Tail) > 0 {
-		ob.Tail = make([]vector.OrderBy, len(o.Tail))
+		ob.Tail = make([]vtypes.OrderBy, len(o.Tail))
 		for i, tk := range o.Tail {
-			ob.Tail[i] = vector.OrderBy{Key: tk.Key, Desc: tk.Desc, IsDatetime: tk.IsDatetime, Kind: tk.Kind}
+			ob.Tail[i] = vtypes.OrderBy{Key: tk.Key, Desc: tk.Desc, IsDatetime: tk.IsDatetime, Kind: tk.Kind}
 		}
 		if o.HasResumeKeys {
-			ob.ResumeKeys = make([]vector.OrderVal, len(o.ResumeKeys))
+			ob.ResumeKeys = make([]vtypes.OrderVal, len(o.ResumeKeys))
 			for i, rv := range o.ResumeKeys {
-				ob.ResumeKeys[i] = vector.OrderVal{Num: rv.Num, Str: rv.Str, Kind: rv.Kind}
+				ob.ResumeKeys[i] = vtypes.OrderVal{Num: rv.Num, Str: rv.Str, Kind: rv.Kind}
 			}
 			ob.HasResumeKeys = true
 		}
@@ -225,7 +225,7 @@ func ScrollOrderToOrderBy(o *ScrollOrder) *vector.OrderBy {
 // caller (each transport builds the primary + resume per its cursor path); this fills the
 // Tail so every transport's ScrollOrder construction shares ONE multi-key mapping. A
 // single-key OrderBy (empty Tail) yields an empty Tail (byte-identical single-key path).
-func OrderByToScrollOrderTail(ob *vector.OrderBy) []ScrollOrderKey {
+func OrderByToScrollOrderTail(ob *vtypes.OrderBy) []ScrollOrderKey {
 	if ob == nil || len(ob.Tail) == 0 {
 		return nil
 	}

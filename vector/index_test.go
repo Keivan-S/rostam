@@ -20,14 +20,14 @@ func TestConfigPartitionsValidation(t *testing.T) {
 	for _, p := range []int{0, 1, 8, 256} {
 		c := base
 		c.Partitions = p
-		if err := c.Validate(); err != nil {
+		if err := ValidateConfig(c); err != nil {
 			t.Errorf("Partitions=%d: unexpected error %v", p, err)
 		}
 	}
 	// Negative is invalid.
 	c := base
 	c.Partitions = -1
-	err := c.Validate()
+	err := ValidateConfig(c)
 	if err == nil {
 		t.Error("Partitions=-1 should be invalid")
 	} else if !errors.Is(err, ErrInvalidPartitions) {
@@ -57,7 +57,7 @@ func TestConfigValidate(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := tc.cfg.Validate()
+			got := ValidateConfig(tc.cfg)
 			if !errors.Is(got, tc.want) {
 				t.Fatalf("got %v, want %v", got, tc.want)
 			}

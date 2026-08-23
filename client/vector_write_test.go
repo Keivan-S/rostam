@@ -5,7 +5,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/rostamlabs/rostam/vector"
+	"github.com/rostamlabs/rostam/vtypes"
 )
 
 func mustCollection(t *testing.T) (*Collection, func()) {
@@ -17,7 +17,7 @@ func mustCollection(t *testing.T) (*Collection, func()) {
 		t.Fatal(err)
 	}
 	col := c.Collection("posts")
-	if err := col.Create(context.Background(), CreateRequest{Dim: 4, Metric: vector.Cosine}); err != nil {
+	if err := col.Create(context.Background(), CreateRequest{Dim: 4, Metric: vtypes.Cosine}); err != nil {
 		_ = c.Close()
 		stop()
 		t.Fatal(err)
@@ -34,7 +34,7 @@ func TestUpsertThenDelete(t *testing.T) {
 		ID:       1,
 		Vector:   []float32{0.1, 0.2, 0.3, 0.4},
 		Content:  "hello world",
-		Metadata: vector.Metadata{"title": vector.NewString("Hello")},
+		Metadata: vtypes.Metadata{"title": vtypes.NewString("Hello")},
 	})
 	if err != nil {
 		t.Fatalf("Upsert: %v", err)

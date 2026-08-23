@@ -426,17 +426,17 @@ func TestFullTextDisabledIsIdentical(t *testing.T) {
 func TestFullTextConfigValidation(t *testing.T) {
 	bad := Config{Dim: 4, Metric: L2, M: 8, EfConstruction: 50, EfSearch: 32, Seed: 1,
 		FullText: &FullTextConfig{Analyzer: "no-such-analyzer"}}
-	if err := bad.Validate(); err != ErrInvalidFullText {
+	if err := ValidateConfig(bad); err != ErrInvalidFullText {
 		t.Fatalf("unknown analyzer: got %v want ErrInvalidFullText", err)
 	}
 	ivf := Config{Dim: 4, Metric: L2, M: 8, EfConstruction: 50, EfSearch: 32, Seed: 1,
 		IndexType: IndexIVF, FullText: &FullTextConfig{}}
-	if err := ivf.Validate(); err != ErrInvalidFullText {
+	if err := ValidateConfig(ivf); err != ErrInvalidFullText {
 		t.Fatalf("IVF + FullText: got %v want ErrInvalidFullText", err)
 	}
 	ok := Config{Dim: 4, Metric: L2, M: 8, EfConstruction: 50, EfSearch: 32, Seed: 1,
 		FullText: &FullTextConfig{Analyzer: "english", K1: 1.5, B: 0.6}}
-	if err := ok.Validate(); err != nil {
+	if err := ValidateConfig(ok); err != nil {
 		t.Fatalf("valid full-text config rejected: %v", err)
 	}
 }

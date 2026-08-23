@@ -153,7 +153,7 @@ func TestIVFBatchedCellScanMatchesPerPairWithMeta(t *testing.T) {
 		}
 		return Metadata{"kind": NewString("odd")}
 	}
-	pred, err := Filter{Op: FilterEq, Field: "kind", Value: NewString("even")}.Compile()
+	pred, err := CompileFilter(Filter{Op: FilterEq, Field: "kind", Value: NewString("even")})
 	if err != nil {
 		t.Fatal(err)
 	}

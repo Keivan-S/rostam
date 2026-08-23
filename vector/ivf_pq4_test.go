@@ -511,14 +511,14 @@ func TestIVFPQ4ValidateRejectsBadNBits(t *testing.T) {
 	for _, bad := range []int{1, 2, 5, 16, -1} {
 		c := base
 		c.PQNBits = bad
-		if err := c.Validate(); !errors.Is(err, ErrInvalidPQNBits) {
+		if err := ValidateConfig(c); !errors.Is(err, ErrInvalidPQNBits) {
 			t.Fatalf("PQNBits=%d: got %v, want ErrInvalidPQNBits", bad, err)
 		}
 	}
 	for _, ok := range []int{0, 4, 8} {
 		c := base
 		c.PQNBits = ok
-		if err := c.Validate(); err != nil {
+		if err := ValidateConfig(c); err != nil {
 			t.Fatalf("PQNBits=%d: unexpected error %v", ok, err)
 		}
 	}

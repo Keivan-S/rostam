@@ -35,7 +35,7 @@ func TestGPUNotSupportedInDefaultBuild(t *testing.T) {
 // IndexType beyond IndexGPU with ErrInvalidIndexType.
 func TestValidateGPUGate(t *testing.T) {
 	t.Run("IndexGPU fails loud", func(t *testing.T) {
-		err := validGPUTestConfig(IndexGPU).Validate()
+		err := ValidateConfig(validGPUTestConfig(IndexGPU))
 		if !errors.Is(err, ErrGPUNotCompiled) {
 			t.Fatalf("Validate(IndexGPU) = %v; want ErrGPUNotCompiled", err)
 		}
@@ -43,14 +43,14 @@ func TestValidateGPUGate(t *testing.T) {
 
 	t.Run("real index types still accepted", func(t *testing.T) {
 		for _, it := range []IndexType{IndexHNSW, IndexIVF, IndexVamana} {
-			if err := validGPUTestConfig(it).Validate(); err != nil {
+			if err := ValidateConfig(validGPUTestConfig(it)); err != nil {
 				t.Fatalf("Validate(IndexType=%d) = %v; want nil", it, err)
 			}
 		}
 	})
 
 	t.Run("beyond IndexGPU rejected", func(t *testing.T) {
-		err := validGPUTestConfig(IndexGPU + 1).Validate()
+		err := ValidateConfig(validGPUTestConfig(IndexGPU + 1))
 		if !errors.Is(err, ErrInvalidIndexType) {
 			t.Fatalf("Validate(IndexGPU+1) = %v; want ErrInvalidIndexType", err)
 		}

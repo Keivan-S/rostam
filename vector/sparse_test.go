@@ -51,11 +51,11 @@ func TestSparseDot(t *testing.T) {
 }
 
 func TestSparseClone(t *testing.T) {
-	if (SparseVector{}).clone() != nil {
+	if (SparseVector{}).Clone() != nil {
 		t.Error("clone of empty sparse should be nil")
 	}
 	orig := SparseVector{Indices: []uint32{1, 2}, Values: []float32{0.5, 0.6}}
-	cl := orig.clone()
+	cl := orig.Clone()
 	if cl == nil {
 		t.Fatal("clone returned nil for non-empty")
 	}

@@ -7,7 +7,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/rostamlabs/rostam/vector"
+	"github.com/rostamlabs/rostam/vtypes"
 )
 
 // oracleVectorSearchArgsNoFilter hand-builds the no-filter vector_search wire
@@ -40,16 +40,16 @@ func TestAppendVectorSearchArgsByteIdentical(t *testing.T) {
 	// Independent oracle check: the no-filter layout must match a hand-built
 	// encoding, not just the (delegating) Encode* form.
 	oracle := oracleVectorSearchArgsNoFilter("posts", 10, query)
-	if got := AppendVectorSearchArgsExt(nil, "posts", 10, query, vector.Filter{}); !bytes.Equal(got, oracle) {
+	if got := AppendVectorSearchArgsExt(nil, "posts", 10, query, vtypes.Filter{}); !bytes.Equal(got, oracle) {
 		t.Fatalf("no-filter layout diverged from independent oracle:\n got %x\nwant %x", got, oracle)
 	}
 
 	cases := []struct {
 		name   string
-		filter vector.Filter
+		filter vtypes.Filter
 	}{
-		{"no_filter", vector.Filter{}},
-		{"filtered", vector.Filter{Op: vector.FilterEq, Field: "genre", Value: vector.NewString("scifi")}},
+		{"no_filter", vtypes.Filter{}},
+		{"filtered", vtypes.Filter{Op: vtypes.FilterEq, Field: "genre", Value: vtypes.NewString("scifi")}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

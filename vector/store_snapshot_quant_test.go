@@ -239,12 +239,12 @@ func TestStoreSnapshotRaftPRQRoundTrip(t *testing.T) {
 func TestValidateRejectsIVFQuantSQ(t *testing.T) {
 	ivfSQ := Config{Dim: 64, Metric: L2, M: 16, EfConstruction: 200, EfSearch: 64,
 		IndexType: IndexIVF, IVFNlist: 16, Quant: QuantSQ, SQBits: 4}
-	if err := ivfSQ.Validate(); err == nil {
+	if err := ValidateConfig(ivfSQ); err == nil {
 		t.Fatal("IVF + QuantSQ should be rejected by Validate (no IVF SQ auto-train)")
 	}
 	hnswSQ := Config{Dim: 64, Metric: L2, M: 16, EfConstruction: 200, EfSearch: 64,
 		IndexType: IndexHNSW, Quant: QuantSQ, SQBits: 4}
-	if err := hnswSQ.Validate(); err != nil {
+	if err := ValidateConfig(hnswSQ); err != nil {
 		t.Fatalf("HNSW + QuantSQ should pass Validate: %v", err)
 	}
 }

@@ -12,7 +12,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/rostamlabs/rostam/vector"
+	"github.com/rostamlabs/rostam/vtypes"
 )
 
 // ErrVectorArgsTruncated is returned by Decode* when the args bytes are
@@ -120,7 +120,7 @@ const GetFlagsBoth = GetFlagWithVector | GetFlagWithPayload
 
 // writeSparse appends [nnz:u32]{[dim:u32][value:f32]} to buf at off, returning
 // the new offset. Caller sizes buf to include 4 + 8*nnz bytes.
-func writeSparse(buf []byte, off int, sv vector.SparseVector) int {
+func writeSparse(buf []byte, off int, sv vtypes.SparseVector) int {
 	binary.BigEndian.PutUint32(buf[off:], uint32(len(sv.Indices)))
 	off += 4
 	for i, dim := range sv.Indices {
@@ -136,7 +136,7 @@ func writeSparse(buf []byte, off int, sv vector.SparseVector) int {
 // grown slice — the append-style counterpart of writeSparse (which writes into a
 // pre-sized buffer at an offset). Used by the named insert sparse sub-block, which
 // builds its output incrementally.
-func writeSparseAppend(buf []byte, sv vector.SparseVector) []byte {
+func writeSparseAppend(buf []byte, sv vtypes.SparseVector) []byte {
 	var u32 [4]byte
 	binary.BigEndian.PutUint32(u32[:], uint32(len(sv.Indices))) //nolint:gosec
 	buf = append(buf, u32[:]...)
@@ -151,16 +151,16 @@ func writeSparseAppend(buf []byte, sv vector.SparseVector) []byte {
 
 // readSparse decodes [nnz:u32]{[dim:u32][value:f32]} at args[off:], returning
 // the sparse vector and the new offset. Returns ErrVectorArgsTruncated if short.
-func readSparse(args []byte, off int) (vector.SparseVector, int, error) {
+func readSparse(args []byte, off int) (vtypes.SparseVector, int, error) {
 	if len(args) < off+4 {
-		return vector.SparseVector{}, off, ErrVectorArgsTruncated
+		return vtypes.SparseVector{}, off, ErrVectorArgsTruncated
 	}
 	nnz := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
 	if len(args) < off+8*nnz {
-		return vector.SparseVector{}, off, ErrVectorArgsTruncated
+		return vtypes.SparseVector{}, off, ErrVectorArgsTruncated
 	}
-	sv := vector.SparseVector{
+	sv := vtypes.SparseVector{
 		Indices: make([]uint32, nnz),
 		Values:  make([]float32, nnz),
 	}
@@ -176,14 +176,14 @@ func readSparse(args []byte, off int) (vector.SparseVector, int, error) {
 // EncodeVectorInsertArgs serializes vector_insert args with no TTL or metadata
 // (flags=0). Backwards-compatible entry point for the simple insert path.
 func EncodeVectorInsertArgs(collection string, id uint64, vec []float32) []byte {
-	return EncodeVectorInsertArgsExt(collection, id, vec, 0, nil, vector.SparseVector{})
+	return EncodeVectorInsertArgsExt(collection, id, vec, 0, nil, vtypes.SparseVector{})
 }
 
 // EncodeVectorInsertArgsExt serializes vector_insert args, optionally carrying
 // a TTL, metadata, and/or sparse vector. Wire:
 //
 //	[flags:u8][colLen:u8][col][id:u64][dim:u32][vec][?ttlMs:u64][?metaLen:u32][?metaJSON][?nnz:u32{dim,val}]
-func EncodeVectorInsertArgsExt(collection string, id uint64, vec []float32, ttl time.Duration, meta vector.Metadata, sparse vector.SparseVector) []byte {
+func EncodeVectorInsertArgsExt(collection string, id uint64, vec []float32, ttl time.Duration, meta vtypes.Metadata, sparse vtypes.SparseVector) []byte {
 	return encodeVectorInsertArgs(collection, id, vec, ttl, meta, sparse, 0, 0, false, nil, nil)
 }
 
@@ -193,7 +193,7 @@ func EncodeVectorInsertArgsExt(collection string, id uint64, vec []float32, ttl 
 // vecFlagKeyTTL bit stays unset and no trailing bytes are appended). The engine
 // turns each relative ms into an ABSOLUTE deadline now+ttl at insert, mirroring
 // set_payload's per-key TTL. Shared by the dense insert and upsert wire paths.
-func EncodeVectorInsertArgsKeyTTL(collection string, id uint64, vec []float32, ttl time.Duration, meta vector.Metadata, sparse vector.SparseVector, keyTTLMs map[string]int64) []byte {
+func EncodeVectorInsertArgsKeyTTL(collection string, id uint64, vec []float32, ttl time.Duration, meta vtypes.Metadata, sparse vtypes.SparseVector, keyTTLMs map[string]int64) []byte {
 	return encodeVectorInsertArgs(collection, id, vec, ttl, meta, sparse, 0, 0, false, keyTTLMs, nil)
 }
 
@@ -204,7 +204,7 @@ func EncodeVectorInsertArgsKeyTTL(collection string, id uint64, vec []float32, t
 // current version matches (expectedVersion 0 = expect-absent). When hasExpected
 // is false the output is BYTE-IDENTICAL to EncodeVectorInsertArgsExt (no flag, no
 // trailing field). Shared by the dense insert and upsert wire paths.
-func EncodeVectorInsertArgsCAS(collection string, id uint64, vec []float32, ttl time.Duration, meta vector.Metadata, sparse vector.SparseVector, expectedVersion uint64, hasExpected bool) []byte {
+func EncodeVectorInsertArgsCAS(collection string, id uint64, vec []float32, ttl time.Duration, meta vtypes.Metadata, sparse vtypes.SparseVector, expectedVersion uint64, hasExpected bool) []byte {
 	return encodeVectorInsertArgs(collection, id, vec, ttl, meta, sparse, 0, expectedVersion, hasExpected, nil, nil)
 }
 
@@ -213,7 +213,7 @@ func EncodeVectorInsertArgsCAS(collection string, id uint64, vec []float32, ttl 
 // expectedVersion field in flag order, so the two trailers coexist. When both
 // keyTTLMs is empty AND hasExpected is false the output is BYTE-IDENTICAL to
 // EncodeVectorInsertArgsExt. Shared by the dense insert and upsert wire paths.
-func EncodeVectorInsertArgsCASKeyTTL(collection string, id uint64, vec []float32, ttl time.Duration, meta vector.Metadata, sparse vector.SparseVector, expectedVersion uint64, hasExpected bool, keyTTLMs map[string]int64) []byte {
+func EncodeVectorInsertArgsCASKeyTTL(collection string, id uint64, vec []float32, ttl time.Duration, meta vtypes.Metadata, sparse vtypes.SparseVector, expectedVersion uint64, hasExpected bool, keyTTLMs map[string]int64) []byte {
 	return encodeVectorInsertArgs(collection, id, vec, ttl, meta, sparse, 0, expectedVersion, hasExpected, keyTTLMs, nil)
 }
 
@@ -223,7 +223,7 @@ func EncodeVectorInsertArgsCASKeyTTL(collection string, id uint64, vec []float32
 // the reshard/resplit backfill so copied points keep their per-point CAS version.
 // A version of 0 is byte-identical to EncodeVectorInsertArgsExt (no flag, no
 // trailing field).
-func EncodeVectorInsertArgsVersioned(collection string, id uint64, vec []float32, ttl time.Duration, meta vector.Metadata, sparse vector.SparseVector, version uint64) []byte {
+func EncodeVectorInsertArgsVersioned(collection string, id uint64, vec []float32, ttl time.Duration, meta vtypes.Metadata, sparse vtypes.SparseVector, version uint64) []byte {
 	return encodeVectorInsertArgs(collection, id, vec, ttl, meta, sparse, version, 0, false, nil, nil)
 }
 
@@ -235,11 +235,11 @@ func EncodeVectorInsertArgsVersioned(collection string, id uint64, vec []float32
 // recomputed now+ttl — DISTINCT from the relative vecFlagKeyTTL block). When both
 // version==0 AND keyExpires is empty the output is BYTE-IDENTICAL to
 // EncodeVectorInsertArgsExt (no flags, no trailing fields).
-func EncodeVectorInsertArgsVersionedKeyExpires(collection string, id uint64, vec []float32, ttl time.Duration, meta vector.Metadata, sparse vector.SparseVector, version uint64, keyExpires map[string]uint64) []byte {
+func EncodeVectorInsertArgsVersionedKeyExpires(collection string, id uint64, vec []float32, ttl time.Duration, meta vtypes.Metadata, sparse vtypes.SparseVector, version uint64, keyExpires map[string]uint64) []byte {
 	return encodeVectorInsertArgs(collection, id, vec, ttl, meta, sparse, version, 0, false, nil, keyExpires)
 }
 
-func encodeVectorInsertArgs(collection string, id uint64, vec []float32, ttl time.Duration, meta vector.Metadata, sparse vector.SparseVector, version uint64, expectedVersion uint64, hasExpected bool, keyTTLMs map[string]int64, keyExpiresAbs map[string]uint64) []byte {
+func encodeVectorInsertArgs(collection string, id uint64, vec []float32, ttl time.Duration, meta vtypes.Metadata, sparse vtypes.SparseVector, version uint64, expectedVersion uint64, hasExpected bool, keyTTLMs map[string]int64, keyExpiresAbs map[string]uint64) []byte {
 	var flags uint8
 	var ttlMs uint64
 	if ttl > 0 {
@@ -359,7 +359,7 @@ func encodeVectorInsertArgs(collection string, id uint64, vec []float32, ttl tim
 // EncodeVectorInsertArgsVersioned). hasExpected reports whether a CAS precondition
 // trailer was present; expectedVersion is the precondition (0 = expect-absent)
 // when hasExpected is true.
-func DecodeVectorInsertArgs(args []byte) (collection string, id uint64, vec []float32, ttl time.Duration, meta vector.Metadata, sparse *vector.SparseVector, version uint64, err error) {
+func DecodeVectorInsertArgs(args []byte) (collection string, id uint64, vec []float32, ttl time.Duration, meta vtypes.Metadata, sparse *vtypes.SparseVector, version uint64, err error) {
 	collection, id, vec, ttl, meta, sparse, version, _, _, err = DecodeVectorInsertArgsCAS(args)
 	return collection, id, vec, ttl, meta, sparse, version, err
 }
@@ -368,7 +368,7 @@ func DecodeVectorInsertArgs(args []byte) (collection string, id uint64, vec []fl
 // precondition: hasExpected reports whether a vecFlagExpectedVersion trailer was
 // present, expectedVersion is its value (0 = expect-absent). When the flag is
 // unset hasExpected is false and expectedVersion is 0 (a non-CAS write).
-func DecodeVectorInsertArgsCAS(args []byte) (collection string, id uint64, vec []float32, ttl time.Duration, meta vector.Metadata, sparse *vector.SparseVector, version uint64, expectedVersion uint64, hasExpected bool, err error) {
+func DecodeVectorInsertArgsCAS(args []byte) (collection string, id uint64, vec []float32, ttl time.Duration, meta vtypes.Metadata, sparse *vtypes.SparseVector, version uint64, expectedVersion uint64, hasExpected bool, err error) {
 	return decodeVectorInsertArgsCASInto(nil, args)
 }
 
@@ -378,7 +378,7 @@ func DecodeVectorInsertArgsCAS(args []byte) (collection string, id uint64, vec [
 // too small for dim) reproduces the allocating path byte-for-byte, so the public
 // wrapper is unchanged. The single-insert handler passes a pooled buffer here and
 // returns it to the pool once Insert has COPIED the vector into the arena.
-func decodeVectorInsertArgsCASInto(dst []float32, args []byte) (collection string, id uint64, vec []float32, ttl time.Duration, meta vector.Metadata, sparse *vector.SparseVector, version uint64, expectedVersion uint64, hasExpected bool, err error) {
+func decodeVectorInsertArgsCASInto(dst []float32, args []byte) (collection string, id uint64, vec []float32, ttl time.Duration, meta vtypes.Metadata, sparse *vtypes.SparseVector, version uint64, expectedVersion uint64, hasExpected bool, err error) {
 	if len(args) < 2 {
 		return "", 0, nil, 0, nil, nil, 0, 0, false, ErrVectorArgsTruncated
 	}
@@ -430,7 +430,7 @@ func decodeVectorInsertArgsCASInto(dst []float32, args []byte) (collection strin
 		if len(args) < off+mlen {
 			return "", 0, nil, 0, nil, nil, 0, 0, false, ErrVectorArgsTruncated
 		}
-		meta = make(vector.Metadata)
+		meta = make(vtypes.Metadata)
 		if err := json.Unmarshal(args[off:off+mlen], &meta); err != nil {
 			return "", 0, nil, 0, nil, nil, 0, 0, false, fmt.Errorf("ops: decode metadata: %w", err)
 		}
@@ -468,14 +468,14 @@ func decodeVectorInsertArgsCASInto(dst []float32, args []byte) (collection strin
 // A present-but-truncated block is fail-loud. The handlers use this decoder so an
 // insert/upsert can set per-key payload TTLs at write time (the engine turns each
 // relative ms into an absolute deadline now+ttl).
-func DecodeVectorInsertArgsKeyTTL(args []byte) (collection string, id uint64, vec []float32, ttl time.Duration, meta vector.Metadata, sparse *vector.SparseVector, version uint64, expectedVersion uint64, hasExpected bool, keyTTLMs map[string]int64, err error) {
+func DecodeVectorInsertArgsKeyTTL(args []byte) (collection string, id uint64, vec []float32, ttl time.Duration, meta vtypes.Metadata, sparse *vtypes.SparseVector, version uint64, expectedVersion uint64, hasExpected bool, keyTTLMs map[string]int64, err error) {
 	return decodeVectorInsertArgsKeyTTLInto(nil, args)
 }
 
 // decodeVectorInsertArgsKeyTTLInto is DecodeVectorInsertArgsKeyTTL that threads
 // the caller's scratch dst down to the dense-vector decode (zero-alloc on reuse).
 // dst == nil reproduces the public wrapper byte-for-byte.
-func decodeVectorInsertArgsKeyTTLInto(dst []float32, args []byte) (collection string, id uint64, vec []float32, ttl time.Duration, meta vector.Metadata, sparse *vector.SparseVector, version uint64, expectedVersion uint64, hasExpected bool, keyTTLMs map[string]int64, err error) {
+func decodeVectorInsertArgsKeyTTLInto(dst []float32, args []byte) (collection string, id uint64, vec []float32, ttl time.Duration, meta vtypes.Metadata, sparse *vtypes.SparseVector, version uint64, expectedVersion uint64, hasExpected bool, keyTTLMs map[string]int64, err error) {
 	collection, id, vec, ttl, meta, sparse, version, expectedVersion, hasExpected, err = decodeVectorInsertArgsCASInto(dst, args)
 	if err != nil {
 		return "", 0, nil, 0, nil, nil, 0, 0, false, nil, err
@@ -570,7 +570,7 @@ func vectorInsertTrailerOffset(args []byte) (flags uint8, off int) {
 // reinsert handlers use this decoder so a copied point's ABSOLUTE key deadlines are
 // applied VERBATIM (NOT recomputed now+ttl). A present-but-truncated block is
 // fail-loud.
-func DecodeVectorInsertArgsKeyExpires(args []byte) (collection string, id uint64, vec []float32, ttl time.Duration, meta vector.Metadata, sparse *vector.SparseVector, version uint64, expectedVersion uint64, hasExpected bool, keyTTLMs map[string]int64, keyExpiresAbs map[string]uint64, err error) {
+func DecodeVectorInsertArgsKeyExpires(args []byte) (collection string, id uint64, vec []float32, ttl time.Duration, meta vtypes.Metadata, sparse *vtypes.SparseVector, version uint64, expectedVersion uint64, hasExpected bool, keyTTLMs map[string]int64, keyExpiresAbs map[string]uint64, err error) {
 	return DecodeVectorInsertArgsKeyExpiresInto(nil, args)
 }
 
@@ -581,7 +581,7 @@ func DecodeVectorInsertArgsKeyExpires(args []byte) (collection string, id uint64
 // the allocating public wrapper byte-for-byte. handleVectorInsert passes a pooled
 // buffer here and returns it once the engine has COPIED the vector into the arena
 // (arena.Insert always copies), so the scratch is never retained past the op.
-func DecodeVectorInsertArgsKeyExpiresInto(dst []float32, args []byte) (collection string, id uint64, vec []float32, ttl time.Duration, meta vector.Metadata, sparse *vector.SparseVector, version uint64, expectedVersion uint64, hasExpected bool, keyTTLMs map[string]int64, keyExpiresAbs map[string]uint64, err error) {
+func DecodeVectorInsertArgsKeyExpiresInto(dst []float32, args []byte) (collection string, id uint64, vec []float32, ttl time.Duration, meta vtypes.Metadata, sparse *vtypes.SparseVector, version uint64, expectedVersion uint64, hasExpected bool, keyTTLMs map[string]int64, keyExpiresAbs map[string]uint64, err error) {
 	collection, id, vec, ttl, meta, sparse, version, expectedVersion, hasExpected, keyTTLMs, err = decodeVectorInsertArgsKeyTTLInto(dst, args)
 	if err != nil {
 		return "", 0, nil, 0, nil, nil, 0, 0, false, nil, nil, err
@@ -630,21 +630,21 @@ func DecodeVectorInsertArgsKeyExpiresInto(dst []float32, args []byte) (collectio
 
 // EncodeVectorSearchArgs serializes vector_search args with no filter (flags=0).
 func EncodeVectorSearchArgs(collection string, k int, query []float32) []byte {
-	return AppendVectorSearchArgsExt(nil, collection, k, query, vector.Filter{})
+	return AppendVectorSearchArgsExt(nil, collection, k, query, vtypes.Filter{})
 }
 
 // AppendVectorSearchArgs is EncodeVectorSearchArgs appending into dst (reusing
 // its capacity when large enough), for a hot-loop caller that pools the buffer.
 // The returned slice may alias dst; the caller must store it back.
 func AppendVectorSearchArgs(dst []byte, collection string, k int, query []float32) []byte {
-	return AppendVectorSearchArgsExt(dst, collection, k, query, vector.Filter{})
+	return AppendVectorSearchArgsExt(dst, collection, k, query, vtypes.Filter{})
 }
 
 // EncodeVectorSearchArgsExt serializes vector_search args, optionally carrying a
 // metadata filter. Wire:
 //
 //	[flags:u8][colLen:u8][col][k:u32][dim:u32][query][?filterLen:u32][?filterJSON]
-func EncodeVectorSearchArgsExt(collection string, k int, query []float32, filter vector.Filter) []byte {
+func EncodeVectorSearchArgsExt(collection string, k int, query []float32, filter vtypes.Filter) []byte {
 	return AppendVectorSearchArgsExt(nil, collection, k, query, filter)
 }
 
@@ -653,7 +653,7 @@ func EncodeVectorSearchArgsExt(collection string, k int, query []float32, filter
 // must grow. Passing dst=nil yields the exact bytes EncodeVectorSearchArgsExt
 // returned before, so the wire format is unchanged. The returned slice may
 // alias dst; a caller that pools dst must store the result back.
-func AppendVectorSearchArgsExt(dst []byte, collection string, k int, query []float32, filter vector.Filter) []byte {
+func AppendVectorSearchArgsExt(dst []byte, collection string, k int, query []float32, filter vtypes.Filter) []byte {
 	var flags uint8
 	var filterJSON []byte
 	if !filter.IsZero() {
@@ -693,7 +693,7 @@ func AppendVectorSearchArgsExt(dst []byte, collection string, k int, query []flo
 // DecodeVectorSearchArgs reads vector_search args (v3 layout with flags byte).
 // The query is freshly allocated; for the hot server path use
 // DecodeVectorSearchArgsInto with a reused buffer.
-func DecodeVectorSearchArgs(args []byte) (collection string, k int, query []float32, filter vector.Filter, err error) {
+func DecodeVectorSearchArgs(args []byte) (collection string, k int, query []float32, filter vtypes.Filter, err error) {
 	return DecodeVectorSearchArgsInto(args, nil)
 }
 
@@ -702,14 +702,14 @@ func DecodeVectorSearchArgs(args []byte) (collection string, k int, query []floa
 // The returned query aliases dst (or a fresh slice); callers that pool dst must
 // store the returned slice back. The no-filter path allocates nothing beyond
 // the (small) collection string.
-func DecodeVectorSearchArgsInto(args []byte, dst []float32) (collection string, k int, query []float32, filter vector.Filter, err error) {
+func DecodeVectorSearchArgsInto(args []byte, dst []float32) (collection string, k int, query []float32, filter vtypes.Filter, err error) {
 	if len(args) < 2 {
-		return "", 0, nil, vector.Filter{}, ErrVectorArgsTruncated
+		return "", 0, nil, vtypes.Filter{}, ErrVectorArgsTruncated
 	}
 	flags := args[0]
 	colLen := int(args[1])
 	if len(args) < 2+colLen+4+4 {
-		return "", 0, nil, vector.Filter{}, ErrVectorArgsTruncated
+		return "", 0, nil, vtypes.Filter{}, ErrVectorArgsTruncated
 	}
 	collection = string(args[2 : 2+colLen])
 	off := 2 + colLen
@@ -721,7 +721,7 @@ func DecodeVectorSearchArgsInto(args []byte, dst []float32) (collection string, 
 	// negative dim (32-bit widening) makes 4*dim overflow to 0 and the comparison
 	// vacuous, after which the slice bound below panics.
 	if !CountFitsIn(dim, len(args)-off, 4) {
-		return "", 0, nil, vector.Filter{}, ErrVectorArgsTruncated
+		return "", 0, nil, vtypes.Filter{}, ErrVectorArgsTruncated
 	}
 	if cap(dst) >= dim {
 		query = dst[:dim]
@@ -734,15 +734,15 @@ func DecodeVectorSearchArgsInto(args []byte, dst []float32) (collection string, 
 	}
 	if flags&VecFlagFilter != 0 {
 		if len(args) < off+4 {
-			return "", 0, nil, vector.Filter{}, ErrVectorArgsTruncated
+			return "", 0, nil, vtypes.Filter{}, ErrVectorArgsTruncated
 		}
 		flen := int(binary.BigEndian.Uint32(args[off:]))
 		off += 4
 		if len(args) < off+flen {
-			return "", 0, nil, vector.Filter{}, ErrVectorArgsTruncated
+			return "", 0, nil, vtypes.Filter{}, ErrVectorArgsTruncated
 		}
 		if err := json.Unmarshal(args[off:off+flen], &filter); err != nil {
-			return "", 0, nil, vector.Filter{}, fmt.Errorf("ops: decode filter: %w", err)
+			return "", 0, nil, vtypes.Filter{}, fmt.Errorf("ops: decode filter: %w", err)
 		}
 	}
 	return collection, k, query, filter, nil
@@ -763,7 +763,7 @@ func DecodeVectorSearchArgsInto(args []byte, dst []float32) (collection string, 
 // onPartitionUnavailable: 0=Partial (default, return partial results), 1=Fail.
 // Both fields apply only to the clustered backend (Partitions>1); single-shard
 // deployments ignore them.
-func EncodeVectorSearchArgsOpts(collection string, k int, query []float32, filter vector.Filter, readConsistency, onPartitionUnavailable uint8, bound uint64) []byte {
+func EncodeVectorSearchArgsOpts(collection string, k int, query []float32, filter vtypes.Filter, readConsistency, onPartitionUnavailable uint8, bound uint64) []byte {
 	base := EncodeVectorSearchArgsExt(collection, k, query, filter) // single source of truth for the leading block
 	if readConsistency == 0 && onPartitionUnavailable == 0 {
 		return base // byte-identical to the legacy form
@@ -777,14 +777,14 @@ func EncodeVectorSearchArgsOpts(collection string, k int, query []float32, filte
 // cross-shard consistency opts (vecFlagSearchOpts). It is backward-compatible:
 // args encoded by the legacy EncodeVectorSearchArgs / EncodeVectorSearchArgsExt
 // (without the opts trailer) decode with readConsistency=0, onPartitionUnavailable=0.
-func DecodeVectorSearchArgsOpts(args []byte) (collection string, k int, query []float32, filter vector.Filter, readConsistency, onPartitionUnavailable uint8, bound uint64, err error) {
+func DecodeVectorSearchArgsOpts(args []byte) (collection string, k int, query []float32, filter vtypes.Filter, readConsistency, onPartitionUnavailable uint8, bound uint64, err error) {
 	if len(args) < 2 {
-		return "", 0, nil, vector.Filter{}, 0, 0, 0, ErrVectorArgsTruncated
+		return "", 0, nil, vtypes.Filter{}, 0, 0, 0, ErrVectorArgsTruncated
 	}
 	flags := args[0]
 	colLen := int(args[1])
 	if len(args) < 2+colLen+4+4 {
-		return "", 0, nil, vector.Filter{}, 0, 0, 0, ErrVectorArgsTruncated
+		return "", 0, nil, vtypes.Filter{}, 0, 0, 0, ErrVectorArgsTruncated
 	}
 	collection = string(args[2 : 2+colLen])
 	off := 2 + colLen
@@ -795,7 +795,7 @@ func DecodeVectorSearchArgsOpts(args []byte) (collection string, k int, query []
 	// See DecodeVectorInsertArgs: 4*dim overflows to 0 for a negative dim, and
 	// make([]float32, dim) then panics rather than erroring.
 	if !CountFitsIn(dim, len(args)-off, 4) {
-		return "", 0, nil, vector.Filter{}, 0, 0, 0, ErrVectorArgsTruncated
+		return "", 0, nil, vtypes.Filter{}, 0, 0, 0, ErrVectorArgsTruncated
 	}
 	query = make([]float32, dim)
 	for i := 0; i < dim; i++ {
@@ -804,15 +804,15 @@ func DecodeVectorSearchArgsOpts(args []byte) (collection string, k int, query []
 	}
 	if flags&VecFlagFilter != 0 {
 		if len(args) < off+4 {
-			return "", 0, nil, vector.Filter{}, 0, 0, 0, ErrVectorArgsTruncated
+			return "", 0, nil, vtypes.Filter{}, 0, 0, 0, ErrVectorArgsTruncated
 		}
 		flen := int(binary.BigEndian.Uint32(args[off:]))
 		off += 4
 		if len(args) < off+flen {
-			return "", 0, nil, vector.Filter{}, 0, 0, 0, ErrVectorArgsTruncated
+			return "", 0, nil, vtypes.Filter{}, 0, 0, 0, ErrVectorArgsTruncated
 		}
 		if uerr := json.Unmarshal(args[off:off+flen], &filter); uerr != nil {
-			return "", 0, nil, vector.Filter{}, 0, 0, 0, fmt.Errorf("ops: decode filter: %w", uerr)
+			return "", 0, nil, vtypes.Filter{}, 0, 0, 0, fmt.Errorf("ops: decode filter: %w", uerr)
 		}
 		off += flen
 	}
@@ -822,20 +822,20 @@ func DecodeVectorSearchArgsOpts(args []byte) (collection string, k int, query []
 		// rather than silently downgrading to AnyReplica/Partial, which would
 		// quietly weaken an explicit LeaderOnly/Fail request.
 		if len(args) < off+2 {
-			return "", 0, nil, vector.Filter{}, 0, 0, 0, ErrVectorArgsTruncated
+			return "", 0, nil, vtypes.Filter{}, 0, 0, 0, ErrVectorArgsTruncated
 		}
 		readConsistency = args[off]
 		onPartitionUnavailable = args[off+1]
 		off += 2
 		bound, _, err = readBoundTail(args, off, readConsistency)
 		if err != nil {
-			return "", 0, nil, vector.Filter{}, 0, 0, 0, err
+			return "", 0, nil, vtypes.Filter{}, 0, 0, 0, err
 		}
 	}
 	return collection, k, query, filter, readConsistency, onPartitionUnavailable, bound, nil
 }
 
-func EncodeVectorSearchResults(results []vector.Result) []byte {
+func EncodeVectorSearchResults(results []vtypes.Result) []byte {
 	n := 4 + len(results)*(8+4)
 	buf := make([]byte, n)
 	binary.BigEndian.PutUint32(buf[0:4], uint32(len(results)))
@@ -849,7 +849,7 @@ func EncodeVectorSearchResults(results []vector.Result) []byte {
 	return buf
 }
 
-func DecodeVectorSearchResults(body []byte) ([]vector.Result, error) {
+func DecodeVectorSearchResults(body []byte) ([]vtypes.Result, error) {
 	return DecodeVectorSearchResultsInto(body, nil)
 }
 
@@ -857,7 +857,7 @@ func DecodeVectorSearchResults(body []byte) ([]vector.Result, error) {
 // cap allows, else a fresh slice), returning the populated slice. Pair it with
 // client.CallFunc so a hot-loop caller reusing dst decodes the wire response
 // with zero allocations (no defensive payload copy, no result-slice alloc).
-func DecodeVectorSearchResultsInto(body []byte, dst []vector.Result) ([]vector.Result, error) {
+func DecodeVectorSearchResultsInto(body []byte, dst []vtypes.Result) ([]vtypes.Result, error) {
 	if len(body) < 4 {
 		return nil, ErrVectorArgsTruncated
 	}
@@ -866,11 +866,11 @@ func DecodeVectorSearchResultsInto(body []byte, dst []vector.Result) ([]vector.R
 	if !CountFitsIn(count, len(body)-4, 8+4) {
 		return nil, ErrVectorArgsTruncated
 	}
-	var results []vector.Result
+	var results []vtypes.Result
 	if cap(dst) >= count {
 		results = dst[:count]
 	} else {
-		results = make([]vector.Result, count)
+		results = make([]vtypes.Result, count)
 	}
 	off := 4
 	for i := 0; i < count; i++ {
@@ -982,7 +982,7 @@ func readDegradedTrailerN(body []byte, offset int) (degraded bool, missing []uin
 // block stop before the trailer; DecodeVectorSearchResultsDegraded tolerates
 // its absence (→ degraded=false, missing=nil).
 // Partition IDs and the count are encoded as u16 (supports up to 65535 partitions, far above realistic counts).
-func EncodeVectorSearchResultsDegraded(results []vector.Result, degraded bool, missing []uint16) []byte {
+func EncodeVectorSearchResultsDegraded(results []vtypes.Result, degraded bool, missing []uint16) []byte {
 	return appendDegradedTrailer(EncodeVectorSearchResults(results), degraded, missing)
 }
 
@@ -991,7 +991,7 @@ func EncodeVectorSearchResultsDegraded(results []vector.Result, degraded bool, m
 // legacy EncodeVectorSearchResults (no trailer) decode with degraded=false and
 // missing=nil. The base result block is read exactly (count*12 bytes after the
 // count u32); any remaining bytes are interpreted as the degraded trailer.
-func DecodeVectorSearchResultsDegraded(body []byte) (results []vector.Result, degraded bool, missing []uint16, err error) {
+func DecodeVectorSearchResultsDegraded(body []byte) (results []vtypes.Result, degraded bool, missing []uint16, err error) {
 	if len(body) < 4 {
 		return nil, false, nil, ErrVectorArgsTruncated
 	}
@@ -1003,7 +1003,7 @@ func DecodeVectorSearchResultsDegraded(body []byte) (results []vector.Result, de
 		return nil, false, nil, ErrVectorArgsTruncated
 	}
 	baseEnd := 4 + count*(8+4)
-	results = make([]vector.Result, count)
+	results = make([]vtypes.Result, count)
 	off := 4
 	for i := 0; i < count; i++ {
 		results[i].ID = binary.BigEndian.Uint64(body[off:])
@@ -1024,7 +1024,7 @@ func DecodeVectorSearchResultsDegraded(body []byte) (results []vector.Result, de
 //	[dim:u32][dense: f32×dim]
 //	if HAS_SPARSE: [nnz:u32]{[dim:u32][value:f32]}
 //	if HAS_FILTER: [filterLen:u32][filterJSON]
-func EncodeHybridSearchArgs(collection string, dense []float32, k int, sparse vector.SparseVector, opts vector.HybridOpts) []byte {
+func EncodeHybridSearchArgs(collection string, dense []float32, k int, sparse vtypes.SparseVector, opts vtypes.HybridOpts) []byte {
 	var flags uint8
 	var filterJSON []byte
 	if !opts.Filter.IsZero() {
@@ -1077,7 +1077,7 @@ func EncodeHybridSearchArgs(collection string, dense []float32, k int, sparse ve
 
 // DecodeHybridSearchArgs reads vector_hybrid_search args. opts.Filter is the
 // zero filter when absent; sparse is the zero SparseVector when absent.
-func DecodeHybridSearchArgs(args []byte) (collection string, dense []float32, k int, sparse vector.SparseVector, opts vector.HybridOpts, err error) {
+func DecodeHybridSearchArgs(args []byte) (collection string, dense []float32, k int, sparse vtypes.SparseVector, opts vtypes.HybridOpts, err error) {
 	collection, dense, k, sparse, opts, _, err = decodeHybridSearchArgsN(args)
 	return collection, dense, k, sparse, opts, err
 }
@@ -1085,7 +1085,7 @@ func DecodeHybridSearchArgs(args []byte) (collection string, dense []float32, k 
 // decodeHybridSearchArgsN decodes the hybrid-search base block and returns the
 // number of bytes consumed (so DecodeHybridSearchArgsOpts can read a trailing
 // opts block). Trailing bytes beyond the base block are ignored here.
-func decodeHybridSearchArgsN(args []byte) (collection string, dense []float32, k int, sparse vector.SparseVector, opts vector.HybridOpts, n int, err error) {
+func decodeHybridSearchArgsN(args []byte) (collection string, dense []float32, k int, sparse vtypes.SparseVector, opts vtypes.HybridOpts, n int, err error) {
 	if len(args) < 2 {
 		return "", nil, 0, sparse, opts, 0, ErrVectorArgsTruncated
 	}
@@ -1099,7 +1099,7 @@ func decodeHybridSearchArgsN(args []byte) (collection string, dense []float32, k
 	off := 2 + colLen
 	k = int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
-	opts.Method = vector.FusionMethod(args[off])
+	opts.Method = vtypes.FusionMethod(args[off])
 	off++
 	opts.Alpha = math.Float64frombits(binary.BigEndian.Uint64(args[off:]))
 	off += 8
@@ -1153,7 +1153,7 @@ func decodeHybridSearchArgsN(args []byte) (collection string, dense []float32, k
 // after the existing sparse/filter blocks and set hybridFlagOpts in the flags
 // byte. readConsistency: 0=AnyReplica, 1=LeaderOnly. onPartitionUnavailable:
 // 0=Partial, 1=Fail.
-func EncodeHybridSearchArgsOpts(collection string, dense []float32, k int, sparse vector.SparseVector, opts vector.HybridOpts, readConsistency, onPartitionUnavailable uint8, bound uint64) []byte {
+func EncodeHybridSearchArgsOpts(collection string, dense []float32, k int, sparse vtypes.SparseVector, opts vtypes.HybridOpts, readConsistency, onPartitionUnavailable uint8, bound uint64) []byte {
 	base := EncodeHybridSearchArgs(collection, dense, k, sparse, opts) // single source of truth for the leading blocks
 	if readConsistency == 0 && onPartitionUnavailable == 0 {
 		return base // byte-identical to the legacy form
@@ -1167,7 +1167,7 @@ func EncodeHybridSearchArgsOpts(collection string, dense []float32, k int, spars
 // cross-shard consistency opts (hybridFlagOpts). It is backward-compatible: args
 // encoded by the legacy EncodeHybridSearchArgs (without the opts trailer) decode
 // with readConsistency=0, onPartitionUnavailable=0.
-func DecodeHybridSearchArgsOpts(args []byte) (collection string, dense []float32, k int, sparse vector.SparseVector, opts vector.HybridOpts, readConsistency, onPartitionUnavailable uint8, bound uint64, err error) {
+func DecodeHybridSearchArgsOpts(args []byte) (collection string, dense []float32, k int, sparse vtypes.SparseVector, opts vtypes.HybridOpts, readConsistency, onPartitionUnavailable uint8, bound uint64, err error) {
 	collection, dense, k, sparse, opts, n, err := decodeHybridSearchArgsN(args)
 	if err != nil {
 		return "", nil, 0, sparse, opts, 0, 0, 0, err
@@ -1191,7 +1191,7 @@ func DecodeHybridSearchArgsOpts(args []byte) (collection string, dense []float32
 
 // EncodeHybridResults serializes fused results carrying both the dense
 // distance and the fusion score. Wire: [count:u32]{[id:u64][distance:f32][score:f32]}.
-func EncodeHybridResults(results []vector.Result) []byte {
+func EncodeHybridResults(results []vtypes.Result) []byte {
 	n := 4 + len(results)*(8+4+4)
 	buf := make([]byte, n)
 	binary.BigEndian.PutUint32(buf[0:4], uint32(len(results)))
@@ -1209,7 +1209,7 @@ func EncodeHybridResults(results []vector.Result) []byte {
 
 // decodeHybridResultsN decodes one hybrid-results block and returns the results
 // plus the number of bytes consumed (so callers can decode back-to-back blocks).
-func decodeHybridResultsN(body []byte) ([]vector.Result, int, error) {
+func decodeHybridResultsN(body []byte) ([]vtypes.Result, int, error) {
 	if len(body) < 4 {
 		return nil, 0, ErrVectorArgsTruncated
 	}
@@ -1223,7 +1223,7 @@ func decodeHybridResultsN(body []byte) ([]vector.Result, int, error) {
 	// Safe to compute only AFTER the bound above: count is now known non-negative
 	// and small enough that this product cannot overflow.
 	need := 4 + count*(8+4+4)
-	results := make([]vector.Result, count)
+	results := make([]vtypes.Result, count)
 	off := 4
 	for i := 0; i < count; i++ {
 		results[i].ID = binary.BigEndian.Uint64(body[off:])
@@ -1237,7 +1237,7 @@ func decodeHybridResultsN(body []byte) ([]vector.Result, int, error) {
 }
 
 // DecodeHybridResults reads results produced by EncodeHybridResults.
-func DecodeHybridResults(body []byte) ([]vector.Result, error) {
+func DecodeHybridResults(body []byte) ([]vtypes.Result, error) {
 	r, _, err := decodeHybridResultsN(body)
 	return r, err
 }
@@ -1248,13 +1248,13 @@ func DecodeHybridResults(body []byte) ([]vector.Result, error) {
 // with EncodeVectorSearchResults and need their own degraded codec. When
 // degraded is false and missing is empty the output is byte-identical to
 // EncodeHybridResults.
-func EncodeHybridResultsDegraded(results []vector.Result, degraded bool, missing []uint16) []byte {
+func EncodeHybridResultsDegraded(results []vtypes.Result, degraded bool, missing []uint16) []byte {
 	return appendDegradedTrailer(EncodeHybridResults(results), degraded, missing)
 }
 
 // DecodeHybridResultsDegraded decodes hybrid results and the optional degraded
 // trailer. Backward-compatible with legacy EncodeHybridResults bytes.
-func DecodeHybridResultsDegraded(body []byte) (results []vector.Result, degraded bool, missing []uint16, err error) {
+func DecodeHybridResultsDegraded(body []byte) (results []vtypes.Result, degraded bool, missing []uint16, err error) {
 	results, off, err := decodeHybridResultsN(body)
 	if err != nil {
 		return nil, false, nil, err
@@ -1266,12 +1266,12 @@ func DecodeHybridResultsDegraded(body []byte) (results []vector.Result, degraded
 // EncodeHybridLanesResult serializes the two pre-fusion hybrid lanes back-to-back
 // (dense lane first, then sparse lane), each using the hybrid-result wire format.
 // Wire: <EncodeHybridResults(dense)><EncodeHybridResults(sparse)>
-func EncodeHybridLanesResult(dense, sparse []vector.Result) []byte {
+func EncodeHybridLanesResult(dense, sparse []vtypes.Result) []byte {
 	return append(EncodeHybridResults(dense), EncodeHybridResults(sparse)...)
 }
 
 // DecodeHybridLanesResult decodes the dense lane then the sparse lane.
-func DecodeHybridLanesResult(body []byte) (dense, sparse []vector.Result, err error) {
+func DecodeHybridLanesResult(body []byte) (dense, sparse []vtypes.Result, err error) {
 	dense, n, err := decodeHybridResultsN(body)
 	if err != nil {
 		return nil, nil, err
@@ -1425,7 +1425,7 @@ func DecodeExistsResult(body []byte) (bool, error) {
 // create with SQBits==0 && PRQLayers==0 is BYTE-IDENTICAL to the pre-feature
 // encoder. The QuantSQ/QuantPRQ enum values themselves ride the existing
 // [quant:1] byte, so selecting the new modes adds no bytes beyond these params.
-func EncodeCreateCollectionArgs(name string, cfg vector.Config) []byte {
+func EncodeCreateCollectionArgs(name string, cfg vtypes.Config) []byte {
 	persistent := byte(0)
 	if cfg.Persistent {
 		persistent = 1
@@ -1542,7 +1542,7 @@ func EncodeCreateCollectionArgs(name string, cfg vector.Config) []byte {
 	// appended only when non-default, so a plain HNSW create is byte-identical to
 	// the pre-IVF encoder.
 	ivfpq := cfg.IVFPQ || cfg.IVFRerank || threshold
-	ivf := cfg.IndexType != vector.IndexHNSW || cfg.IVFNlist != 0 || cfg.IVFNprobe != 0 || ivfpq
+	ivf := cfg.IndexType != vtypes.IndexHNSW || cfg.IVFNlist != 0 || cfg.IVFNprobe != 0 || ivfpq
 	n := 1 + len(name) + 4 + 1 + 4 + 4 + 4 + 8 + 1 + 1 + 4 + 1 + 4 + 1 + 1 + 4
 	if ivf {
 		n += 1 + 4 + 4
@@ -1793,21 +1793,21 @@ func EncodeCreateCollectionArgs(name string, cfg vector.Config) []byte {
 	return buf
 }
 
-func DecodeCreateCollectionArgs(args []byte) (string, vector.Config, error) {
+func DecodeCreateCollectionArgs(args []byte) (string, vtypes.Config, error) {
 	if len(args) < 1 {
-		return "", vector.Config{}, ErrVectorArgsTruncated
+		return "", vtypes.Config{}, ErrVectorArgsTruncated
 	}
 	nameLen := int(args[0])
 	need := 1 + nameLen + 4 + 1 + 4 + 4 + 4 + 8
 	if len(args) < need {
-		return "", vector.Config{}, ErrVectorArgsTruncated
+		return "", vtypes.Config{}, ErrVectorArgsTruncated
 	}
 	name := string(args[1 : 1+nameLen])
 	off := 1 + nameLen
-	cfg := vector.Config{}
+	cfg := vtypes.Config{}
 	cfg.Dim = int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
-	cfg.Metric = vector.Metric(args[off])
+	cfg.Metric = vtypes.Metric(args[off])
 	off++
 	cfg.M = int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
@@ -1819,7 +1819,7 @@ func DecodeCreateCollectionArgs(args []byte) (string, vector.Config, error) {
 	off += 8
 	// Quant/persist extension — present iff the encoder included it.
 	if len(args) >= off+1+1+4 {
-		cfg.Quant = vector.QuantMode(args[off])
+		cfg.Quant = vtypes.QuantMode(args[off])
 		off++
 		cfg.Persistent = args[off] == 1
 		off++
@@ -1846,7 +1846,7 @@ func DecodeCreateCollectionArgs(args []byte) (string, vector.Config, error) {
 						// IVF extension — present iff the encoder included it
 						// (written only for a non-default IVF config).
 						if len(args) >= off+1+4+4 {
-							cfg.IndexType = vector.IndexType(args[off])
+							cfg.IndexType = vtypes.IndexType(args[off])
 							off++
 							cfg.IVFNlist = int(binary.BigEndian.Uint32(args[off:]))
 							off += 4
@@ -1953,7 +1953,7 @@ func DecodeCreateCollectionArgs(args []byte) (string, vector.Config, error) {
 																off += 4
 																b := math.Float32frombits(binary.BigEndian.Uint32(args[off:]))
 																off += 4
-																cfg.FullText = &vector.FullTextConfig{Analyzer: analyzer, K1: k1, B: b}
+																cfg.FullText = &vtypes.FullTextConfig{Analyzer: analyzer, K1: k1, B: b}
 															}
 														}
 													}
@@ -2157,7 +2157,7 @@ func DecodeResplitCleanupResult(body []byte) (int, error) {
 //
 //	[count:u32] then per doc:
 //	  [id:u64][distBits:u32][scoreBits:u32][contentLen:u32][content][metaLen:u32][metaJSON]
-func EncodeVectorDocs(docs []vector.Document) []byte {
+func EncodeVectorDocs(docs []vtypes.Document) []byte {
 	n := 4
 	metas := make([][]byte, len(docs))
 	for i, d := range docs {
@@ -2187,7 +2187,7 @@ func EncodeVectorDocs(docs []vector.Document) []byte {
 }
 
 // DecodeVectorDocs reads documents produced by EncodeVectorDocs.
-func DecodeVectorDocs(body []byte) ([]vector.Document, error) {
+func DecodeVectorDocs(body []byte) ([]vtypes.Document, error) {
 	docs, _, err := decodeVectorDocsN(body)
 	return docs, err
 }
@@ -2205,7 +2205,7 @@ func DecodeVectorDocs(body []byte) ([]vector.Document, error) {
 // that needs to READ metadata fields wants DecodeVectorDocs instead.
 //
 // The returned metadata ALIASES body; the documents must not outlive it.
-func DecodeVectorDocsRaw(body []byte) ([]vector.RawDocument, error) {
+func DecodeVectorDocsRaw(body []byte) ([]vtypes.RawDocument, error) {
 	docs, _, err := decodeVectorDocsRawN(body)
 	return docs, err
 }
@@ -2229,7 +2229,7 @@ func DecodeVectorDocsRaw(body []byte) ([]vector.RawDocument, error) {
 // bounds checks or offsets, which is the failure this whole design is built to
 // make impossible; a percent on a decode the response path no longer performs is
 // the cheaper side of that trade.
-func frameVectorDocsN(body []byte) ([]vector.RawDocument, int, error) {
+func frameVectorDocsN(body []byte) ([]vtypes.RawDocument, int, error) {
 	if len(body) < 4 {
 		return nil, 0, ErrVectorArgsTruncated
 	}
@@ -2239,12 +2239,12 @@ func frameVectorDocsN(body []byte) ([]vector.RawDocument, int, error) {
 	if !CountFitsIn(count, len(body)-off, 20) {
 		return nil, 0, ErrVectorArgsTruncated
 	}
-	docs := make([]vector.RawDocument, 0, count)
+	docs := make([]vtypes.RawDocument, 0, count)
 	for i := 0; i < count; i++ {
 		if len(body) < off+8+4+4+4 {
 			return nil, 0, ErrVectorArgsTruncated
 		}
-		var d vector.RawDocument
+		var d vtypes.RawDocument
 		d.ID = binary.BigEndian.Uint64(body[off:])
 		off += 8
 		d.Distance = math.Float32frombits(binary.BigEndian.Uint32(body[off:]))
@@ -2274,16 +2274,16 @@ func frameVectorDocsN(body []byte) ([]vector.RawDocument, int, error) {
 
 // decodeVectorDocsN decodes one document block and returns the documents plus
 // the number of bytes consumed (so callers can read a trailing degraded block).
-func decodeVectorDocsN(body []byte) ([]vector.Document, int, error) {
+func decodeVectorDocsN(body []byte) ([]vtypes.Document, int, error) {
 	raw, off, err := frameVectorDocsN(body)
 	if err != nil {
 		return nil, 0, err
 	}
-	docs := make([]vector.Document, len(raw))
+	docs := make([]vtypes.Document, len(raw))
 	for i, r := range raw {
-		docs[i] = vector.Document{ID: r.ID, Distance: r.Distance, Score: r.Score, Content: r.Content}
+		docs[i] = vtypes.Document{ID: r.ID, Distance: r.Distance, Score: r.Score, Content: r.Content}
 		if len(r.Metadata) > 0 {
-			m := make(vector.Metadata)
+			m := make(vtypes.Metadata)
 			// Unmarshalling IS the validation of the metadata window; a malformed or
 			// non-Metadata-shaped payload fails here exactly as it always has.
 			if err := json.Unmarshal(r.Metadata, &m); err != nil {
@@ -2299,7 +2299,7 @@ func decodeVectorDocsN(body []byte) ([]vector.Document, int, error) {
 // metadata window checked (and where necessary canonicalized) instead of
 // unmarshalled. See checkRawMetadataJSON for what those two steps are and why
 // they are exactly what makes the verbatim splice byte-identical.
-func decodeVectorDocsRawN(body []byte) ([]vector.RawDocument, int, error) {
+func decodeVectorDocsRawN(body []byte) ([]vtypes.RawDocument, int, error) {
 	docs, off, err := frameVectorDocsN(body)
 	if err != nil {
 		return nil, 0, err
@@ -2353,7 +2353,7 @@ func checkRawMetadataJSON(window []byte) ([]byte, error) {
 	if !hasReplacementEscape(window) {
 		return window, nil
 	}
-	var m vector.Metadata
+	var m vtypes.Metadata
 	if err := json.Unmarshal(window, &m); err != nil {
 		return nil, err
 	}
@@ -2371,7 +2371,7 @@ func checkRawGroupKeyJSON(window []byte) ([]byte, error) {
 	if !hasReplacementEscape(window) {
 		return window, nil
 	}
-	var v vector.Value
+	var v vtypes.Value
 	if err := json.Unmarshal(window, &v); err != nil {
 		return nil, err
 	}
@@ -2420,14 +2420,14 @@ var errInvalidDocMetadataJSON = errors.New("not valid JSON")
 // trailer (same wire format as the search trailer). When degraded is false and
 // missing is empty the output is byte-identical to EncodeVectorDocs. Used by
 // both search_docs and scroll (both return []vector.Document).
-func EncodeVectorDocsDegraded(docs []vector.Document, degraded bool, missing []uint16) []byte {
+func EncodeVectorDocsDegraded(docs []vtypes.Document, degraded bool, missing []uint16) []byte {
 	return appendDegradedTrailer(EncodeVectorDocs(docs), degraded, missing)
 }
 
 // DecodeVectorDocsDegraded decodes documents and the optional degraded trailer.
 // Backward-compatible: legacy EncodeVectorDocs bytes decode with degraded=false,
 // missing=nil.
-func DecodeVectorDocsDegraded(body []byte) (docs []vector.Document, degraded bool, missing []uint16, err error) {
+func DecodeVectorDocsDegraded(body []byte) (docs []vtypes.Document, degraded bool, missing []uint16, err error) {
 	docs, off, err := decodeVectorDocsN(body)
 	if err != nil {
 		return nil, false, nil, err
@@ -2440,7 +2440,7 @@ func DecodeVectorDocsDegraded(body []byte) (docs []vector.Document, degraded boo
 // metadata — see DecodeVectorDocsRaw for when that is the right choice and for
 // the aliasing rule. The trailer is read by the same helper, so the degraded flag
 // and missing list are identical to the typed decoder's.
-func DecodeVectorDocsDegradedRaw(body []byte) (docs []vector.RawDocument, degraded bool, missing []uint16, err error) {
+func DecodeVectorDocsDegradedRaw(body []byte) (docs []vtypes.RawDocument, degraded bool, missing []uint16, err error) {
 	docs, off, err := decodeVectorDocsRawN(body)
 	if err != nil {
 		return nil, false, nil, err
@@ -2470,7 +2470,7 @@ func DecodeVectorDocsDegradedRaw(body []byte) (docs []vector.RawDocument, degrad
 //     as a degraded trailer.
 //
 // The named (non-degraded) path uses EncodeScrollResult(docs, false, nil, cursor).
-func EncodeScrollResult(docs []vector.Document, degraded bool, missing []uint16, nextCursor string) []byte {
+func EncodeScrollResult(docs []vtypes.Document, degraded bool, missing []uint16, nextCursor string) []byte {
 	body := EncodeVectorDocs(docs)
 	// ALWAYS emit the degraded trailer so the cursor tail is unambiguously past it.
 	n := len(body) + 1 + 2 + 2*len(missing) + 4 + len(nextCursor)
@@ -2502,7 +2502,7 @@ func EncodeScrollResult(docs []vector.Document, degraded bool, missing []uint16,
 //     degraded trailer AND the declared cursor bytes fit; otherwise nextCursor="".
 //     (An old server's body ends at/inside the degraded region, so the trailer
 //     position has no u32 length there ⇒ empty cursor, no error.)
-func DecodeScrollResult(body []byte) (docs []vector.Document, degraded bool, missing []uint16, nextCursor string, err error) {
+func DecodeScrollResult(body []byte) (docs []vtypes.Document, degraded bool, missing []uint16, nextCursor string, err error) {
 	docs, off, err := decodeVectorDocsN(body)
 	if err != nil {
 		return nil, false, nil, "", err
@@ -2518,7 +2518,7 @@ func DecodeScrollResult(body []byte) (docs []vector.Document, degraded bool, mis
 // DecodeVectorDocsRaw for when that is the right choice and for the aliasing rule.
 // The trailer and cursor tail come from the same readScrollTail the typed decoder
 // uses, so everything after the documents is identical.
-func DecodeScrollResultRaw(body []byte) (docs []vector.RawDocument, degraded bool, missing []uint16, nextCursor string, err error) {
+func DecodeScrollResultRaw(body []byte) (docs []vtypes.RawDocument, degraded bool, missing []uint16, nextCursor string, err error) {
 	docs, off, err := decodeVectorDocsRawN(body)
 	if err != nil {
 		return nil, false, nil, "", err
@@ -2598,7 +2598,7 @@ func DecodeScanVectorsArgs(args []byte) (string, error) {
 // keyExpires byte at all) tolerates its absence per-record (keyExpires → nil),
 // mirroring the version trailer's EOF tolerance — scans are transient (never a
 // stored artifact), so the new encoder always writes the present byte.
-func EncodeScanVectorsResult(recs []vector.ScanRecord) []byte {
+func EncodeScanVectorsResult(recs []vtypes.ScanRecord) []byte {
 	n := 4
 	metas := make([][]byte, len(recs))
 	for i, r := range recs {
@@ -2667,7 +2667,7 @@ func EncodeScanVectorsResult(recs []vector.ScanRecord) []byte {
 }
 
 // DecodeScanVectorsResult reads records produced by EncodeScanVectorsResult.
-func DecodeScanVectorsResult(body []byte) ([]vector.ScanRecord, error) {
+func DecodeScanVectorsResult(body []byte) ([]vtypes.ScanRecord, error) {
 	if len(body) < 4 {
 		return nil, ErrVectorArgsTruncated
 	}
@@ -2677,12 +2677,12 @@ func DecodeScanVectorsResult(body []byte) ([]vector.ScanRecord, error) {
 	if !CountFitsIn(count, len(body)-off, 12) {
 		return nil, ErrVectorArgsTruncated
 	}
-	recs := make([]vector.ScanRecord, 0, count)
+	recs := make([]vtypes.ScanRecord, 0, count)
 	for i := 0; i < count; i++ {
 		if len(body) < off+8+4 {
 			return nil, ErrVectorArgsTruncated
 		}
-		var r vector.ScanRecord
+		var r vtypes.ScanRecord
 		r.ID = binary.BigEndian.Uint64(body[off:])
 		off += 8
 		dim := int(binary.BigEndian.Uint32(body[off:]))
@@ -2704,7 +2704,7 @@ func DecodeScanVectorsResult(body []byte) ([]vector.ScanRecord, error) {
 			return nil, ErrVectorArgsTruncated
 		}
 		if mlen > 0 {
-			m := make(vector.Metadata)
+			m := make(vtypes.Metadata)
 			if err := json.Unmarshal(body[off:off+mlen], &m); err != nil {
 				return nil, fmt.Errorf("ops: decode scan metadata: %w", err)
 			}
@@ -2827,23 +2827,23 @@ func decodeNameArgsN(args []byte) (name string, n int, err error) {
 // EncodeGetConfigResult serializes a collection's Config as JSON (the Config is
 // JSON-serializable; see vector.writeConfig). Resplit reads it to create the
 // new-generation partitions with the same configuration.
-func EncodeGetConfigResult(cfg vector.Config) []byte {
+func EncodeGetConfigResult(cfg vtypes.Config) []byte {
 	data, _ := json.Marshal(cfg)
 	return data
 }
 
 // DecodeGetConfigResult reads a Config produced by EncodeGetConfigResult.
-func DecodeGetConfigResult(body []byte) (vector.Config, error) {
-	var cfg vector.Config
+func DecodeGetConfigResult(body []byte) (vtypes.Config, error) {
+	var cfg vtypes.Config
 	if err := json.Unmarshal(body, &cfg); err != nil {
-		return vector.Config{}, fmt.Errorf("ops: decode config: %w", err)
+		return vtypes.Config{}, fmt.Errorf("ops: decode config: %w", err)
 	}
 	return cfg, nil
 }
 
 // EncodeScrollArgs serializes a vector_scroll request.
 // Wire: [colLen:u8][col][limit:u32][filterLen:u32][filterJSON] (filterLen 0 = no filter).
-func EncodeScrollArgs(collection string, filter vector.Filter, limit int) []byte {
+func EncodeScrollArgs(collection string, filter vtypes.Filter, limit int) []byte {
 	var fj []byte
 	if !filter.IsZero() {
 		fj, _ = json.Marshal(filter)
@@ -2863,7 +2863,7 @@ func EncodeScrollArgs(collection string, filter vector.Filter, limit int) []byte
 // beyond the base block (e.g. an opts trailer from EncodeScrollArgsOpts) are
 // ignored, so the single-shard handler stays backward-compatible with
 // opts-carrying args.
-func DecodeScrollArgs(args []byte) (string, vector.Filter, int, error) {
+func DecodeScrollArgs(args []byte) (string, vtypes.Filter, int, error) {
 	collection, filter, limit, _, err := decodeScrollArgsN(args)
 	return collection, filter, limit, err
 }
@@ -2872,13 +2872,13 @@ func DecodeScrollArgs(args []byte) (string, vector.Filter, int, error) {
 // bytes consumed (so DecodeScrollArgsOpts can read a trailing opts block).
 // Scroll args carry no flags byte, so the Opts trailer is self-delimiting
 // (see EncodeScrollArgsOpts).
-func decodeScrollArgsN(args []byte) (collection string, filter vector.Filter, limit int, n int, err error) {
+func decodeScrollArgsN(args []byte) (collection string, filter vtypes.Filter, limit int, n int, err error) {
 	if len(args) < 1 {
-		return "", vector.Filter{}, 0, 0, ErrVectorArgsTruncated
+		return "", vtypes.Filter{}, 0, 0, ErrVectorArgsTruncated
 	}
 	colLen := int(args[0])
 	if len(args) < 1+colLen+4+4 {
-		return "", vector.Filter{}, 0, 0, ErrVectorArgsTruncated
+		return "", vtypes.Filter{}, 0, 0, ErrVectorArgsTruncated
 	}
 	collection = string(args[1 : 1+colLen])
 	off := 1 + colLen
@@ -2887,11 +2887,11 @@ func decodeScrollArgsN(args []byte) (collection string, filter vector.Filter, li
 	flen := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
 	if len(args) < off+flen {
-		return "", vector.Filter{}, 0, 0, ErrVectorArgsTruncated
+		return "", vtypes.Filter{}, 0, 0, ErrVectorArgsTruncated
 	}
 	if flen > 0 {
 		if uerr := json.Unmarshal(args[off:off+flen], &filter); uerr != nil {
-			return "", vector.Filter{}, 0, 0, fmt.Errorf("ops: decode filter: %w", uerr)
+			return "", vtypes.Filter{}, 0, 0, fmt.Errorf("ops: decode filter: %w", uerr)
 		}
 	}
 	off += flen
@@ -2904,7 +2904,7 @@ func decodeScrollArgsN(args []byte) (collection string, filter vector.Filter, li
 // when readConsistency!=0 || onPartitionUnavailable!=0. When both are zero the
 // output is byte-identical to EncodeScrollArgs (backward-compatible) and the
 // plain DecodeScrollArgs (used by the single-shard handler) ignores trailing bytes.
-func EncodeScrollArgsOpts(collection string, filter vector.Filter, limit int, readConsistency, onPartitionUnavailable uint8) []byte {
+func EncodeScrollArgsOpts(collection string, filter vtypes.Filter, limit int, readConsistency, onPartitionUnavailable uint8) []byte {
 	return EncodeScrollArgsCursor(collection, filter, limit, readConsistency, onPartitionUnavailable, 0, false)
 }
 
@@ -2923,7 +2923,7 @@ func EncodeScrollArgsOpts(collection string, filter vector.Filter, limit int, re
 // so an opts-only-no-cursor arg stays byte-identical to the legacy
 // EncodeScrollArgsOpts trailer ([1][rc][opa]) — see DecodeScrollArgsCursor for
 // the read side.
-func EncodeScrollArgsCursor(collection string, filter vector.Filter, limit int, readConsistency, onPartitionUnavailable uint8, afterID uint64, hasAfter bool) []byte {
+func EncodeScrollArgsCursor(collection string, filter vtypes.Filter, limit int, readConsistency, onPartitionUnavailable uint8, afterID uint64, hasAfter bool) []byte {
 	return EncodeScrollArgsCursorBounded(collection, filter, limit, readConsistency, onPartitionUnavailable, afterID, hasAfter, 0)
 }
 
@@ -2932,7 +2932,7 @@ func EncodeScrollArgsCursor(collection string, filter vector.Filter, limit int, 
 // block) and ONLY when rc==ConsistencyBoundedStaleness — so it never shifts the
 // cursor offset and stays byte-identical for rc∈{0,1,2}. See DecodeScrollArgsCursor
 // for the symmetric read.
-func EncodeScrollArgsCursorBounded(collection string, filter vector.Filter, limit int, readConsistency, onPartitionUnavailable uint8, afterID uint64, hasAfter bool, bound uint64) []byte {
+func EncodeScrollArgsCursorBounded(collection string, filter vtypes.Filter, limit int, readConsistency, onPartitionUnavailable uint8, afterID uint64, hasAfter bool, bound uint64) []byte {
 	base := EncodeScrollArgs(collection, filter, limit)
 	if readConsistency == 0 && onPartitionUnavailable == 0 && !hasAfter {
 		return base // byte-identical to the legacy form
@@ -2957,7 +2957,7 @@ func EncodeScrollArgsCursorBounded(collection string, filter vector.Filter, limi
 // DecodeScrollArgsOpts decodes a vector_scroll request that may carry a
 // self-delimiting consistency opts (+ optional cursor) trailer. Backward-compatible:
 // legacy args (no trailer) decode with readConsistency=0, onPartitionUnavailable=0.
-func DecodeScrollArgsOpts(args []byte) (collection string, filter vector.Filter, limit int, readConsistency, onPartitionUnavailable uint8, err error) {
+func DecodeScrollArgsOpts(args []byte) (collection string, filter vtypes.Filter, limit int, readConsistency, onPartitionUnavailable uint8, err error) {
 	collection, filter, limit, readConsistency, onPartitionUnavailable, _, _, _, err = DecodeScrollArgsCursor(args)
 	return collection, filter, limit, readConsistency, onPartitionUnavailable, err
 }
@@ -2972,16 +2972,16 @@ func DecodeScrollArgsOpts(args []byte) (collection string, filter vector.Filter,
 //   - full trailer ([1][rc][opa][cursorPresent][afterID?]): all read.
 //
 // A present-flag with a missing/truncated trailer is corruption — fail loud.
-func DecodeScrollArgsCursor(args []byte) (collection string, filter vector.Filter, limit int, readConsistency, onPartitionUnavailable uint8, afterID uint64, hasAfter bool, bound uint64, err error) {
+func DecodeScrollArgsCursor(args []byte) (collection string, filter vtypes.Filter, limit int, readConsistency, onPartitionUnavailable uint8, afterID uint64, hasAfter bool, bound uint64, err error) {
 	collection, filter, limit, n, err := decodeScrollArgsN(args)
 	if err != nil {
-		return "", vector.Filter{}, 0, 0, 0, 0, false, 0, err
+		return "", vtypes.Filter{}, 0, 0, 0, 0, false, 0, err
 	}
 	if len(args) > n && args[n] != 0 {
 		// Presence flag set is the contract that [rc:u8][opa:u8] follows; a
 		// missing trailer means corruption/truncation. Fail loud.
 		if len(args) < n+3 {
-			return "", vector.Filter{}, 0, 0, 0, 0, false, 0, ErrVectorArgsTruncated
+			return "", vtypes.Filter{}, 0, 0, 0, 0, false, 0, ErrVectorArgsTruncated
 		}
 		readConsistency = args[n+1]
 		onPartitionUnavailable = args[n+2]
@@ -2990,12 +2990,12 @@ func DecodeScrollArgsCursor(args []byte) (collection string, filter vector.Filte
 		// cursor block (symmetric with EncodeScrollArgsCursorBounded).
 		bound, off, err = readBoundTail(args, off, readConsistency)
 		if err != nil {
-			return "", vector.Filter{}, 0, 0, 0, 0, false, 0, err
+			return "", vtypes.Filter{}, 0, 0, 0, 0, false, 0, err
 		}
 		// Optional cursorPresent byte (absent in the pre-cursor opts-only form).
 		if len(args) > off && args[off] != 0 {
 			if len(args) < off+1+8 {
-				return "", vector.Filter{}, 0, 0, 0, 0, false, 0, ErrVectorArgsTruncated
+				return "", vtypes.Filter{}, 0, 0, 0, 0, false, 0, ErrVectorArgsTruncated
 			}
 			afterID = binary.BigEndian.Uint64(args[off+1:])
 			hasAfter = true
@@ -3026,7 +3026,7 @@ type ScrollOrder struct {
 	Key          string
 	Desc         bool
 	IsDatetime   bool
-	Kind         vector.OrderKind
+	Kind         vtypes.OrderKind
 	StartFrom    float64
 	HasStart     bool
 	ResumeKey    float64
@@ -3056,7 +3056,7 @@ type ScrollOrderKey struct {
 	Key        string
 	Desc       bool
 	IsDatetime bool
-	Kind       vector.OrderKind
+	Kind       vtypes.OrderKind
 }
 
 // ScrollOrderVal is one typed resume value in ScrollOrder.ResumeKeys (the v4 cursor's
@@ -3067,7 +3067,7 @@ type ScrollOrderKey struct {
 type ScrollOrderVal struct {
 	Num  float64
 	Str  string
-	Kind vector.OrderKind
+	Kind vtypes.OrderKind
 }
 
 // scrollOrderFlagDesc / scrollOrderFlagDatetime / scrollOrderFlagString are the order
@@ -3089,7 +3089,7 @@ const (
 // scrollOrderValKindString is the per-key kind byte for a string resume value in the
 // multi-key tail block (mirrors vector.OrderString == 2). Numeric (0) / datetime (1)
 // values carry a float64.
-const scrollOrderValKindString = byte(vector.OrderString)
+const scrollOrderValKindString = byte(vtypes.OrderString)
 
 // EncodeScrollArgsOrder is EncodeScrollArgsCursor with an ADDITIVE order_by block.
 //
@@ -3104,7 +3104,7 @@ const scrollOrderValKindString = byte(vector.OrderString)
 // is zero-overhead on the wire (asserted in tests). When order != nil the opts+cursor
 // trailer is FORCED present (even if rc=opa=0 and no cursor) so the order block has an
 // unambiguous, self-delimiting start position after the cursor trailer.
-func EncodeScrollArgsOrder(collection string, filter vector.Filter, limit int, readConsistency, onPartitionUnavailable uint8, afterID uint64, hasAfter bool, order *ScrollOrder) []byte {
+func EncodeScrollArgsOrder(collection string, filter vtypes.Filter, limit int, readConsistency, onPartitionUnavailable uint8, afterID uint64, hasAfter bool, order *ScrollOrder) []byte {
 	return EncodeScrollArgsOrderBounded(collection, filter, limit, readConsistency, onPartitionUnavailable, afterID, hasAfter, order, 0)
 }
 
@@ -3113,7 +3113,7 @@ func EncodeScrollArgsOrder(collection string, filter vector.Filter, limit int, r
 // order blocks) ONLY when rc==ConsistencyBoundedStaleness — the SAME position
 // EncodeScrollArgsCursorBounded uses, so DecodeScrollArgsCursor / DecodeScrollArgsOrder
 // read it identically and the order block decode is undisturbed.
-func EncodeScrollArgsOrderBounded(collection string, filter vector.Filter, limit int, readConsistency, onPartitionUnavailable uint8, afterID uint64, hasAfter bool, order *ScrollOrder, bound uint64) []byte {
+func EncodeScrollArgsOrderBounded(collection string, filter vtypes.Filter, limit int, readConsistency, onPartitionUnavailable uint8, afterID uint64, hasAfter bool, order *ScrollOrder, bound uint64) []byte {
 	if order == nil {
 		return EncodeScrollArgsCursorBounded(collection, filter, limit, readConsistency, onPartitionUnavailable, afterID, hasAfter, bound)
 	}
@@ -3166,7 +3166,7 @@ func appendScrollOrderBlock(out []byte, order *ScrollOrder) []byte {
 	if order.IsDatetime {
 		flags |= scrollOrderFlagDatetime
 	}
-	if order.Kind == vector.OrderString {
+	if order.Kind == vtypes.OrderString {
 		flags |= scrollOrderFlagString
 	}
 	if len(order.Tail) > 0 {
@@ -3189,7 +3189,7 @@ func appendScrollOrderBlock(out []byte, order *ScrollOrder) []byte {
 	}
 	// ADDITIVE string-resume tail, ONLY for OrderString (bit2). Numeric/datetime
 	// blocks stop above ⇒ their bytes are unchanged.
-	if order.Kind == vector.OrderString {
+	if order.Kind == vtypes.OrderString {
 		if order.HasResumeStr {
 			var sl [4]byte
 			binary.BigEndian.PutUint32(sl[:], uint32(len(order.ResumeStr))) //nolint:gosec // bounded by the cursor codec's strLen cap
@@ -3222,7 +3222,7 @@ func appendScrollOrderBlock(out []byte, order *ScrollOrder) []byte {
 			if tk.IsDatetime {
 				tf |= scrollOrderFlagDatetime
 			}
-			if tk.Kind == vector.OrderString {
+			if tk.Kind == vtypes.OrderString {
 				tf |= scrollOrderFlagString
 			}
 			out = append(out, tf)
@@ -3231,7 +3231,7 @@ func appendScrollOrderBlock(out []byte, order *ScrollOrder) []byte {
 			out = append(out, 1)
 			for _, rv := range order.ResumeKeys {
 				out = append(out, byte(rv.Kind))
-				if rv.Kind == vector.OrderString {
+				if rv.Kind == vtypes.OrderString {
 					var sl [4]byte
 					binary.BigEndian.PutUint32(sl[:], uint32(len(rv.Str))) //nolint:gosec // bounded by the cursor codec's strLen cap
 					out = append(out, sl[:]...)
@@ -3286,7 +3286,7 @@ func readScrollOrderBlock(args []byte, off int) (order *ScrollOrder, newOff int,
 	// decodes with Kind==OrderNumeric exactly as an old block did (the engine branches
 	// on OrderString only; OrderDatetime is informational on the request side).
 	if isString {
-		o.Kind = vector.OrderString
+		o.Kind = vtypes.OrderString
 	}
 	// startPresent[+start]
 	if len(args) < off+1 {
@@ -3370,9 +3370,9 @@ func readScrollOrderBlock(args []byte, off int) (order *ScrollOrder, newOff int,
 			tk.Desc = tf&scrollOrderFlagDesc != 0
 			tk.IsDatetime = tf&scrollOrderFlagDatetime != 0
 			if tf&scrollOrderFlagString != 0 {
-				tk.Kind = vector.OrderString
+				tk.Kind = vtypes.OrderString
 			} else if tk.IsDatetime {
-				tk.Kind = vector.OrderDatetime
+				tk.Kind = vtypes.OrderDatetime
 			}
 			o.Tail[i] = tk
 		}
@@ -3399,13 +3399,13 @@ func readScrollOrderBlock(args []byte, off int) (order *ScrollOrder, newOff int,
 					if sl < 0 || sl > scrollCursorStringMaxLen || len(args) < off+sl {
 						return nil, off, ErrVectorArgsTruncated
 					}
-					o.ResumeKeys[i] = ScrollOrderVal{Str: string(args[off : off+sl]), Kind: vector.OrderString}
+					o.ResumeKeys[i] = ScrollOrderVal{Str: string(args[off : off+sl]), Kind: vtypes.OrderString}
 					off += sl
 				} else {
 					if len(args) < off+8 {
 						return nil, off, ErrVectorArgsTruncated
 					}
-					o.ResumeKeys[i] = ScrollOrderVal{Num: math.Float64frombits(binary.BigEndian.Uint64(args[off:])), Kind: vector.OrderKind(kind)}
+					o.ResumeKeys[i] = ScrollOrderVal{Num: math.Float64frombits(binary.BigEndian.Uint64(args[off:])), Kind: vtypes.OrderKind(kind)}
 					off += 8
 				}
 			}
@@ -3426,15 +3426,15 @@ func readScrollOrderBlock(args []byte, off int) (order *ScrollOrder, newOff int,
 //   - Order block present: order is non-nil with Key/Desc/IsDatetime/Start/Resume set.
 //
 // A present-flag with a missing/truncated order block is corruption — fail loud.
-func DecodeScrollArgsOrder(args []byte) (collection string, filter vector.Filter, limit int, readConsistency, onPartitionUnavailable uint8, afterID uint64, hasAfter bool, order *ScrollOrder, err error) {
+func DecodeScrollArgsOrder(args []byte) (collection string, filter vtypes.Filter, limit int, readConsistency, onPartitionUnavailable uint8, afterID uint64, hasAfter bool, order *ScrollOrder, err error) {
 	collection, filter, limit, n, err := decodeScrollArgsN(args)
 	if err != nil {
-		return "", vector.Filter{}, 0, 0, 0, 0, false, nil, err
+		return "", vtypes.Filter{}, 0, 0, 0, 0, false, nil, err
 	}
 	off := n
 	if len(args) > off && args[off] != 0 {
 		if len(args) < off+3 {
-			return "", vector.Filter{}, 0, 0, 0, 0, false, nil, ErrVectorArgsTruncated
+			return "", vtypes.Filter{}, 0, 0, 0, 0, false, nil, ErrVectorArgsTruncated
 		}
 		readConsistency = args[off+1]
 		onPartitionUnavailable = args[off+2]
@@ -3443,12 +3443,12 @@ func DecodeScrollArgsOrder(args []byte) (collection string, filter vector.Filter
 		// encoder); consume it so the cursor + order offsets stay correct.
 		_, off, err = readBoundTail(args, off, readConsistency)
 		if err != nil {
-			return "", vector.Filter{}, 0, 0, 0, 0, false, nil, err
+			return "", vtypes.Filter{}, 0, 0, 0, 0, false, nil, err
 		}
 		// Optional cursorPresent byte (absent in the pre-cursor opts-only form).
 		if len(args) > off && args[off] != 0 {
 			if len(args) < off+1+8 {
-				return "", vector.Filter{}, 0, 0, 0, 0, false, nil, ErrVectorArgsTruncated
+				return "", vtypes.Filter{}, 0, 0, 0, 0, false, nil, ErrVectorArgsTruncated
 			}
 			afterID = binary.BigEndian.Uint64(args[off+1:])
 			hasAfter = true
@@ -3459,7 +3459,7 @@ func DecodeScrollArgsOrder(args []byte) (collection string, filter vector.Filter
 		// Optional order block (shared format; see readScrollOrderBlock).
 		order, _, err = readScrollOrderBlock(args, off)
 		if err != nil {
-			return "", vector.Filter{}, 0, 0, 0, 0, false, nil, err
+			return "", vtypes.Filter{}, 0, 0, 0, 0, false, nil, err
 		}
 	}
 	return collection, filter, limit, readConsistency, onPartitionUnavailable, afterID, hasAfter, order, nil
@@ -3467,7 +3467,7 @@ func DecodeScrollArgsOrder(args []byte) (collection string, filter vector.Filter
 
 // EncodeDeleteByFilterArgs serializes a vector_delete_by_filter request.
 // Wire: [colLen:u8][col][filterLen:u32][filterJSON].
-func EncodeDeleteByFilterArgs(collection string, filter vector.Filter) []byte {
+func EncodeDeleteByFilterArgs(collection string, filter vtypes.Filter) []byte {
 	fj, _ := json.Marshal(filter)
 	buf := make([]byte, 1+len(collection)+4+len(fj))
 	buf[0] = byte(len(collection))
@@ -3479,24 +3479,24 @@ func EncodeDeleteByFilterArgs(collection string, filter vector.Filter) []byte {
 }
 
 // DecodeDeleteByFilterArgs reads args produced by EncodeDeleteByFilterArgs.
-func DecodeDeleteByFilterArgs(args []byte) (string, vector.Filter, error) {
+func DecodeDeleteByFilterArgs(args []byte) (string, vtypes.Filter, error) {
 	if len(args) < 1 {
-		return "", vector.Filter{}, ErrVectorArgsTruncated
+		return "", vtypes.Filter{}, ErrVectorArgsTruncated
 	}
 	colLen := int(args[0])
 	if len(args) < 1+colLen+4 {
-		return "", vector.Filter{}, ErrVectorArgsTruncated
+		return "", vtypes.Filter{}, ErrVectorArgsTruncated
 	}
 	collection := string(args[1 : 1+colLen])
 	off := 1 + colLen
 	flen := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
 	if len(args) < off+flen {
-		return "", vector.Filter{}, ErrVectorArgsTruncated
+		return "", vtypes.Filter{}, ErrVectorArgsTruncated
 	}
-	var filter vector.Filter
+	var filter vtypes.Filter
 	if err := json.Unmarshal(args[off:off+flen], &filter); err != nil {
-		return "", vector.Filter{}, fmt.Errorf("ops: decode filter: %w", err)
+		return "", vtypes.Filter{}, fmt.Errorf("ops: decode filter: %w", err)
 	}
 	return collection, filter, nil
 }
@@ -3504,22 +3504,22 @@ func DecodeDeleteByFilterArgs(args []byte) (string, vector.Filter, error) {
 // EncodeVectorUpsertArgs serializes a vector_upsert request. It reuses the
 // insert-args wire shape, folding the document content into the metadata's
 // reserved content field so no separate wire field is needed.
-func EncodeVectorUpsertArgs(collection string, id uint64, vec []float32, content string, ttl time.Duration, meta vector.Metadata, sparse vector.SparseVector) []byte {
-	return EncodeVectorInsertArgsExt(collection, id, vec, ttl, vector.WithContent(meta, content), sparse)
+func EncodeVectorUpsertArgs(collection string, id uint64, vec []float32, content string, ttl time.Duration, meta vtypes.Metadata, sparse vtypes.SparseVector) []byte {
+	return EncodeVectorInsertArgsExt(collection, id, vec, ttl, vtypes.WithContent(meta, content), sparse)
 }
 
 // EncodeVectorUpsertArgsCAS serializes vector_upsert args carrying an
 // optimistic-CAS precondition (see EncodeVectorInsertArgsCAS). When hasExpected
 // is false the output is BYTE-IDENTICAL to EncodeVectorUpsertArgs.
-func EncodeVectorUpsertArgsCAS(collection string, id uint64, vec []float32, content string, ttl time.Duration, meta vector.Metadata, sparse vector.SparseVector, expectedVersion uint64, hasExpected bool) []byte {
-	return EncodeVectorInsertArgsCAS(collection, id, vec, ttl, vector.WithContent(meta, content), sparse, expectedVersion, hasExpected)
+func EncodeVectorUpsertArgsCAS(collection string, id uint64, vec []float32, content string, ttl time.Duration, meta vtypes.Metadata, sparse vtypes.SparseVector, expectedVersion uint64, hasExpected bool) []byte {
+	return EncodeVectorInsertArgsCAS(collection, id, vec, ttl, vtypes.WithContent(meta, content), sparse, expectedVersion, hasExpected)
 }
 
 // EncodeVectorUpsertArgsCASKeyTTL is EncodeVectorUpsertArgsCAS plus an OPTIONAL
 // per-key payload TTL map (key -> RELATIVE ms). Byte-identical to
 // EncodeVectorUpsertArgs when keyTTLMs is empty and hasExpected is false.
-func EncodeVectorUpsertArgsCASKeyTTL(collection string, id uint64, vec []float32, content string, ttl time.Duration, meta vector.Metadata, sparse vector.SparseVector, expectedVersion uint64, hasExpected bool, keyTTLMs map[string]int64) []byte {
-	return EncodeVectorInsertArgsCASKeyTTL(collection, id, vec, ttl, vector.WithContent(meta, content), sparse, expectedVersion, hasExpected, keyTTLMs)
+func EncodeVectorUpsertArgsCASKeyTTL(collection string, id uint64, vec []float32, content string, ttl time.Duration, meta vtypes.Metadata, sparse vtypes.SparseVector, expectedVersion uint64, hasExpected bool, keyTTLMs map[string]int64) []byte {
+	return EncodeVectorInsertArgsCASKeyTTL(collection, id, vec, ttl, vtypes.WithContent(meta, content), sparse, expectedVersion, hasExpected, keyTTLMs)
 }
 
 // MaxCollectionNameWire is the longest collection name the op wire can carry:
@@ -3606,7 +3606,7 @@ func EncodeBulkStageArgs(collection string, ids []uint64, vecs [][]float32) ([]b
 	for i, v := range vecs {
 		if len(v) != dim {
 			return nil, fmt.Errorf("ops: bulk stage vector %d has length %d, batch dim is %d: %w",
-				i, len(v), dim, vector.ErrDimMismatch)
+				i, len(v), dim, vtypes.ErrDimMismatch)
 		}
 	}
 	// Every vector is now known to hold dim floats, so len(ids)*perRow is bounded
@@ -3722,7 +3722,7 @@ func decodeBulkStageRows(args []byte) (collection string, ids []uint64, vecs [][
 // (binary_bulk.go, RVB1), for the same reason the row region is: /points/bulk
 // streams both regions off the socket straight in behind the op header, with no
 // re-encoding and no intermediate materialization of the corpus.
-func EncodeBulkStagePayloadArgs(collection string, ids []uint64, vecs [][]float32, metas []vector.Metadata) ([]byte, error) {
+func EncodeBulkStagePayloadArgs(collection string, ids []uint64, vecs [][]float32, metas []vtypes.Metadata) ([]byte, error) {
 	if len(metas) != len(ids) {
 		return nil, fmt.Errorf("ops: bulk stage has %d ids and %d payloads", len(ids), len(metas))
 	}
@@ -3768,7 +3768,7 @@ func EncodeBulkStagePayloadArgs(collection string, ids []uint64, vecs [][]float3
 
 // DecodeBulkStagePayloadArgs reads args produced by EncodeBulkStagePayloadArgs.
 // metas has one entry per staged point, nil where the point carries no payload.
-func DecodeBulkStagePayloadArgs(args []byte) (collection string, ids []uint64, vecs [][]float32, metas []vector.Metadata, err error) {
+func DecodeBulkStagePayloadArgs(args []byte) (collection string, ids []uint64, vecs [][]float32, metas []vtypes.Metadata, err error) {
 	collection, ids, vecs, off, err := decodeBulkStageRows(args)
 	if err != nil {
 		return "", nil, nil, nil, err
@@ -3800,7 +3800,7 @@ func DecodeBulkStagePayloadArgs(args []byte) (collection string, ids []uint64, v
 	if !CountFitsIn(count, len(args)-off, 4) {
 		return "", nil, nil, nil, ErrVectorArgsTruncated
 	}
-	metas = make([]vector.Metadata, count)
+	metas = make([]vtypes.Metadata, count)
 	for i := 0; i < count; i++ {
 		// The length prefix itself must be proven present before it is READ — see
 		// the asymmetry note above. This is the check whose absence panicked.
@@ -3818,7 +3818,7 @@ func DecodeBulkStagePayloadArgs(args []byte) (collection string, ids []uint64, v
 		if blobLen == 0 {
 			continue // no payload for this point
 		}
-		m := make(vector.Metadata)
+		m := make(vtypes.Metadata)
 		if uerr := json.Unmarshal(args[off:off+blobLen], &m); uerr != nil {
 			return "", nil, nil, nil, fmt.Errorf("%w: payload %d: %v", ErrMalformedPayloadJSON, i, uerr)
 		}
@@ -3881,7 +3881,7 @@ func DecodeDeleteByFilterResult(body []byte) (int, error) {
 //	[groupByLen:u16][groupBy][dim:u32][query][filterLen:u32][filterJSON]
 //
 // filterLen 0 means no filter (so no flags byte is needed).
-func EncodeGroupSearchArgs(collection string, k int, query []float32, opts vector.GroupOpts) []byte {
+func EncodeGroupSearchArgs(collection string, k int, query []float32, opts vtypes.GroupOpts) []byte {
 	var filterJSON []byte
 	if !opts.Filter.IsZero() {
 		filterJSON, _ = json.Marshal(opts.Filter)
@@ -3915,7 +3915,7 @@ func EncodeGroupSearchArgs(collection string, k int, query []float32, opts vecto
 // bytes beyond the base block (e.g. an opts trailer from
 // EncodeGroupSearchArgsOpts) are ignored, so the single-shard handler stays
 // backward-compatible with opts-carrying args.
-func DecodeGroupSearchArgs(args []byte) (collection string, k int, query []float32, opts vector.GroupOpts, err error) {
+func DecodeGroupSearchArgs(args []byte) (collection string, k int, query []float32, opts vtypes.GroupOpts, err error) {
 	collection, k, query, opts, _, err = decodeGroupSearchArgsN(args)
 	return collection, k, query, opts, err
 }
@@ -3924,9 +3924,9 @@ func DecodeGroupSearchArgs(args []byte) (collection string, k int, query []float
 // number of bytes consumed (so DecodeGroupSearchArgsOpts can read a trailing
 // opts block). Group args carry no flags byte, so the Opts trailer is
 // self-delimiting (see EncodeGroupSearchArgsOpts).
-func decodeGroupSearchArgsN(args []byte) (collection string, k int, query []float32, opts vector.GroupOpts, n int, err error) {
-	fail := func() (string, int, []float32, vector.GroupOpts, int, error) {
-		return "", 0, nil, vector.GroupOpts{}, 0, ErrVectorArgsTruncated
+func decodeGroupSearchArgsN(args []byte) (collection string, k int, query []float32, opts vtypes.GroupOpts, n int, err error) {
+	fail := func() (string, int, []float32, vtypes.GroupOpts, int, error) {
+		return "", 0, nil, vtypes.GroupOpts{}, 0, ErrVectorArgsTruncated
 	}
 	if len(args) < 1 {
 		return fail()
@@ -3967,7 +3967,7 @@ func decodeGroupSearchArgsN(args []byte) (collection string, k int, query []floa
 	}
 	if flen > 0 {
 		if uerr := json.Unmarshal(args[off:off+flen], &opts.Filter); uerr != nil {
-			return "", 0, nil, vector.GroupOpts{}, 0, fmt.Errorf("ops: decode filter: %w", uerr)
+			return "", 0, nil, vtypes.GroupOpts{}, 0, fmt.Errorf("ops: decode filter: %w", uerr)
 		}
 	}
 	off += flen
@@ -3981,7 +3981,7 @@ func decodeGroupSearchArgsN(args []byte) (collection string, k int, query []floa
 // output is byte-identical to EncodeGroupSearchArgs (backward-compatible) and
 // the plain DecodeGroupSearchArgs (used by the single-shard handler) ignores any
 // trailing bytes.
-func EncodeGroupSearchArgsOpts(collection string, k int, query []float32, opts vector.GroupOpts, readConsistency, onPartitionUnavailable uint8, bound uint64) []byte {
+func EncodeGroupSearchArgsOpts(collection string, k int, query []float32, opts vtypes.GroupOpts, readConsistency, onPartitionUnavailable uint8, bound uint64) []byte {
 	base := EncodeGroupSearchArgs(collection, k, query, opts)
 	if readConsistency == 0 && onPartitionUnavailable == 0 {
 		return base // byte-identical to the legacy form
@@ -3993,23 +3993,23 @@ func EncodeGroupSearchArgsOpts(collection string, k int, query []float32, opts v
 // DecodeGroupSearchArgsOpts decodes vector_search_groups args that may carry a
 // self-delimiting consistency opts trailer. Backward-compatible: legacy args
 // (no trailer) decode with readConsistency=0, onPartitionUnavailable=0.
-func DecodeGroupSearchArgsOpts(args []byte) (collection string, k int, query []float32, opts vector.GroupOpts, readConsistency, onPartitionUnavailable uint8, bound uint64, err error) {
+func DecodeGroupSearchArgsOpts(args []byte) (collection string, k int, query []float32, opts vtypes.GroupOpts, readConsistency, onPartitionUnavailable uint8, bound uint64, err error) {
 	collection, k, query, opts, n, err := decodeGroupSearchArgsN(args)
 	if err != nil {
-		return "", 0, nil, vector.GroupOpts{}, 0, 0, 0, err
+		return "", 0, nil, vtypes.GroupOpts{}, 0, 0, 0, err
 	}
 	if len(args) > n && args[n] != 0 {
 		// Presence flag set is the contract that [rc:u8][opa:u8] follows; a
 		// missing trailer means corruption/truncation. Fail loud rather than
 		// silently downgrading an explicit LeaderOnly/Fail request.
 		if len(args) < n+3 {
-			return "", 0, nil, vector.GroupOpts{}, 0, 0, 0, ErrVectorArgsTruncated
+			return "", 0, nil, vtypes.GroupOpts{}, 0, 0, 0, ErrVectorArgsTruncated
 		}
 		readConsistency = args[n+1]
 		onPartitionUnavailable = args[n+2]
 		bound, _, err = readBoundTail(args, n+3, readConsistency)
 		if err != nil {
-			return "", 0, nil, vector.GroupOpts{}, 0, 0, 0, err
+			return "", 0, nil, vtypes.GroupOpts{}, 0, 0, 0, err
 		}
 	}
 	return collection, k, query, opts, readConsistency, onPartitionUnavailable, bound, nil
@@ -4021,7 +4021,7 @@ func DecodeGroupSearchArgsOpts(args []byte) (collection string, k int, query []f
 //
 // where docsBlob is the EncodeVectorDocs encoding of the group's hits and
 // keyJSON is the JSON-marshaled group key (a vector.Value).
-func EncodeGroups(groups []vector.Group) []byte {
+func EncodeGroups(groups []vtypes.Group) []byte {
 	keys := make([][]byte, len(groups))
 	docs := make([][]byte, len(groups))
 	n := 4
@@ -4045,19 +4045,19 @@ func EncodeGroups(groups []vector.Group) []byte {
 }
 
 // DecodeGroups reads groups produced by EncodeGroups.
-func DecodeGroups(body []byte) ([]vector.Group, error) {
+func DecodeGroups(body []byte) ([]vtypes.Group, error) {
 	groups, _, err := decodeGroupsN(body)
 	return groups, err
 }
 
 // decodeGroupsN decodes one groups block and returns the groups plus the number
 // of bytes consumed (so callers can read a trailing degraded block).
-func decodeGroupsN(body []byte) ([]vector.Group, int, error) {
+func decodeGroupsN(body []byte) ([]vtypes.Group, int, error) {
 	raw, off, err := frameGroupsN(body)
 	if err != nil {
 		return nil, 0, err
 	}
-	groups := make([]vector.Group, len(raw))
+	groups := make([]vtypes.Group, len(raw))
 	for i, r := range raw {
 		// Unmarshalling IS the validation of the key window, exactly as before.
 		if err := json.Unmarshal(r.Key, &groups[i].Key); err != nil {
@@ -4076,12 +4076,12 @@ func decodeGroupsN(body []byte) ([]vector.Group, int, error) {
 // key checked for well-formedness instead of unmarshalled and each group's hits
 // decoded by decodeVectorDocsRawN. See decodeVectorDocsRawN for the one shape
 // difference a validity scan has against a full decode.
-func decodeGroupsRawN(body []byte) ([]vector.RawGroup, int, error) {
+func decodeGroupsRawN(body []byte) ([]vtypes.RawGroup, int, error) {
 	raw, off, err := frameGroupsN(body)
 	if err != nil {
 		return nil, 0, err
 	}
-	groups := make([]vector.RawGroup, len(raw))
+	groups := make([]vtypes.RawGroup, len(raw))
 	for i, r := range raw {
 		// A group key is the json.Marshal of a single vector.Value, so it needs the
 		// same vetting a metadata window does — including the U+FFFD escape case,
@@ -4094,7 +4094,7 @@ func decodeGroupsRawN(body []byte) ([]vector.RawGroup, int, error) {
 		if err != nil {
 			return nil, 0, err
 		}
-		groups[i] = vector.RawGroup{Key: key, Hits: hits}
+		groups[i] = vtypes.RawGroup{Key: key, Hits: hits}
 	}
 	return groups, off, nil
 }
@@ -4150,13 +4150,13 @@ func frameGroupsN(body []byte) ([]framedGroup, int, error) {
 // EncodeGroupsDegraded encodes groups with an optional degraded-partition
 // trailer (same wire format as the search trailer). When degraded is false and
 // missing is empty the output is byte-identical to EncodeGroups.
-func EncodeGroupsDegraded(groups []vector.Group, degraded bool, missing []uint16) []byte {
+func EncodeGroupsDegraded(groups []vtypes.Group, degraded bool, missing []uint16) []byte {
 	return appendDegradedTrailer(EncodeGroups(groups), degraded, missing)
 }
 
 // DecodeGroupsDegraded decodes groups and the optional degraded trailer.
 // Backward-compatible with legacy EncodeGroups bytes.
-func DecodeGroupsDegraded(body []byte) (groups []vector.Group, degraded bool, missing []uint16, err error) {
+func DecodeGroupsDegraded(body []byte) (groups []vtypes.Group, degraded bool, missing []uint16, err error) {
 	groups, off, err := decodeGroupsN(body)
 	if err != nil {
 		return nil, false, nil, err
@@ -4168,7 +4168,7 @@ func DecodeGroupsDegraded(body []byte) (groups []vector.Group, degraded bool, mi
 // DecodeGroupsDegradedRaw is DecodeGroupsDegraded with raw (undecoded) group keys
 // and hit metadata — see DecodeVectorDocsRaw for when that is the right choice and
 // for the aliasing rule.
-func DecodeGroupsDegradedRaw(body []byte) (groups []vector.RawGroup, degraded bool, missing []uint16, err error) {
+func DecodeGroupsDegradedRaw(body []byte) (groups []vtypes.RawGroup, degraded bool, missing []uint16, err error) {
 	groups, off, err := decodeGroupsRawN(body)
 	if err != nil {
 		return nil, false, nil, err
@@ -4269,7 +4269,7 @@ func DecodeVectorGetArgsOpts(args []byte) (collection string, id uint64, flags, 
 // not-found is the found=0 FLAG (NEVER an op error) so the fan-out layer can treat
 // "absent in this partition" as expected. withVector/withPayload gate the vec and
 // the meta+sparse projections respectively (mirroring the get flags).
-func EncodeVectorGetResult(found bool, vec []float32, meta vector.Metadata, ttl time.Duration, sparse *vector.SparseVector, withVector, withPayload bool) []byte {
+func EncodeVectorGetResult(found bool, vec []float32, meta vtypes.Metadata, ttl time.Duration, sparse *vtypes.SparseVector, withVector, withPayload bool) []byte {
 	return EncodeVectorGetResultV(found, vec, meta, ttl, sparse, withVector, withPayload, 0)
 }
 
@@ -4279,7 +4279,7 @@ func EncodeVectorGetResult(found bool, vec []float32, meta vector.Metadata, ttl 
 // verPresent=0 and NO version field, so the output is BYTE-IDENTICAL to the
 // pre-version EncodeVectorGetResult; a live version (>=1) writes verPresent=1 +
 // the u64. decodeGetResultAt tolerates the block's absence (legacy bodies).
-func EncodeVectorGetResultV(found bool, vec []float32, meta vector.Metadata, ttl time.Duration, sparse *vector.SparseVector, withVector, withPayload bool, version uint64) []byte {
+func EncodeVectorGetResultV(found bool, vec []float32, meta vtypes.Metadata, ttl time.Duration, sparse *vtypes.SparseVector, withVector, withPayload bool, version uint64) []byte {
 	return appendVectorGetResultV(nil, found, vec, meta, ttl, sparse, withVector, withPayload, version)
 }
 
@@ -4289,7 +4289,7 @@ func EncodeVectorGetResultV(found bool, vec []float32, meta vector.Metadata, ttl
 // capacity — which is what lets the batch encoder serialize many rows into a
 // single buffer without a throwaway slice per row. EncodeVectorGetResultV is the
 // nil-dst single-get wrapper (one presized alloc, byte-identical to before).
-func appendVectorGetResultV(dst []byte, found bool, vec []float32, meta vector.Metadata, ttl time.Duration, sparse *vector.SparseVector, withVector, withPayload bool, version uint64) []byte {
+func appendVectorGetResultV(dst []byte, found bool, vec []float32, meta vtypes.Metadata, ttl time.Duration, sparse *vtypes.SparseVector, withVector, withPayload bool, version uint64) []byte {
 	if !found {
 		return append(dst, 0)
 	}
@@ -4367,7 +4367,7 @@ func appendVectorGetResultV(dst []byte, found bool, vec []float32, meta vector.M
 // DecodeVectorGetResult reads a result produced by EncodeVectorGetResult. found is
 // false for an absent/tombstoned/expired point (the not-found flag). vec/sparse are
 // nil and meta is nil when their projection was off or empty.
-func DecodeVectorGetResult(body []byte) (found bool, vec []float32, meta vector.Metadata, ttl time.Duration, sparse *vector.SparseVector, err error) {
+func DecodeVectorGetResult(body []byte) (found bool, vec []float32, meta vtypes.Metadata, ttl time.Duration, sparse *vtypes.SparseVector, err error) {
 	found, vec, meta, ttl, sparse, _, _, err = decodeGetResultAt(body, 0, false)
 	return found, vec, meta, ttl, sparse, err
 }
@@ -4375,7 +4375,7 @@ func DecodeVectorGetResult(body []byte) (found bool, vec []float32, meta vector.
 // DecodeVectorGetResultV is DecodeVectorGetResult plus the point's per-point CAS
 // version (0 when the result carries no version block — a legacy/no-version body
 // or a not-found result).
-func DecodeVectorGetResultV(body []byte) (found bool, vec []float32, meta vector.Metadata, ttl time.Duration, sparse *vector.SparseVector, version uint64, err error) {
+func DecodeVectorGetResultV(body []byte) (found bool, vec []float32, meta vtypes.Metadata, ttl time.Duration, sparse *vtypes.SparseVector, version uint64, err error) {
 	found, vec, meta, ttl, sparse, version, _, err = decodeGetResultAt(body, 0, false)
 	return found, vec, meta, ttl, sparse, version, err
 }
@@ -4393,7 +4393,7 @@ func DecodeVectorGetResultV(body []byte) (found bool, vec []float32, meta vector
 //   - true (batch): each row's version block is ALWAYS framed ([verPresent:u8]
 //     [?version:u64]) so the record self-delimits and the next row's id is found
 //     unambiguously. The batch encoder always emits the present byte.
-func decodeGetResultAt(body []byte, off int, versionFramed bool) (found bool, vec []float32, meta vector.Metadata, ttl time.Duration, sparse *vector.SparseVector, version uint64, next int, err error) {
+func decodeGetResultAt(body []byte, off int, versionFramed bool) (found bool, vec []float32, meta vtypes.Metadata, ttl time.Duration, sparse *vtypes.SparseVector, version uint64, next int, err error) {
 	found, vec, meta, ttl, sparse, version, next, _, err = decodeGetResultAtArena(body, off, versionFramed, nil)
 	return found, vec, meta, ttl, sparse, version, next, err
 }
@@ -4414,7 +4414,7 @@ func decodeGetResultAt(body []byte, off int, versionFramed bool) (found bool, ve
 // The returned vec ALIASES arena. Callers therefore must not reuse an arena
 // while any vector decoded into it is still live (see
 // DecodeVectorGetBatchResultInto).
-func decodeGetResultAtArena(body []byte, off int, versionFramed bool, arena []float32) (found bool, vec []float32, meta vector.Metadata, ttl time.Duration, sparse *vector.SparseVector, version uint64, next int, arenaOut []float32, err error) {
+func decodeGetResultAtArena(body []byte, off int, versionFramed bool, arena []float32) (found bool, vec []float32, meta vtypes.Metadata, ttl time.Duration, sparse *vtypes.SparseVector, version uint64, next int, arenaOut []float32, err error) {
 	if len(body) < off+1 {
 		return false, nil, nil, 0, nil, 0, off, arena, ErrVectorArgsTruncated
 	}
@@ -4454,7 +4454,7 @@ func decodeGetResultAtArena(body []byte, off int, versionFramed bool, arena []fl
 		if len(body) < off+mlen {
 			return false, nil, nil, 0, nil, 0, off, arena, ErrVectorArgsTruncated
 		}
-		m := make(vector.Metadata)
+		m := make(vtypes.Metadata)
 		if err := json.Unmarshal(body[off:off+mlen], &m); err != nil {
 			return false, nil, nil, 0, nil, 0, off, arena, fmt.Errorf("ops: decode get metadata: %w", err)
 		}
@@ -4514,9 +4514,9 @@ type GetBatchRow struct {
 	ID      uint64
 	Found   bool
 	Vec     []float32
-	Meta    vector.Metadata
+	Meta    vtypes.Metadata
 	TTLMs   uint64
-	Sparse  *vector.SparseVector
+	Sparse  *vtypes.SparseVector
 	Version uint64 // per-point CAS version (>=1 for a found point; 0 = absent/unknown)
 }
 
@@ -4804,7 +4804,7 @@ func readKeyTTLBlock(args []byte, off int) (keyTTLMs map[string]int64, next int,
 // request with NO per-key TTL (byte-identical to the pre-per-key-TTL encoder).
 // Shared by all three families; the per-key-TTL-aware dense path uses
 // EncodeSetPayloadArgsOpts.
-func EncodeSetPayloadArgs(collection string, id uint64, meta vector.Metadata) []byte {
+func EncodeSetPayloadArgs(collection string, id uint64, meta vtypes.Metadata) []byte {
 	return EncodeSetPayloadArgsOpts(collection, id, meta, nil)
 }
 
@@ -4820,7 +4820,7 @@ func EncodeSetPayloadArgs(collection string, id uint64, meta vector.Metadata) []
 // the legacy (pre-per-key-TTL) encoder and the legacy 4-tuple decoder still works.
 // metaLen 0 = empty payload (a valid overwrite-to-empty / merge-nothing). Shared
 // by all three families.
-func EncodeSetPayloadArgsOpts(collection string, id uint64, meta vector.Metadata, keyTTLMs map[string]int64) []byte {
+func EncodeSetPayloadArgsOpts(collection string, id uint64, meta vtypes.Metadata, keyTTLMs map[string]int64) []byte {
 	var metaJSON []byte
 	if len(meta) > 0 {
 		metaJSON, _ = json.Marshal(meta)
@@ -4862,7 +4862,7 @@ func EncodeSetPayloadArgsOpts(collection string, id uint64, meta vector.Metadata
 // before the CAS block (it never consults it), and DecodeSetPayloadArgsCAS reads
 // the CAS guard. The mutation applies ONLY when the point's current version
 // matches expectedVersion.
-func EncodeSetPayloadArgsCAS(collection string, id uint64, meta vector.Metadata, keyTTLMs map[string]int64, expectedVersion uint64, hasExpected bool) []byte {
+func EncodeSetPayloadArgsCAS(collection string, id uint64, meta vtypes.Metadata, keyTTLMs map[string]int64, expectedVersion uint64, hasExpected bool) []byte {
 	if !hasExpected {
 		return EncodeSetPayloadArgsOpts(collection, id, meta, keyTTLMs)
 	}
@@ -4908,7 +4908,7 @@ func EncodeSetPayloadArgsCAS(collection string, id uint64, meta vector.Metadata,
 // JSON is a hard error (fail-loud); an empty payload decodes to a nil meta. The
 // per-key TTL block (if any) is decoded and discarded — callers that need it use
 // DecodeSetPayloadArgsOpts.
-func DecodeSetPayloadArgs(args []byte) (collection string, id uint64, meta vector.Metadata, err error) {
+func DecodeSetPayloadArgs(args []byte) (collection string, id uint64, meta vtypes.Metadata, err error) {
 	collection, id, meta, _, err = DecodeSetPayloadArgsOpts(args)
 	return collection, id, meta, err
 }
@@ -4918,7 +4918,7 @@ func DecodeSetPayloadArgs(args []byte) (collection string, id uint64, meta vecto
 // payload/key-ttl JSON is a hard error (fail-loud); an empty payload decodes to a
 // nil meta; an absent or empty per-key-TTL block decodes to a nil keyTTLMs (the
 // relative-ms map, exactly as encoded). A truncated trailing block is fail-loud.
-func DecodeSetPayloadArgsOpts(args []byte) (collection string, id uint64, meta vector.Metadata, keyTTLMs map[string]int64, err error) {
+func DecodeSetPayloadArgsOpts(args []byte) (collection string, id uint64, meta vtypes.Metadata, keyTTLMs map[string]int64, err error) {
 	if len(args) < 1 {
 		return "", 0, nil, nil, ErrVectorArgsTruncated
 	}
@@ -4936,7 +4936,7 @@ func DecodeSetPayloadArgsOpts(args []byte) (collection string, id uint64, meta v
 		return "", 0, nil, nil, ErrVectorArgsTruncated
 	}
 	if mlen > 0 {
-		m := make(vector.Metadata)
+		m := make(vtypes.Metadata)
 		if err := json.Unmarshal(args[off:off+mlen], &m); err != nil {
 			return "", 0, nil, nil, fmt.Errorf("ops: decode payload: %w", err)
 		}
@@ -4978,7 +4978,7 @@ func DecodeSetPayloadArgsOpts(args []byte) (collection string, id uint64, meta v
 // reports whether the CAS guard was present; expectedVersion is its value (0 =
 // expect-absent). A legacy blob (no CAS block) decodes to hasExpected=false; a
 // present-but-truncated CAS block is fail-loud.
-func DecodeSetPayloadArgsCAS(args []byte) (collection string, id uint64, meta vector.Metadata, keyTTLMs map[string]int64, expectedVersion uint64, hasExpected bool, err error) {
+func DecodeSetPayloadArgsCAS(args []byte) (collection string, id uint64, meta vtypes.Metadata, keyTTLMs map[string]int64, expectedVersion uint64, hasExpected bool, err error) {
 	if len(args) < 1 {
 		return "", 0, nil, nil, 0, false, ErrVectorArgsTruncated
 	}
@@ -4996,7 +4996,7 @@ func DecodeSetPayloadArgsCAS(args []byte) (collection string, id uint64, meta ve
 		return "", 0, nil, nil, 0, false, ErrVectorArgsTruncated
 	}
 	if mlen > 0 {
-		m := make(vector.Metadata)
+		m := make(vtypes.Metadata)
 		if uerr := json.Unmarshal(args[off:off+mlen], &m); uerr != nil {
 			return "", 0, nil, nil, 0, false, fmt.Errorf("ops: decode payload: %w", uerr)
 		}

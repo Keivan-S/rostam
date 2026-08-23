@@ -623,14 +623,14 @@ func TestOPQConfigValidation(t *testing.T) {
 	// OPQ with no PQ mode → error.
 	c := base
 	c.OPQ = true
-	if err := c.Validate(); err != ErrInvalidOPQ {
+	if err := ValidateConfig(c); err != ErrInvalidOPQ {
 		t.Fatalf("OPQ without PQ: got %v, want ErrInvalidOPQ", err)
 	}
 	// OPQ + HNSW-PQ → ok.
 	c = base
 	c.OPQ = true
 	c.Quant = QuantPQ
-	if err := c.Validate(); err != nil {
+	if err := ValidateConfig(c); err != nil {
 		t.Fatalf("OPQ + QuantPQ should be valid: %v", err)
 	}
 	// OPQ + IVF-PQ → ok.
@@ -638,12 +638,12 @@ func TestOPQConfigValidation(t *testing.T) {
 	c.OPQ = true
 	c.IndexType = IndexIVF
 	c.IVFPQ = true
-	if err := c.Validate(); err != nil {
+	if err := ValidateConfig(c); err != nil {
 		t.Fatalf("OPQ + IVFPQ should be valid: %v", err)
 	}
 	// OPQ off → unaffected.
 	c = base
-	if err := c.Validate(); err != nil {
+	if err := ValidateConfig(c); err != nil {
 		t.Fatalf("OPQ-off default config should be valid: %v", err)
 	}
 }
