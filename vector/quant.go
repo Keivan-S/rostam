@@ -29,19 +29,8 @@ func defaultPQM(dim int) int {
 	return 1
 }
 
-// QuantStore selects where the full-precision float32 vectors live when
-// quantization is enabled. Codes always stay resident in RAM.
-type QuantStore uint8
-
-const (
-	// QuantInRAM keeps float32 vectors on the Go heap alongside the codes.
-	// Fastest rescore, but uses more memory than no quantization. Default.
-	QuantInRAM QuantStore = iota
-	// QuantMmap stores float32 vectors in a memory-mapped file so only the
-	// int8 codes are resident; the rescore stage pages vectors in on demand.
-	// This is the configuration that reduces resident memory.
-	QuantMmap
-)
+// QuantStore and its QuantInRAM/QuantMmap constants now live in the engine-free
+// vtypes leaf package and are re-exported via vtypes_aliases.go.
 
 // defaultRescoreFactor is the candidate over-collection multiple used when
 // Config.RescoreFactor is 0: the exact rescore stage re-ranks RescoreFactor*k

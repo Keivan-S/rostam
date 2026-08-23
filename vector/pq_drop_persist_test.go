@@ -132,7 +132,7 @@ func TestPQDropPersistRestart(t *testing.T) {
 		MmapPath:      filepath.Join(dir, "vecs.dat"),
 		GraphMmapPath: filepath.Join(dir, "graph.dat"),
 	}
-	if err := cfg.Validate(); err != nil {
+	if err := ValidateConfig(cfg); err != nil {
 		t.Fatalf("float-drop PQ-HNSW + mmap config rejected: %v", err)
 	}
 	h, err := newHNSW(cfg)

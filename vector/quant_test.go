@@ -109,7 +109,7 @@ func TestConfigValidateQuant(t *testing.T) {
 		{"unknown storage mode", withFn(func(c *Config) { c.Quant = QuantSQ8; c.QuantStorage = QuantStore(99); c.MmapPath = "/tmp/x" }), true},
 	}
 	for _, tc := range tests {
-		err := tc.cfg.Validate()
+		err := ValidateConfig(tc.cfg)
 		if (err != nil) != tc.wantErr {
 			t.Errorf("%s: Validate() err = %v, wantErr = %v", tc.name, err, tc.wantErr)
 		}

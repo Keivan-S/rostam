@@ -71,14 +71,14 @@ func TestFilterFirstRelativeBPValidation(t *testing.T) {
 	for _, bad := range []int{-1, 10001, 50000} {
 		c := base
 		c.FilterFirstRelativeBP = bad
-		if err := c.Validate(); err != ErrInvalidFilterFirstRelativeBP {
+		if err := ValidateConfig(c); err != ErrInvalidFilterFirstRelativeBP {
 			t.Errorf("Validate(bp=%d) err = %v, want ErrInvalidFilterFirstRelativeBP", bad, err)
 		}
 	}
 	for _, ok := range []int{0, 1, 5000, 10000} {
 		c := base
 		c.FilterFirstRelativeBP = ok
-		if err := c.Validate(); err != nil {
+		if err := ValidateConfig(c); err != nil {
 			t.Errorf("Validate(bp=%d) err = %v, want nil", ok, err)
 		}
 	}

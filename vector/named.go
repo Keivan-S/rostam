@@ -364,7 +364,7 @@ func validateNamedVectors(cfg map[string]NamedVectorParams) error {
 		if p.Sparse {
 			continue
 		}
-		if err := p.toConfig().Validate(); err != nil {
+		if err := ValidateConfig(namedToConfig(p)); err != nil {
 			return err
 		}
 	}
@@ -406,7 +406,7 @@ func NewNamedCollection(name string, cfg map[string]NamedVectorParams) (*NamedCo
 		// IndexHNSW (the zero value) builds the historical per-space graph index
 		// (byte/behaviour-identical). newIndex validates the per-space Config
 		// (newHNSW/newIVF both call cfg.Validate()), so a bad IVF param fails loud.
-		idx, err := newIndex(p.toConfig())
+		idx, err := newIndex(namedToConfig(p))
 		if err != nil {
 			// Roll back any sub-indexes already built.
 			for _, b := range nc.indexes {

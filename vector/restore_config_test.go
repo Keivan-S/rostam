@@ -39,7 +39,7 @@ func TestRestorePreservesNonStreamConfig(t *testing.T) {
 		FilterFirstThreshold:  12345,
 		FilterFirstRelativeBP: 4321,
 	}
-	if err := cfg.Validate(); err != nil {
+	if err := ValidateConfig(cfg); err != nil {
 		t.Fatalf("test config is invalid: %v", err)
 	}
 

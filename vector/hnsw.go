@@ -388,7 +388,7 @@ func (h *hnsw) SetNowFunc(fn func() int64) {
 
 // newHNSW constructs an HNSW index. Returns ErrInvalid* if cfg is malformed.
 func newHNSW(cfg Config) (*hnsw, error) {
-	if err := cfg.Validate(); err != nil {
+	if err := ValidateConfig(cfg); err != nil {
 		return nil, err
 	}
 	seed := cfg.Seed

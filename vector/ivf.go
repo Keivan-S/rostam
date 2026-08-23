@@ -202,7 +202,7 @@ const (
 // in the arena and search brute-forces until BuildConcurrent trains the coarse
 // quantizer.
 func newIVF(cfg Config) (*ivf, error) {
-	if err := cfg.Validate(); err != nil {
+	if err := ValidateConfig(cfg); err != nil {
 		return nil, err
 	}
 	a := newArena(cfg.Dim, 0)
@@ -4361,7 +4361,7 @@ func (ix *ivf) Restore(r io.Reader) error {
 	// insert would single-assign and the index would silently drift toward non-SOAR.
 	cfg.SOAR = ix.cfg.SOAR
 	cfg.SOARLambda = ix.cfg.SOARLambda
-	if err := cfg.Validate(); err != nil {
+	if err := ValidateConfig(cfg); err != nil {
 		return ErrSnapshotFormat
 	}
 	ix.cfg = cfg

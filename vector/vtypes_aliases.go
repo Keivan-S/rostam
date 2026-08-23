@@ -11,14 +11,17 @@ import "github.com/rostamlabs/rostam/vtypes"
 
 // Moved types.
 type (
-	ValueKind      = vtypes.ValueKind
-	Value          = vtypes.Value
-	Metadata       = vtypes.Metadata
-	SparseVector   = vtypes.SparseVector
-	Metric         = vtypes.Metric
-	IndexType      = vtypes.IndexType
-	QuantMode      = vtypes.QuantMode
-	FullTextConfig = vtypes.FullTextConfig
+	ValueKind         = vtypes.ValueKind
+	Value             = vtypes.Value
+	Metadata          = vtypes.Metadata
+	SparseVector      = vtypes.SparseVector
+	Metric            = vtypes.Metric
+	IndexType         = vtypes.IndexType
+	QuantMode         = vtypes.QuantMode
+	FullTextConfig    = vtypes.FullTextConfig
+	Config            = vtypes.Config
+	NamedVectorParams = vtypes.NamedVectorParams
+	QuantStore        = vtypes.QuantStore
 )
 
 // Moved constants (values preserved verbatim, so wire/snapshot encodings are
@@ -49,6 +52,9 @@ const (
 	QuantPQ   = vtypes.QuantPQ
 	QuantSQ   = vtypes.QuantSQ
 	QuantPRQ  = vtypes.QuantPRQ
+
+	QuantInRAM = vtypes.QuantInRAM
+	QuantMmap  = vtypes.QuantMmap
 )
 
 // Moved error sentinels (value aliases preserve errors.Is identity) and the
@@ -65,4 +71,42 @@ var (
 	NewInts    = vtypes.NewInts
 	NewFloats  = vtypes.NewFloats
 	NewGeo     = vtypes.NewGeo
+
+	// DefaultConfig is re-exported as a function value so every DefaultConfig()
+	// call site is unchanged.
+	DefaultConfig = vtypes.DefaultConfig
+
+	// Config validation error sentinels (returned by ValidateConfig) now live in
+	// vtypes; value aliases preserve errors.Is identity.
+	ErrInvalidDim                   = vtypes.ErrInvalidDim
+	ErrInvalidMetric                = vtypes.ErrInvalidMetric
+	ErrInvalidM                     = vtypes.ErrInvalidM
+	ErrInvalidEf                    = vtypes.ErrInvalidEf
+	ErrInvalidQuant                 = vtypes.ErrInvalidQuant
+	ErrInvalidRescoreFactor         = vtypes.ErrInvalidRescoreFactor
+	ErrInvalidQuantStorage          = vtypes.ErrInvalidQuantStorage
+	ErrInvalidGraphMmap             = vtypes.ErrInvalidGraphMmap
+	ErrInvalidPersistent            = vtypes.ErrInvalidPersistent
+	ErrInvalidQuantizedBuild        = vtypes.ErrInvalidQuantizedBuild
+	ErrInvalidWAL                   = vtypes.ErrInvalidWAL
+	ErrInvalidPartitions            = vtypes.ErrInvalidPartitions
+	ErrInvalidIndexType             = vtypes.ErrInvalidIndexType
+	ErrGPUNotCompiled               = vtypes.ErrGPUNotCompiled
+	ErrInvalidIVFParams             = vtypes.ErrInvalidIVFParams
+	ErrInvalidVamanaParams          = vtypes.ErrInvalidVamanaParams
+	ErrInvalidIVFTrainThreshold     = vtypes.ErrInvalidIVFTrainThreshold
+	ErrInvalidFilterFirstRelativeBP = vtypes.ErrInvalidFilterFirstRelativeBP
+	ErrInvalidIVFDriftFactor        = vtypes.ErrInvalidIVFDriftFactor
+	ErrInvalidIVFPQ                 = vtypes.ErrInvalidIVFPQ
+	ErrInvalidIVFPQM                = vtypes.ErrInvalidIVFPQM
+	ErrInvalidQuantPQM              = vtypes.ErrInvalidQuantPQM
+	ErrInvalidPQNBits               = vtypes.ErrInvalidPQNBits
+	ErrInvalidPRQLayers             = vtypes.ErrInvalidPRQLayers
+	ErrInvalidOPQ                   = vtypes.ErrInvalidOPQ
+	ErrInvalidOPQIters              = vtypes.ErrInvalidOPQIters
+	ErrInvalidPQDropVecs            = vtypes.ErrInvalidPQDropVecs
+	ErrInvalidAnisotropicEta        = vtypes.ErrInvalidAnisotropicEta
+	ErrInvalidSOAR                  = vtypes.ErrInvalidSOAR
+	ErrInvalidSOARLambda            = vtypes.ErrInvalidSOARLambda
+	ErrInvalidFullText              = vtypes.ErrInvalidFullText
 )
