@@ -206,6 +206,7 @@ func main() {
 
 	backupDir := flag.String("backup-dir", "", "filesystem directory to stream periodic collection snapshots into (empty = backup OFF). Future cloud targets (S3/GCS) implement the same objstore.ObjectStore interface")
 	backupInterval := flag.Duration("backup-interval", 0, "how often to run a backup (e.g. 30m); 0 = OFF. Drives the -backup-dir FS backup and the -backup-bucket S3 backup")
+	ttlSweepInterval := flag.Duration("ttl-sweep-interval", 30*time.Second, "how often each shard actively reaps expired TTL keys to reclaim memory (e.g. 30s, 5s); 0 DISABLES active reaping, leaving only lazy-on-read expiry (an expired key is still never returned) plus, on persistent shards, cold compaction at the next restart. This is a memory-reclaim-latency vs CPU-churn tradeoff, NOT a correctness knob: a slower sweep lets expired bytes linger longer, which on a write-heavy replicated shard raises the chance of hitting the cache cap between sweeps, so lower it if such a node is climbing toward ErrFull")
 	backupPrefix := flag.String("backup-prefix", "default", "tenant/bucket key prefix for FS backup objects: keys are <prefix>/<collection>/<timestamp>.snap")
 	backupRetention := flag.Int("backup-retention", 24, "keep only the newest N snapshots per collection (0 = keep all)")
 	restore := flag.Bool("restore", false, "one-shot DISASTER RECOVERY (-cluster): after bring-up, restore this node's owned shards (cache + vectors) AND the MetaRaft catalog from the backup at -backup-dir (or -backup-bucket), then continue serving. Requires the SAME topology (shard count + node IDs) as the backup — a differing topology fails loud (placement remap is deferred). By default it ALSO fails loud if any shard has no backup artifact (a missing blob would bring that shard up empty, silently losing its keys); see -allow-missing-shards. Run once, on every node of a fresh cluster")
@@ -282,6 +283,15 @@ func main() {
 		if cacheMaxMemory, err = fc.cacheMaxMemoryBytes(); err != nil {
 			fatal("invalid -config cache stanza", "err", err)
 		}
+	}
+
+	// Resolve the TTL sweeper cadence into the sentinel the public CacheConfig
+	// expects: negative disables active reaping, positive is the interval in ms.
+	// (0 there would mean "library default"; the server always sets an explicit
+	// value so its default is the flag's 30s, not the library's 1s.)
+	ttlSweepIntervalMs, err := resolveTTLSweepMs(*ttlSweepInterval)
+	if err != nil {
+		fatal(err.Error())
 	}
 
 	// Operator action: trigger an online rebalance and exit. -peers is the target
@@ -472,6 +482,7 @@ func main() {
 			Cache: rostam.CacheConfig{
 				MaxMemoryBytes:        cacheMaxMemory,
 				DisableColdCompaction: *disableColdCompaction,
+				TTLSweepIntervalMs:    ttlSweepIntervalMs,
 			},
 			NoSync:            *noSync,
 			VolatileLog:       *volatileLog,
@@ -557,6 +568,7 @@ func main() {
 				NumShardsPerNode:      *shards,
 				MaxMemoryBytes:        cacheMaxMemory,
 				DisableColdCompaction: *disableColdCompaction,
+				TTLSweepIntervalMs:    ttlSweepIntervalMs,
 			},
 			// Preserve the authenticator chosen above: it is promoted from the embedded
 			// DirectConfig, so replacing the struct wholesale would otherwise zero it and

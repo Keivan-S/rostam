@@ -74,6 +74,14 @@ func NewDirect(cfg DirectConfig) (Store, error) {
 	if cfg.Cache.MsyncIntervalMs > 0 {
 		cc.MsyncIntervalMs = cfg.Cache.MsyncIntervalMs
 	}
+	// TTL sweeper cadence: 0 keeps the default (cache.DefaultConfig's 1000ms),
+	// negative disables active reaping, positive sets the interval in ms.
+	switch {
+	case cfg.Cache.TTLSweepIntervalMs < 0:
+		cc.TTLSweepIntervalMs = 0
+	case cfg.Cache.TTLSweepIntervalMs > 0:
+		cc.TTLSweepIntervalMs = cfg.Cache.TTLSweepIntervalMs
+	}
 	// Derive the per-shard cap + page size from a TOTAL budget (after NumShards
 	// is final — the geometry divides by it). Without this the per-shard cap
 	// stayed at cache.DefaultConfig()'s 256 MiB and the real bound was

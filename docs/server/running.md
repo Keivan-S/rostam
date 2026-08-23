@@ -32,6 +32,7 @@ go build -o rostam-server ./cmd/rostam-server
 | `-tcp` | disabled | binary TCP protocol listen address (what `rostam.NewClient` speaks) |
 | `-data` | in-memory | persistence directory; empty = nothing survives restart |
 | `-shards` | auto | cache shards (single node) or Raft shards (cluster) |
+| `-ttl-sweep-interval` | `30s` | how often each shard reaps expired TTL keys to reclaim memory; `0` disables active reaping (lazy-on-read expiry still applies) |
 
 Any subset of transports can be enabled. `GET /v1/health` (auth-exempt) is the
 liveness probe and `GET /v1/ready` the readiness probe — use the latter for
@@ -94,11 +95,22 @@ configured, the server refuses to start on a non-loopback bind unless you pass
 → [Security](security.md#tls)
 
 **Storage** — `-data`, `-shards`, `-config` (carries the cache `max_memory`
-stanza), `-disable-cold-compaction`. The last one is an escape hatch, not a
-tuning knob: a persistent shard rewrites its pages file live-only at open, and
-that rewrite is the only thing that reclaims the bytes left behind by overwritten
-and expired keys — without it a shard under TTL churn eventually refuses writes.
-Turn it off only to work around a problem with the rewrite itself.
+stanza), `-ttl-sweep-interval`, `-disable-cold-compaction`. The
+`-disable-cold-compaction` flag is an escape hatch, not a tuning knob: a
+persistent shard rewrites its pages file live-only at open, and that rewrite is
+the only thing that reclaims the bytes left behind by overwritten and expired
+keys — without it a shard under TTL churn eventually refuses writes. Turn it off
+only to work around a problem with the rewrite itself.
+
+`-ttl-sweep-interval` (default `30s`) sets how often each shard actively reaps
+expired TTL keys to reclaim memory, independent of whether they are read again —
+an expired key is *always* returned as not-found regardless, so this is a
+memory-reclaim-latency vs CPU-churn tradeoff, not a correctness knob. `0`
+disables active reaping, leaving only lazy-on-read expiry (and, on persistent
+shards, cold compaction at the next restart). Lower it below the default if a
+write-heavy replicated node is climbing toward the cache cap between sweeps;
+raise it to cut background CPU on a cluster with many shards and slow-churning
+TTLs.
 
 **Clustering** — `-cluster`, `-node-id`, `-raft-addr`, `-bootstrap`, `-peers`,
 `-replication-factor`, `-persistent-vectors`, `-reconfigure`; durability

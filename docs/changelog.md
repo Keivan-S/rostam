@@ -5,6 +5,17 @@ Notable user-visible changes. Entries that alter existing behaviour are marked
 
 ## Unreleased
 
+- **Configurable TTL sweep interval, with a calmer default (`-ttl-sweep-interval`).**
+  The per-shard background reaper that reclaims memory from expired TTL keys is
+  now operator-tunable, and the server default relaxes from 1s to **30s** — 1s
+  meant every shard rescanned its index every second for no correctness benefit
+  (lazy-on-read expiry already returns an expired key as not-found immediately).
+  It is a memory-reclaim-latency vs CPU-churn tradeoff: `0` disables active
+  reaping entirely (lazy expiry, plus cold compaction on persistent shards, still
+  apply); lower it if a write-heavy replicated node climbs toward the cache cap
+  between sweeps. Embedded (`rostam.CacheConfig.TTLSweepIntervalMs`) is unchanged
+  by default — `0` still means the 1s library default; set it to opt in. See
+  `docs/server/running.md`.
 - **The Go client is now its own module — `go get github.com/rostamlabs/rostam/client`
   pulls no engine.** The client-facing leaf packages moved into a shared
   `github.com/rostamlabs/rostam/sdk` module (`sdk/vtypes`, `sdk/wire` — was
