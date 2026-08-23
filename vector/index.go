@@ -399,14 +399,8 @@ func (c CASCond) check(current uint64) error {
 	return nil
 }
 
-// Result is one search result: the id of the vector and its distance from
-// the query under the index's metric. Score is the fusion score for hybrid
-// search (higher = more relevant); it is 0 for plain dense KNN results.
-type Result struct {
-	ID       uint64  `json:"id"`
-	Distance float32 `json:"distance"`
-	Score    float32 `json:"score"`
-}
+// Result (one search result) now lives in the engine-free vtypes leaf package and
+// is re-exported from vtypes_aliases.go.
 
 // Stats is a snapshot of an index's runtime statistics.
 type Stats struct {
@@ -427,16 +421,8 @@ type Stats struct {
 	InsertLatency   LatencyHistogram // per-insert wall time, log-scale buckets
 }
 
-// HybridOpts configures a hybrid (dense + sparse) search. The zero value is
-// valid: RRF fusion, rrfK=60, dense/sparse candidate pools sized from k.
-type HybridOpts struct {
-	Filter  Filter       // metadata predicate; zero = no filter
-	Method  FusionMethod // FusionRRF (default) or FusionWeighted
-	Alpha   float64      // weighted only: dense weight in [0,1] (0 → treated as 0.5 default by HybridSearch)
-	RRFK    int          // RRF constant; 0 = default 60
-	DenseK  int          // dense-lane candidate pool; 0 = max(k, 50)
-	SparseK int          // sparse-lane candidate pool; 0 = max(k, 50)
-}
+// HybridOpts (the hybrid dense+sparse search config) now lives in the engine-free
+// vtypes leaf package and is re-exported from vtypes_aliases.go.
 
 // VectorIndex is the abstraction over any nearest-neighbor index. It is the full
 // contract Collection requires of its backing index: every Collection method
@@ -725,7 +711,6 @@ var (
 	ErrBuildNonEmpty                 = errors.New("vector: BuildConcurrent requires an empty index")
 	ErrBuildLenMismatch              = errors.New("vector: BuildConcurrent ids and vecs length mismatch")
 	ErrBuildMetaLenMismatch          = errors.New("vector: BuildConcurrentMeta payloads must be empty or one per id")
-	ErrDimMismatch                   = errors.New("vector: vector length does not match index Dim")
 	ErrDuplicateID                   = errors.New("vector: id already present (delete first)")
 	ErrIDNotFound                    = errors.New("vector: id not found")
 

@@ -7,24 +7,9 @@ import (
 	"slices"
 )
 
-// FusionMethod selects how the dense and sparse lanes are combined in a
-// hybrid search.
-type FusionMethod uint8
-
-const (
-	// FusionRRF is Reciprocal Rank Fusion: score = Σ 1/(rrfK + rank). Rank-based
-	// and scale-free, so it needs no score normalization across lanes. Default.
-	FusionRRF FusionMethod = iota
-	// FusionWeighted is a linear blend of min-max-normalized lane scores:
-	// score = alpha*denseNorm + (1-alpha)*sparseNorm.
-	FusionWeighted
-	// FusionDBSF is Distribution-Based Score Fusion (Qdrant parity). Each lane's
-	// relevance values are normalized by their DISTRIBUTION using 3-sigma bounds
-	// (min=mu-3*sigma, max=mu+3*sigma, clamped to [0,1]) instead of min-max, then
-	// blended with the same alpha-weighted shape as FusionWeighted. More robust to
-	// outliers than min-max. Degrades identically to Weighted on a flat/single lane.
-	FusionDBSF
-)
+// FusionMethod and its FusionRRF / FusionWeighted / FusionDBSF constants now live
+// in the engine-free vtypes leaf package and are re-exported from
+// vtypes_aliases.go.
 
 // defaultRRFK is the standard RRF constant (Cormack et al. 2009).
 const defaultRRFK = 60

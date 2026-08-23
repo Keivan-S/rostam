@@ -3,7 +3,6 @@
 package vector
 
 import (
-	"encoding/json"
 	"sort"
 	"time"
 )
@@ -23,65 +22,10 @@ import (
 // The leading byte keeps it out of normal user field names.
 const contentField = "$content"
 
-// Document is a search result enriched with its stored content and (filterable)
-// metadata — what a RAG caller actually wants back from a query.
-type Document struct {
-	ID       uint64   `json:"id"`
-	Distance float32  `json:"distance"`
-	Score    float32  `json:"score"` // fusion score for hybrid results; 0 for plain KNN
-	Content  string   `json:"content"`
-	Metadata Metadata `json:"metadata,omitempty"` // user metadata, with the reserved content field removed
-}
-
-// RawDocument is Document with its metadata left as the JSON bytes the result
-// wire already carries, instead of a decoded map. It exists for ONE reason: a
-// response whose only destination is JSON does not need the metadata decoded and
-// re-encoded, and that round-trip is the dominant cost of a search_docs response.
-//
-// IT IS NOT A SECOND RESULT SHAPE. Its JSON rendering is byte-identical to
-// Document's for every value the wire can carry, and that identity is what makes
-// substituting it safe:
-//
-//   - The fields, their order, their JSON names and their omitempty flags mirror
-//     Document exactly (TestRawDocumentMirrorsDocument reflects over both and
-//     fails if either side gains, loses, renames or re-tags a field).
-//   - Metadata's bytes were produced by json.Marshal of the very Metadata map
-//     Document would hold, so emitting them verbatim emits what marshalling that
-//     map would have produced. encoding/json re-escapes a json.RawMessage on the
-//     way out (HTML escaping is on by default), but the bytes are already escaped
-//     and escaping is idempotent, so the copy is exact. There is exactly ONE
-//     escape that does not survive that argument — the one encoding/json writes
-//     for invalid UTF-8 — and the decoder that fills this field normalizes it
-//     before handing the bytes over (ops.checkRawMetadataJSON explains why).
-//
-// LIFETIME: Metadata ALIASES the buffer it was decoded from — it is a window into
-// the op result bytes, not a copy. A RawDocument must not outlive that buffer.
-// Decoders that hand these out (ops.DecodeVectorDocsRaw and friends) say so; a
-// caller that needs to retain metadata past the response should decode the typed
-// Document instead.
-type RawDocument struct {
-	ID       uint64          `json:"id"`
-	Distance float32         `json:"distance"`
-	Score    float32         `json:"score"` // fusion score for hybrid results; 0 for plain KNN
-	Content  string          `json:"content"`
-	Metadata json.RawMessage `json:"metadata,omitempty"` // verbatim wire bytes; aliases the source buffer
-}
-
-// RawGroup is Group with raw-metadata hits — the RawDocument counterpart of
-// Group, for the same reason and with the same JSON-identity guarantee. Key is
-// kept as raw JSON too: the group wire carries it as the json.Marshal of a
-// vector.Value, so re-emitting those bytes is what marshalling the Value would
-// produce.
-type RawGroup struct {
-	Key  json.RawMessage `json:"key"`
-	Hits []RawDocument   `json:"hits"`
-}
-
-// WithContent returns a copy of meta carrying document content in the reserved
-// content field — for callers (e.g. the networked client) that must embed
-// content into metadata before encoding an upsert. The reserved field is
-// excluded from filtering and stripped from SearchDocs' returned Metadata.
-func WithContent(meta Metadata, content string) Metadata { return withContent(meta, content) }
+// Document (a search result enriched with content + metadata), RawDocument,
+// RawGroup, and the WithContent helper now live in the engine-free vtypes leaf
+// package and are re-exported from vtypes_aliases.go. The engine keeps its own
+// private withContent/contentField below (used on the insert path).
 
 // withContent returns a copy of meta with the content field set (or meta
 // unchanged when content is empty). The caller's map is never mutated.
@@ -660,29 +604,8 @@ func (h *hnsw) walkScrollLocked(ids []uint64, pred Predicate, metaOf metaProvide
 	return docs, nextAfter, false
 }
 
-// ScanRecord is a complete, live record exported by scanVectors: everything an
-// offline resplit needs to re-insert it into a re-hashed generation. The fields
-// mirror Collection.Insert's parameters (TTL as a remaining duration, metadata
-// as the stored map including the reserved content field, sparse as an owned
-// copy) so resplit can round-trip a record straight back through vector_insert.
-type ScanRecord struct {
-	ID       uint64
-	Vec      []float32
-	TTL      time.Duration // remaining time-to-live (0 = no expiry)
-	Metadata Metadata      // user metadata incl. the reserved content field; nil if none
-	Sparse   *SparseVector // owned copy; nil if none
-	// Version is the point's per-point CAS version (>= 1 for a live point). It is
-	// carried through the scan codec and re-applied VERBATIM by the reshard backfill
-	// (a version-preserving reinsert) so resharded points keep their version rather
-	// than resetting to 1.
-	Version uint64
-	// KeyExpires is the point's per-key payload TTL map (payload key -> ABSOLUTE
-	// unix-millis deadline), an OWNED clone of arena.KeyExpires. nil/empty when the
-	// point has no per-key TTL (the common case). It is carried through the scan
-	// codec and re-applied VERBATIM by the reshard backfill (NOT recomputed now+ttl)
-	// so resharded points keep their original absolute deadlines time-stable.
-	KeyExpires map[string]uint64
-}
+// ScanRecord (a complete, live record exported by scanVectors) now lives in the
+// engine-free vtypes leaf package and is re-exported from vtypes_aliases.go.
 
 // scanVectors enumerates every LIVE record in the arena as a self-contained
 // ScanRecord. Liveness mirrors scrollDocs/admits exactly: a slot in idMap is

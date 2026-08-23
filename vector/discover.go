@@ -7,23 +7,9 @@ import (
 	"time"
 )
 
-// ContextPair is one discovery constraint: candidates closer to Positive than
-// to Negative are favored. Both refer to ids present in the index.
-type ContextPair struct {
-	Positive uint64
-	Negative uint64
-}
-
-// DiscoverPair is one RESOLVED discovery constraint: the positive/negative
-// example VECTORS (not ids). The Query API leaf carries these resolved vectors
-// (the coordinator resolves the context-pair ids → vectors and embeds them), so
-// the discover execLeaf scores candidates against the example vectors directly
-// without re-resolving ids per partition. It is the resolved analogue of
-// ContextPair (which carries ids the engine resolves internally).
-type DiscoverPair struct {
-	Pos []float32
-	Neg []float32
-}
+// ContextPair (an id-based discovery constraint) and DiscoverPair (its resolved
+// vector analogue) now live in the engine-free vtypes leaf package and are
+// re-exported from vtypes_aliases.go.
 
 // DiscoverOpts configures a discovery query. At least one context pair is
 // required. Target is an optional anchor that seeds the candidate pool; when

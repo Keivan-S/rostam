@@ -308,7 +308,7 @@ func TestOPQItersMVHonored(t *testing.T) {
 		Dim: dim, M: 16, EfConstruction: 200, EfSearch: 64, Seed: seed,
 		Quant: QuantPQ, IVFTrainThreshold: 256, OPQ: true, OPQIters: 4,
 	}
-	if got := cfg.innerConfig().OPQIters; got != 4 {
+	if got := mvInnerConfig(cfg).OPQIters; got != 4 {
 		t.Fatalf("MV innerConfig did not inherit OPQIters: got %d want 4", got)
 	}
 	mv, err := NewMultiVectorIndex(cfg)

@@ -25,6 +25,33 @@ type (
 	FilterOp          = vtypes.FilterOp
 	Filter            = vtypes.Filter
 	GeoCondition      = vtypes.GeoCondition
+
+	// Query / result / ordering / record / group / multivector clusters.
+	LeafKind          = vtypes.LeafKind
+	QueryMode         = vtypes.QueryMode
+	QueryLeaf         = vtypes.QueryLeaf
+	QuerySource       = vtypes.QuerySource
+	QuerySpec         = vtypes.QuerySpec
+	QueryResult       = vtypes.QueryResult
+	RecommendStrategy = vtypes.RecommendStrategy
+	ContextPair       = vtypes.ContextPair
+	DiscoverPair      = vtypes.DiscoverPair
+	FusionMethod      = vtypes.FusionMethod
+	Result            = vtypes.Result
+	HybridOpts        = vtypes.HybridOpts
+	GroupOpts         = vtypes.GroupOpts
+	Group             = vtypes.Group
+	Document          = vtypes.Document
+	RawDocument       = vtypes.RawDocument
+	RawGroup          = vtypes.RawGroup
+	OrderKind         = vtypes.OrderKind
+	OrderBy           = vtypes.OrderBy
+	OrderVal          = vtypes.OrderVal
+	MultiVectorConfig = vtypes.MultiVectorConfig
+	MultiResult       = vtypes.MultiResult
+	MultiScanRecord   = vtypes.MultiScanRecord
+	ScanRecord        = vtypes.ScanRecord
+	BM25GlobalStats   = vtypes.BM25GlobalStats
 )
 
 // Moved constants (values preserved verbatim, so wire/snapshot encodings are
@@ -81,6 +108,34 @@ const (
 	FilterGeoRadius  = vtypes.FilterGeoRadius
 	FilterGeoBox     = vtypes.FilterGeoBox
 	FilterGeoPolygon = vtypes.FilterGeoPolygon
+
+	// Query leaf kinds.
+	LeafDense     = vtypes.LeafDense
+	LeafSparse    = vtypes.LeafSparse
+	LeafMVMaxSim  = vtypes.LeafMVMaxSim
+	LeafRecommend = vtypes.LeafRecommend
+	LeafDiscover  = vtypes.LeafDiscover
+
+	// Query combine modes.
+	ModeFusion = vtypes.ModeFusion
+	ModeRerank = vtypes.ModeRerank
+
+	// Recommend strategies.
+	RecommendAverageVector = vtypes.RecommendAverageVector
+	RecommendBestScore     = vtypes.RecommendBestScore
+
+	// Fusion methods.
+	FusionRRF      = vtypes.FusionRRF
+	FusionWeighted = vtypes.FusionWeighted
+	FusionDBSF     = vtypes.FusionDBSF
+
+	// Order-by value kinds.
+	OrderNumeric  = vtypes.OrderNumeric
+	OrderDatetime = vtypes.OrderDatetime
+	OrderString   = vtypes.OrderString
+
+	// Query spec breadth bound (shared with the ops decode).
+	MaxPrefetchSources = vtypes.MaxPrefetchSources
 )
 
 // Moved error sentinels (value aliases preserve errors.Is identity) and the
@@ -88,6 +143,16 @@ const (
 var (
 	ErrSparseMismatch = vtypes.ErrSparseMismatch
 	ErrSparseUnsorted = vtypes.ErrSparseUnsorted
+
+	// Moved constructors / helpers (re-exported as function values so every
+	// existing call site is unchanged).
+	LeafSource  = vtypes.LeafSource
+	WithContent = vtypes.WithContent
+
+	// Moved error sentinels (value aliases preserve errors.Is identity).
+	ErrDimMismatch            = vtypes.ErrDimMismatch
+	ErrQuerySpecTooDeep       = vtypes.ErrQuerySpecTooDeep
+	ErrTooManyPrefetchSources = vtypes.ErrTooManyPrefetchSources
 
 	NewString  = vtypes.NewString
 	NewInt     = vtypes.NewInt
