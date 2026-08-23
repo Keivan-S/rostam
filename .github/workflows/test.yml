@@ -530,7 +530,9 @@ jobs:
         env:
           GOWORK: "off"
         run: |
-          if go list -deps ./... | grep 'rostamlabs/rostam/' | grep -v '/sdk'; then
+          set -euo pipefail
+          deps=$(go list -deps ./...)   # fails the job if go list errors
+          if printf '%s\n' "$deps" | grep 'rostamlabs/rostam/' | grep -v '/sdk'; then
             echo "FAIL: sdk leaked a non-sdk repo import"; exit 1
           fi
           echo "PASS: sdk is self-contained"
@@ -555,7 +557,13 @@ jobs:
         env:
           GOWORK: "off"
         run: |
-          if go list -m all | grep -qx 'github.com/rostamlabs/rostam'; then
+          set -euo pipefail
+          # -f '{{.Path}}' prints module PATHS only; `go list -m all` appends the
+          # version (and =>replacement), so a plain path match would MISS an
+          # engine re-entry like "github.com/rostamlabs/rostam v0.2.0". The
+          # command substitution also fails the job if `go list` itself errors.
+          paths=$(go list -m -f '{{.Path}}' all)
+          if printf '%s\n' "$paths" | grep -qx 'github.com/rostamlabs/rostam'; then
             echo "FAIL: client transitively requires the engine module"; exit 1
           fi
           echo "PASS: client is engine-free"
