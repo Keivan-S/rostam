@@ -5,7 +5,9 @@
 # carries a C toolchain and the runtime image is debian-slim (not scratch).
 FROM golang:1.26-bookworm AS build
 WORKDIR /src
-COPY go.mod go.sum ./
+COPY go.mod go.sum go.work go.work.sum ./
+COPY sdk/go.mod sdk/go.sum ./sdk/
+COPY client/go.mod client/go.sum ./client/
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o /out/rostam-server ./cmd/rostam-server
