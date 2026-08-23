@@ -5,6 +5,20 @@ Notable user-visible changes. Entries that alter existing behaviour are marked
 
 ## Unreleased
 
+- **New `vtypes` package: the engine-free vector data types.** The pure data
+  types of the vector API (`Config`, `Filter`, `Value`, `Metadata`, `QuerySpec`,
+  `Result`, `GroupOpts`, `OrderBy`, …) now live in
+  `github.com/rostamlabs/rostam/vtypes`; the `vector` package re-exports every
+  one via an alias, so `vector.Config` etc. keep working unchanged. This lets
+  the wire codec and network client depend on the types without pulling in the
+  engine — `client` and `ops/wire` now transitively import zero engine packages
+  (a prerequisite for a lightweight `go get .../client`). **Breaking (minor,
+  direct `vector`-package API only):** three engine-coupled methods became free
+  functions — `cfg.Validate()` → `vector.ValidateConfig(cfg)`,
+  `filter.Compile()` → `vector.CompileFilter(filter)`; if you call these on a
+  `vector.Config`/`vector.Filter` directly, switch to the function form. No wire
+  or behaviour change.
+
 - **Python client: collection handle.** `r.collection(name)` returns a handle
   bound to one collection so its name stops being repeated on every call —
   `r.collection("posts").search(vec, k=10)` instead of
