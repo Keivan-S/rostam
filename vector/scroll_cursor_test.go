@@ -255,7 +255,7 @@ func TestScrollPageFilterAndCursor(t *testing.T) {
 		insertScroll(t, h, i, Metadata{"kind": NewString(kind)})
 	}
 	evenFilter := Filter{Op: FilterEq, Field: "kind", Value: NewString("even")}
-	pred, err := evenFilter.Compile()
+	pred, err := CompileFilter(evenFilter)
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}

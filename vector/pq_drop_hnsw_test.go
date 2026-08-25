@@ -298,21 +298,21 @@ func TestPQDropVecsValidate(t *testing.T) {
 	// Allowed: PQDropVecs with QuantPQ on HNSW.
 	ok := Config{Dim: 64, Metric: L2, M: 16, EfConstruction: 200, EfSearch: 64,
 		Quant: QuantPQ, QuantPQM: 16, PQDropVecs: true}
-	if err := ok.Validate(); err != nil {
+	if err := ValidateConfig(ok); err != nil {
 		t.Fatalf("valid PQDropVecs config rejected: %v", err)
 	}
 	// Rejected: PQDropVecs without a PQ quantizer.
 	noPQ := ok
 	noPQ.Quant = QuantNone
 	noPQ.QuantPQM = 0
-	if err := noPQ.Validate(); err != ErrInvalidPQDropVecs {
+	if err := ValidateConfig(noPQ); err != ErrInvalidPQDropVecs {
 		t.Fatalf("PQDropVecs without QuantPQ should give ErrInvalidPQDropVecs, got %v", err)
 	}
 	// Rejected: PQDropVecs with SQ8 (not PQ).
 	sq := ok
 	sq.Quant = QuantSQ8
 	sq.QuantPQM = 0
-	if err := sq.Validate(); err != ErrInvalidPQDropVecs {
+	if err := ValidateConfig(sq); err != ErrInvalidPQDropVecs {
 		t.Fatalf("PQDropVecs with QuantSQ8 should give ErrInvalidPQDropVecs, got %v", err)
 	}
 }

@@ -162,25 +162,25 @@ func TestPQHNSWInsertAfterBuild(t *testing.T) {
 func TestPQHNSWConfigValidate(t *testing.T) {
 	// Allowed: QuantPQ on HNSW with a divisor M.
 	ok := Config{Dim: 64, Metric: Cosine, M: 16, EfConstruction: 200, EfSearch: 64, Quant: QuantPQ, QuantPQM: 16}
-	if err := ok.Validate(); err != nil {
+	if err := ValidateConfig(ok); err != nil {
 		t.Fatalf("valid QuantPQ HNSW config rejected: %v", err)
 	}
 	// Allowed: QuantPQM == 0 resolves to defaultPQM(dim).
 	zeroM := ok
 	zeroM.QuantPQM = 0
-	if err := zeroM.Validate(); err != nil {
+	if err := ValidateConfig(zeroM); err != nil {
 		t.Fatalf("QuantPQM=0 (defaultPQM) rejected: %v", err)
 	}
 	// Rejected: dim not divisible by M.
 	badM := ok
 	badM.Dim = 65 // 65 % 16 != 0
-	if err := badM.Validate(); err != ErrInvalidQuantPQM {
+	if err := ValidateConfig(badM); err != ErrInvalidQuantPQM {
 		t.Fatalf("dim%%M!=0 should give ErrInvalidQuantPQM, got %v", err)
 	}
 	// Rejected: QuantPQ on IVF (IVF drives PQ via IVFPQ, never Quant==QuantPQ).
 	onIVF := ok
 	onIVF.IndexType = IndexIVF
-	if err := onIVF.Validate(); err != ErrInvalidQuant {
+	if err := ValidateConfig(onIVF); err != ErrInvalidQuant {
 		t.Fatalf("QuantPQ on IVF should give ErrInvalidQuant, got %v", err)
 	}
 }

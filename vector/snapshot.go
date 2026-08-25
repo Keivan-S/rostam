@@ -1218,7 +1218,7 @@ func (h *hnsw) readSnapshot(r io.Reader) error {
 	cfg.EfConstruction = int(efC)
 	cfg.EfSearch = int(efS)
 	cfg.Seed = seed
-	if err := cfg.Validate(); err != nil {
+	if err := ValidateConfig(cfg); err != nil {
 		return fmt.Errorf("%w: %v", ErrSnapshotFormat, err)
 	}
 	h.cfg = cfg

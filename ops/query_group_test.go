@@ -7,7 +7,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	"github.com/rostamlabs/rostam/grpcapi/pb"
+	"github.com/rostamlabs/rostam/sdk/pb"
 	"github.com/rostamlabs/rostam/vector"
 )
 
@@ -34,9 +34,9 @@ func TestQuerySpecGroupRoundTrip(t *testing.T) {
 	if p.GetGroupBy() != "doc_id" || p.GetGroupSize() != 4 {
 		t.Fatalf("proto group fields lost: group_by=%q group_size=%d", p.GetGroupBy(), p.GetGroupSize())
 	}
-	got, err := querySpecFromProto(&p, 0)
+	got, err := QuerySpecFromProto(&p, 0)
 	if err != nil {
-		t.Fatalf("querySpecFromProto: %v", err)
+		t.Fatalf("QuerySpecFromProto: %v", err)
 	}
 	if got.GroupBy != "doc_id" || got.GroupSize != 4 {
 		t.Fatalf("engine group fields lost: GroupBy=%q GroupSize=%d", got.GroupBy, got.GroupSize)
@@ -81,7 +81,7 @@ func TestQueryResultGroupedRoundTrip(t *testing.T) {
 	}
 	// A flat result (Groups nil) must NOT take the grouped tag.
 	flat := vector.QueryResult{Mode: vector.ModeRerank, Fused: []vector.Result{{ID: 7, Distance: 1.5}}}
-	if EncodeQueryResult(flat)[0] != queryResultModeRerank {
+	if EncodeQueryResult(flat)[0] != QueryResultModeRerank {
 		t.Fatal("flat result took a non-rerank mode tag")
 	}
 }

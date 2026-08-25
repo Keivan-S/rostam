@@ -364,7 +364,7 @@ func validateNamedVectors(cfg map[string]NamedVectorParams) error {
 		if p.Sparse {
 			continue
 		}
-		if err := p.toConfig().Validate(); err != nil {
+		if err := ValidateConfig(namedToConfig(p)); err != nil {
 			return err
 		}
 	}
@@ -405,8 +405,8 @@ func NewNamedCollection(name string, cfg map[string]NamedVectorParams) (*NamedCo
 		// Construct via newIndex so a space can select IndexIVF (IVF / IVF-PQ);
 		// IndexHNSW (the zero value) builds the historical per-space graph index
 		// (byte/behaviour-identical). newIndex validates the per-space Config
-		// (newHNSW/newIVF both call cfg.Validate()), so a bad IVF param fails loud.
-		idx, err := newIndex(p.toConfig())
+		// (newHNSW/newIVF both call ValidateConfig(cfg)), so a bad IVF param fails loud.
+		idx, err := newIndex(namedToConfig(p))
 		if err != nil {
 			// Roll back any sub-indexes already built.
 			for _, b := range nc.indexes {
@@ -787,7 +787,7 @@ func (nc *NamedCollection) SearchNamed(name string, query []float32, k int, filt
 	if !ok {
 		return nil, ErrUnknownVectorName
 	}
-	pred, err := filter.Compile()
+	pred, err := CompileFilter(filter)
 	if err != nil {
 		return nil, err
 	}
@@ -808,7 +808,7 @@ func (nc *NamedCollection) SearchNamedDocs(name string, query []float32, k int, 
 	if !ok {
 		return nil, ErrUnknownVectorName
 	}
-	pred, err := filter.Compile()
+	pred, err := CompileFilter(filter)
 	if err != nil {
 		return nil, err
 	}
@@ -914,7 +914,7 @@ func (nc *NamedCollection) SearchNamedSparseDocs(space string, query *SparseVect
 // reusing nc.metaOf() so both lanes see ONE clock snapshot per search. A nil
 // (zero) filter yields a liveness-only admit. Caller holds nc.mu (read).
 func (nc *NamedCollection) sparseAdmitLocked(filter Filter) (func(id uint64) bool, error) {
-	pred, err := filter.Compile()
+	pred, err := CompileFilter(filter)
 	if err != nil {
 		return nil, err
 	}
@@ -984,7 +984,7 @@ func (nc *NamedCollection) namedHybridLanesLocked(denseSpace string, denseQ []fl
 	// predicate-eval graph search), pooled to denseK. Skipped (nil) for an empty query.
 	if len(denseQ) > 0 {
 		denseK := namedHybridK(opts.DenseK, k)
-		pred, cerr := opts.Filter.Compile()
+		pred, cerr := CompileFilter(opts.Filter)
 		if cerr != nil {
 			return nil, nil, cerr
 		}
@@ -1526,7 +1526,7 @@ func (nc *NamedCollection) clearPayloadLockedAt(id uint64, cas CASCond, now int6
 // payload; ttl-expired points are excluded. Distance/Score are 0 (no query).
 // limit <= 0 means no cap. Iteration order is unspecified.
 func (nc *NamedCollection) ScrollDocs(filter Filter, limit int) ([]Document, error) {
-	pred, err := filter.Compile()
+	pred, err := CompileFilter(filter)
 	if err != nil {
 		return nil, err // fail loud on a malformed filter (matches the op handler's contract)
 	}
@@ -1540,7 +1540,7 @@ func (nc *NamedCollection) ScrollDocs(filter Filter, limit int) ([]Document, err
 // (largest id returned), and hasMore (page filled limit AND a further id remains).
 // The named-family analogue of Collection.ScrollDocsPage. See NamedCollection.scrollPage.
 func (nc *NamedCollection) ScrollDocsPage(filter Filter, afterID uint64, hasAfter bool, limit int) (docs []Document, nextAfter uint64, hasMore bool, err error) {
-	pred, err := filter.Compile()
+	pred, err := CompileFilter(filter)
 	if err != nil {
 		return nil, 0, false, err // fail loud on a malformed filter
 	}
@@ -1558,7 +1558,7 @@ func (nc *NamedCollection) ScrollDocsPage(filter Filter, afterID uint64, hasAfte
 // v2 next-cursor. order == nil falls back to the id-ascending ScrollDocsPage path.
 // The named-family analogue of Collection.ScrollDocsPageOrder.
 func (nc *NamedCollection) ScrollDocsPageOrder(filter Filter, order *OrderBy, afterID uint64, afterKey float64, hasAfter bool, limit int) (docs []Document, nextAfter uint64, hasMore bool, err error) {
-	pred, err := filter.Compile()
+	pred, err := CompileFilter(filter)
 	if err != nil {
 		return nil, 0, false, err // fail loud on a malformed filter
 	}

@@ -7,7 +7,8 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/rostamlabs/rostam/grpcapi/pb"
+	"github.com/rostamlabs/rostam/grpcapi/grpcsvc"
+	"github.com/rostamlabs/rostam/sdk/pb"
 )
 
 const (
@@ -35,7 +36,7 @@ func sparseVec(seed int64) (idx []uint32, val []float32) {
 // seedHybridCollection creates a dense collection and upserts hybridN points, each
 // carrying BOTH a dense vector and a sparse vector, so hybrid (dense+sparse RRF)
 // and fusion queries exercise both lanes end-to-end.
-func seedHybridCollection(b *testing.B, cl pb.VectorServiceClient, name string) [][]float32 {
+func seedHybridCollection(b *testing.B, cl grpcsvc.VectorServiceClient, name string) [][]float32 {
 	b.Helper()
 	ctx := context.Background()
 	if _, err := cl.CreateCollection(ctx, &pb.CreateCollectionRequest{

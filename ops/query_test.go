@@ -9,7 +9,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/rostamlabs/rostam/cache"
-	"github.com/rostamlabs/rostam/grpcapi/pb"
+	"github.com/rostamlabs/rostam/sdk/pb"
 	"github.com/rostamlabs/rostam/vector"
 )
 
@@ -296,7 +296,7 @@ func TestEncodeQueryResultFlatByteIdentical(t *testing.T) {
 
 	// FUSION: [mode=0][nLanes:u32]{EncodeHybridResults(lane)}…
 	gotFusion := EncodeQueryResult(vector.QueryResult{Mode: vector.ModeFusion, Lanes: [][]vector.Result{laneA, laneB}})
-	wantFusion := []byte{queryResultModeFusion, 0, 0, 0, 2}
+	wantFusion := []byte{QueryResultModeFusion, 0, 0, 0, 2}
 	wantFusion = append(wantFusion, EncodeHybridResults(laneA)...)
 	wantFusion = append(wantFusion, EncodeHybridResults(laneB)...)
 	if !bytes.Equal(gotFusion, wantFusion) {
@@ -305,7 +305,7 @@ func TestEncodeQueryResultFlatByteIdentical(t *testing.T) {
 
 	// RERANK: [mode=1]EncodeHybridResults(fused)
 	gotRerank := EncodeQueryResult(vector.QueryResult{Mode: vector.ModeRerank, Fused: laneA})
-	wantRerank := append([]byte{queryResultModeRerank}, EncodeHybridResults(laneA)...)
+	wantRerank := append([]byte{QueryResultModeRerank}, EncodeHybridResults(laneA)...)
 	if !bytes.Equal(gotRerank, wantRerank) {
 		t.Fatalf("RERANK flat encoding changed:\n got=%v\nwant=%v", gotRerank, wantRerank)
 	}
@@ -341,8 +341,8 @@ func TestQueryTreeLanesRoundTrip(t *testing.T) {
 		{},
 	}
 	enc := EncodeQueryTreeLanes(lanes)
-	if enc[0] != queryResultModeTreeLanes {
-		t.Fatalf("tree-lanes tag = %d, want %d", enc[0], queryResultModeTreeLanes)
+	if enc[0] != QueryResultModeTreeLanes {
+		t.Fatalf("tree-lanes tag = %d, want %d", enc[0], QueryResultModeTreeLanes)
 	}
 	got, err := DecodeQueryTreeLanes(enc)
 	if err != nil {
@@ -370,7 +370,7 @@ func TestQueryTreeLanesRoundTrip(t *testing.T) {
 		t.Fatalf("DecodeQueryResult lanes = %d, want %d", len(qr.Lanes), len(lanes))
 	}
 	// Fail-loud on a wrong tag.
-	if _, err := DecodeQueryTreeLanes([]byte{queryResultModeFusion, 0, 0, 0, 0}); err == nil {
+	if _, err := DecodeQueryTreeLanes([]byte{QueryResultModeFusion, 0, 0, 0, 0}); err == nil {
 		t.Fatal("DecodeQueryTreeLanes accepted a non-tree-lanes tag")
 	}
 }

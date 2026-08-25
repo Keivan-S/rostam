@@ -47,7 +47,7 @@ func (h *hnsw) SearchMMR(query []float32, k int, opts MMROpts) ([]Result, error)
 			fetchK = 50
 		}
 	}
-	pred, err := opts.Filter.Compile()
+	pred, err := CompileFilter(opts.Filter)
 	if err != nil {
 		return nil, err
 	}

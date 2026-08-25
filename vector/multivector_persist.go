@@ -112,7 +112,7 @@ func openPersistentMultiVector(cfg MultiVectorConfig) (*MultiVectorIndex, error)
 	if cfg.IndexType == IndexIVF {
 		return nil, ErrInvalidIVFPersistent
 	}
-	idx, err := openPersist(cfg.innerConfig(), cfg.metaPath())
+	idx, err := openPersist(mvInnerConfig(cfg), mvMetaPath(cfg))
 	if err != nil {
 		return nil, err
 	}

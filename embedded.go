@@ -719,6 +719,17 @@ func NewEmbedded(cfg EmbeddedConfig) (Store, error) {
 	if cfg.Cache.MsyncIntervalMs != 0 {
 		cc.MsyncIntervalMs = cfg.Cache.MsyncIntervalMs
 	}
+	// TTL sweeper cadence: 0 keeps the default (cache.DefaultConfig's 1000ms),
+	// negative disables active reaping, positive sets the interval in ms. In a
+	// replicated shard the sweeper reaps against the logical clock (B3b) and also
+	// retires expired heap pages, so this cadence bounds how promptly a hot shard
+	// reclaims capacity.
+	switch {
+	case cfg.Cache.TTLSweepIntervalMs < 0:
+		cc.TTLSweepIntervalMs = 0
+	case cfg.Cache.TTLSweepIntervalMs > 0:
+		cc.TTLSweepIntervalMs = cfg.Cache.TTLSweepIntervalMs
+	}
 	// Spread the node's budget across its Raft shards: this node holds
 	// numShards caches, each pinned to cc.NumShards = 1, so the divisor is
 	// numShards and NOT cc.NumShards. Previously each shard inherited
@@ -784,6 +795,17 @@ func (e *embedded) Get(_ context.Context, key []byte) ([]byte, error) {
 		return nil, mapErr(err)
 	}
 	return result, nil
+}
+
+// GetInto is the allocation-light Get: the value is copied into dst (reusing its
+// capacity when large enough). Same ErrNotFound semantics as Get; the returned
+// slice may alias dst.
+func (e *embedded) GetInto(_ context.Context, key, dst []byte) ([]byte, error) {
+	result, err := e.node.Call("get", ops.EncodeKeyArgs(key))
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return append(dst[:0], result...), nil
 }
 
 // Put writes key/value through Raft with the given TTL. Returns

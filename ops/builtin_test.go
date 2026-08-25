@@ -154,28 +154,28 @@ func TestBuiltinIncrAccumulates(t *testing.T) {
 }
 
 func TestArgsCodecRoundtrip(t *testing.T) {
-	// EncodeKeyArgs ↔ decodeKeyArgs
+	// EncodeKeyArgs ↔ DecodeKeyArgs
 	k := []byte("user:42")
 	args := EncodeKeyArgs(k)
-	dk, err := decodeKeyArgs(args)
+	dk, err := DecodeKeyArgs(args)
 	if err != nil {
-		t.Fatalf("decodeKeyArgs: %v", err)
+		t.Fatalf("DecodeKeyArgs: %v", err)
 	}
 	if !bytes.Equal(dk, k) {
-		t.Fatalf("decodeKeyArgs: %q, want %q", dk, k)
+		t.Fatalf("DecodeKeyArgs: %q, want %q", dk, k)
 	}
 
-	// EncodePutArgs ↔ decodePutArgs
+	// EncodePutArgs ↔ DecodePutArgs
 	args = EncodePutArgs(k, []byte("v"), 5*time.Second)
-	dk2, dv, dttl, err := decodePutArgs(args)
+	dk2, dv, dttl, err := DecodePutArgs(args)
 	if err != nil {
-		t.Fatalf("decodePutArgs: %v", err)
+		t.Fatalf("DecodePutArgs: %v", err)
 	}
 	if !bytes.Equal(dk2, k) || !bytes.Equal(dv, []byte("v")) {
-		t.Fatalf("decodePutArgs: %q,%q", dk2, dv)
+		t.Fatalf("DecodePutArgs: %q,%q", dk2, dv)
 	}
 	if dttl != 5*time.Second {
-		t.Fatalf("decodePutArgs ttl = %v, want 5s", dttl)
+		t.Fatalf("DecodePutArgs ttl = %v, want 5s", dttl)
 	}
 }
 
@@ -205,19 +205,19 @@ func TestBuiltinPing(t *testing.T) {
 
 func TestStdKeyExtractor(t *testing.T) {
 	args := EncodePutArgs([]byte("user:42"), []byte("v"), 0)
-	key, ok := stdKeyExtractor(args)
+	key, ok := StdKeyExtractor(args)
 	if !ok {
-		t.Fatal("stdKeyExtractor: no key")
+		t.Fatal("StdKeyExtractor: no key")
 	}
 	if string(key) != "user:42" {
 		t.Fatalf("key = %q, want user:42", key)
 	}
 
 	// Short args.
-	if _, ok := stdKeyExtractor([]byte{0}); ok {
+	if _, ok := StdKeyExtractor([]byte{0}); ok {
 		t.Error("1-byte args: extractor returned key")
 	}
-	if _, ok := stdKeyExtractor([]byte{0, 5, 'a', 'b'}); ok {
+	if _, ok := StdKeyExtractor([]byte{0, 5, 'a', 'b'}); ok {
 		t.Error("truncated key: extractor returned key")
 	}
 }

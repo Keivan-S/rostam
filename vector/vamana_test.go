@@ -375,7 +375,7 @@ func TestVamanaValidate(t *testing.T) {
 		{Dim: 8, M: 16, EfConstruction: 100, EfSearch: 64, IndexType: IndexVamana, VamanaR: 32, VamanaL: 32, VamanaAlpha: 1.0}, // L==R, alpha==1
 	}
 	for i, c := range ok {
-		if err := c.Validate(); err != nil {
+		if err := ValidateConfig(c); err != nil {
 			t.Errorf("ok[%d]: Validate = %v, want nil", i, err)
 		}
 	}
@@ -386,7 +386,7 @@ func TestVamanaValidate(t *testing.T) {
 		{Dim: 8, M: 16, EfConstruction: 100, EfSearch: 64, IndexType: IndexVamana + 1},                                         // unknown index type
 	}
 	for i, c := range bad {
-		if err := c.Validate(); err == nil {
+		if err := ValidateConfig(c); err == nil {
 			t.Errorf("bad[%d]: Validate = nil, want error", i)
 		}
 	}

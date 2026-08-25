@@ -479,7 +479,7 @@ func openPersist(cfg Config, metaPath string) (*hnsw, error) {
 	if cfg.IndexType == IndexVamana {
 		cfg = applyVamanaDefaults(cfg)
 	}
-	if err := cfg.Validate(); err != nil {
+	if err := ValidateConfig(cfg); err != nil {
 		return nil, err
 	}
 	if cfg.MmapPath == "" || cfg.GraphMmapPath == "" {

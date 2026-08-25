@@ -421,7 +421,7 @@ func (g *gpuIndex) searchIntoGPU(dst []Result, query []float32, k int, filter Fi
 	if k <= 0 {
 		return dst, nil
 	}
-	pred, err := filter.Compile()
+	pred, err := CompileFilter(filter)
 	if err != nil {
 		return dst, err
 	}

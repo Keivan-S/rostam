@@ -14,11 +14,11 @@ import (
 // of arities (2..maxKeys) and values incl. empty + unicode + embedded-NUL strings.
 func TestScrollCursorOrderTupleRoundTrip(t *testing.T) {
 	tuples := [][]OrderKeyVal{
-		{{Num: 1.5, Kind: 0}, {Str: "x", Kind: scrollCursorKindString}},
-		{{Str: "alpha", Kind: scrollCursorKindString}, {Num: -7, Kind: 0}},
-		{{Num: 100, Kind: 1 /*datetime*/}, {Num: 0.25, Kind: 0}, {Str: "", Kind: scrollCursorKindString}},
-		{{Str: "日本語", Kind: scrollCursorKindString}, {Str: "nul\x00byte", Kind: scrollCursorKindString}},
-		{{Num: 1, Kind: 0}, {Num: 2, Kind: 0}, {Num: 3, Kind: 0}, {Str: strings.Repeat("y", 500), Kind: scrollCursorKindString}},
+		{{Num: 1.5, Kind: 0}, {Str: "x", Kind: ScrollCursorKindString}},
+		{{Str: "alpha", Kind: ScrollCursorKindString}, {Num: -7, Kind: 0}},
+		{{Num: 100, Kind: 1 /*datetime*/}, {Num: 0.25, Kind: 0}, {Str: "", Kind: ScrollCursorKindString}},
+		{{Str: "日本語", Kind: ScrollCursorKindString}, {Str: "nul\x00byte", Kind: ScrollCursorKindString}},
+		{{Num: 1, Kind: 0}, {Num: 2, Kind: 0}, {Num: 3, Kind: 0}, {Str: strings.Repeat("y", 500), Kind: ScrollCursorKindString}},
 	}
 	ids := []uint64{0, 1, 1 << 32, 1<<64 - 1}
 	for _, tup := range tuples {
@@ -64,7 +64,7 @@ func TestScrollCursorOrderTupleRoundTrip(t *testing.T) {
 // TestScrollCursorV4ByteLayout pins the exact v4 wire layout:
 // [ver=4][flags][keyHash:u16][numKeys][per-key kind+value][id:u64].
 func TestScrollCursorV4ByteLayout(t *testing.T) {
-	tup := []OrderKeyVal{{Num: 0, Kind: 0}, {Str: "ab", Kind: scrollCursorKindString}}
+	tup := []OrderKeyVal{{Num: 0, Kind: 0}, {Str: "ab", Kind: ScrollCursorKindString}}
 	tok, err := EncodeScrollCursorOrderTuple(tup, 0x1122334455667788, true, 0xBEEF)
 	if err != nil {
 		t.Fatalf("encode: %v", err)
@@ -80,7 +80,7 @@ func TestScrollCursorV4ByteLayout(t *testing.T) {
 	if raw[0] != 4 {
 		t.Fatalf("version byte = %d, want 4", raw[0])
 	}
-	if raw[1]&scrollCursorFlagDesc == 0 {
+	if raw[1]&ScrollCursorFlagDesc == 0 {
 		t.Fatalf("desc flag not set")
 	}
 	if raw[4] != 2 {
@@ -89,8 +89,8 @@ func TestScrollCursorV4ByteLayout(t *testing.T) {
 	if raw[5] != 0 { // key0 kind = numeric
 		t.Fatalf("key0 kind = %d, want 0", raw[5])
 	}
-	if raw[5+9] != scrollCursorKindString { // key1 kind = string
-		t.Fatalf("key1 kind = %d, want %d", raw[5+9], scrollCursorKindString)
+	if raw[5+9] != ScrollCursorKindString { // key1 kind = string
+		t.Fatalf("key1 kind = %d, want %d", raw[5+9], ScrollCursorKindString)
 	}
 }
 
@@ -108,9 +108,9 @@ func TestScrollCursorV4SingleKeyRejectedEncode(t *testing.T) {
 	}
 }
 
-// TestScrollCursorV4TooManyKeysRejectedEncode: > scrollCursorMaxKeys keys is fail-loud.
+// TestScrollCursorV4TooManyKeysRejectedEncode: > ScrollCursorMaxKeys keys is fail-loud.
 func TestScrollCursorV4TooManyKeysRejectedEncode(t *testing.T) {
-	tup := make([]OrderKeyVal, scrollCursorMaxKeys+1)
+	tup := make([]OrderKeyVal, ScrollCursorMaxKeys+1)
 	for i := range tup {
 		tup[i] = OrderKeyVal{Num: float64(i), Kind: 0}
 	}
@@ -122,7 +122,7 @@ func TestScrollCursorV4TooManyKeysRejectedEncode(t *testing.T) {
 // TestScrollCursorV4MalformedDecode: corrupt v4 tokens fail-loud (no panic):
 // bad numKeys, strLen overrun, trailing slop, truncated.
 func TestScrollCursorV4MalformedDecode(t *testing.T) {
-	good := []OrderKeyVal{{Num: 1, Kind: 0}, {Str: "ab", Kind: scrollCursorKindString}}
+	good := []OrderKeyVal{{Num: 1, Kind: 0}, {Str: "ab", Kind: ScrollCursorKindString}}
 	tok, err := EncodeScrollCursorOrderTuple(good, 7, false, 0x1234)
 	if err != nil {
 		t.Fatalf("encode: %v", err)
@@ -137,7 +137,7 @@ func TestScrollCursorV4MalformedDecode(t *testing.T) {
 	cases := map[string]string{
 		"numKeys=0":           mutate(func(b []byte) []byte { b[4] = 0; return b }),
 		"numKeys=1":           mutate(func(b []byte) []byte { b[4] = 1; return b }),
-		"numKeys=max+1":       mutate(func(b []byte) []byte { b[4] = scrollCursorMaxKeys + 1; return b }),
+		"numKeys=max+1":       mutate(func(b []byte) []byte { b[4] = ScrollCursorMaxKeys + 1; return b }),
 		"numKeys huge":        mutate(func(b []byte) []byte { b[4] = 0xFF; return b }),
 		"strLen overrun":      mutate(func(b []byte) []byte { b[5+9+1] = 0xFF; b[5+9+2] = 0xFF; return b }), // key1 strLen u16 huge
 		"truncated header":    base64.RawURLEncoding.EncodeToString(raw[:4]),
@@ -181,7 +181,7 @@ func TestScrollCursorVersionsDistinct(t *testing.T) {
 // changed key hash, wrong arity, and a non-v4 cursor; accepts a matching v4 and an
 // absent (first-page) cursor.
 func TestValidateOrderCursorTuple(t *testing.T) {
-	tok, err := EncodeScrollCursorOrderTuple([]OrderKeyVal{{Num: 1, Kind: 0}, {Str: "z", Kind: scrollCursorKindString}}, 5, true, 0xAA)
+	tok, err := EncodeScrollCursorOrderTuple([]OrderKeyVal{{Num: 1, Kind: 0}, {Str: "z", Kind: ScrollCursorKindString}}, 5, true, 0xAA)
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}

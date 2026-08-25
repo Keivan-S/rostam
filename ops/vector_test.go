@@ -925,8 +925,8 @@ func TestVectorSearchArgsExtRoundtrip(t *testing.T) {
 		t.Fatal("filter decoded as zero, want eq tenant=acme")
 	}
 	m := vector.Metadata{"tenant": vector.NewString("acme")}
-	wantPred, _ := filter.Compile()
-	gotPred, _ := gotFilter.Compile()
+	wantPred, _ := vector.CompileFilter(filter)
+	gotPred, _ := vector.CompileFilter(gotFilter)
 	if wantPred(m) != gotPred(m) {
 		t.Error("roundtripped filter disagrees with original")
 	}
@@ -1018,8 +1018,8 @@ func TestSearchOptsTruncatedTrailerErrors(t *testing.T) {
 	// Flag is set but the 2-byte trailer is chopped off → must fail loud.
 	for _, chop := range []int{1, 2} {
 		truncated := full[:len(full)-chop]
-		if _, _, _, _, _, _, _, err := DecodeVectorSearchArgsOpts(truncated); !errors.Is(err, errVectorArgsTruncated) {
-			t.Errorf("chop %d bytes: err = %v, want errVectorArgsTruncated", chop, err)
+		if _, _, _, _, _, _, _, err := DecodeVectorSearchArgsOpts(truncated); !errors.Is(err, ErrVectorArgsTruncated) {
+			t.Errorf("chop %d bytes: err = %v, want ErrVectorArgsTruncated", chop, err)
 		}
 	}
 
@@ -1358,8 +1358,8 @@ func TestHybridSearchOptsTruncatedTrailer(t *testing.T) {
 	full := EncodeHybridSearchArgsOpts("docs", []float32{1, 2, 3}, 10, vector.SparseVector{}, hopts, 1, 1, 0)
 	for _, chop := range []int{1, 2} {
 		truncated := full[:len(full)-chop]
-		if _, _, _, _, _, _, _, _, err := DecodeHybridSearchArgsOpts(truncated); !errors.Is(err, errVectorArgsTruncated) {
-			t.Errorf("chop %d: err = %v, want errVectorArgsTruncated", chop, err)
+		if _, _, _, _, _, _, _, _, err := DecodeHybridSearchArgsOpts(truncated); !errors.Is(err, ErrVectorArgsTruncated) {
+			t.Errorf("chop %d: err = %v, want ErrVectorArgsTruncated", chop, err)
 		}
 	}
 }
@@ -1424,8 +1424,8 @@ func TestGroupSearchOptsTruncatedTrailer(t *testing.T) {
 	// after the presence flag is read must fail loud.
 	for _, chop := range []int{1, 2} {
 		truncated := full[:len(full)-chop]
-		if _, _, _, _, _, _, _, err := DecodeGroupSearchArgsOpts(truncated); !errors.Is(err, errVectorArgsTruncated) {
-			t.Errorf("chop %d: err = %v, want errVectorArgsTruncated", chop, err)
+		if _, _, _, _, _, _, _, err := DecodeGroupSearchArgsOpts(truncated); !errors.Is(err, ErrVectorArgsTruncated) {
+			t.Errorf("chop %d: err = %v, want ErrVectorArgsTruncated", chop, err)
 		}
 	}
 }
@@ -1483,8 +1483,8 @@ func TestScrollOptsTruncatedTrailer(t *testing.T) {
 	full := EncodeScrollArgsOpts("docs", vector.Filter{}, 50, 1, 1)
 	for _, chop := range []int{1, 2} {
 		truncated := full[:len(full)-chop]
-		if _, _, _, _, _, err := DecodeScrollArgsOpts(truncated); !errors.Is(err, errVectorArgsTruncated) {
-			t.Errorf("chop %d: err = %v, want errVectorArgsTruncated", chop, err)
+		if _, _, _, _, _, err := DecodeScrollArgsOpts(truncated); !errors.Is(err, ErrVectorArgsTruncated) {
+			t.Errorf("chop %d: err = %v, want ErrVectorArgsTruncated", chop, err)
 		}
 	}
 }
@@ -1499,8 +1499,8 @@ func TestVectorGetBatchArgsRoundtrip(t *testing.T) {
 		flags uint8
 	}{
 		{"empty", "acme/docs", nil, GetFlagsBoth},
-		{"single", "docs", []uint64{42}, getFlagWithVector},
-		{"multi", "c", []uint64{1, 2, 3, 9999, 0}, getFlagWithPayload},
+		{"single", "docs", []uint64{42}, GetFlagWithVector},
+		{"multi", "c", []uint64{1, 2, 3, 9999, 0}, GetFlagWithPayload},
 		{"noflags", "x", []uint64{7, 8}, 0},
 	}
 	for _, tc := range cases {
@@ -1544,18 +1544,18 @@ func TestVectorGetBatchArgsTruncated(t *testing.T) {
 		if chop >= len(full) {
 			continue
 		}
-		if _, _, _, err := DecodeVectorGetBatchArgs(full[:len(full)-chop]); !errors.Is(err, errVectorArgsTruncated) {
-			t.Errorf("chop %d: err = %v, want errVectorArgsTruncated", chop, err)
+		if _, _, _, err := DecodeVectorGetBatchArgs(full[:len(full)-chop]); !errors.Is(err, ErrVectorArgsTruncated) {
+			t.Errorf("chop %d: err = %v, want ErrVectorArgsTruncated", chop, err)
 		}
 	}
-	if _, _, _, err := DecodeVectorGetBatchArgs(nil); !errors.Is(err, errVectorArgsTruncated) {
-		t.Errorf("nil args: err = %v, want errVectorArgsTruncated", err)
+	if _, _, _, err := DecodeVectorGetBatchArgs(nil); !errors.Is(err, ErrVectorArgsTruncated) {
+		t.Errorf("nil args: err = %v, want ErrVectorArgsTruncated", err)
 	}
 	// a declared count that overruns the buffer must fail loud (no oversized alloc).
 	bad := EncodeVectorGetBatchArgs("d", []uint64{1}, 0)
 	bad[1+1+1] = 0xFF // bump the high byte of n:u32 so n claims far more ids than present
-	if _, _, _, err := DecodeVectorGetBatchArgs(bad); !errors.Is(err, errVectorArgsTruncated) {
-		t.Errorf("inflated count: err = %v, want errVectorArgsTruncated", err)
+	if _, _, _, err := DecodeVectorGetBatchArgs(bad); !errors.Is(err, ErrVectorArgsTruncated) {
+		t.Errorf("inflated count: err = %v, want ErrVectorArgsTruncated", err)
 	}
 }
 
@@ -1727,11 +1727,11 @@ func TestVectorGetBatchResultHostileRowCount(t *testing.T) {
 			body := make([]byte, 4+9)
 			binary.BigEndian.PutUint32(body, tc.n)
 			binary.BigEndian.PutUint64(body[4:], 7) // one id, then found=0
-			if _, err := DecodeVectorGetBatchResult(body); !errors.Is(err, errVectorArgsTruncated) {
-				t.Fatalf("n=%d: err = %v, want errVectorArgsTruncated", tc.n, err)
+			if _, err := DecodeVectorGetBatchResult(body); !errors.Is(err, ErrVectorArgsTruncated) {
+				t.Fatalf("n=%d: err = %v, want ErrVectorArgsTruncated", tc.n, err)
 			}
-			if _, _, err := DecodeVectorGetBatchResultInto(body, nil, nil); !errors.Is(err, errVectorArgsTruncated) {
-				t.Fatalf("n=%d (Into): err = %v, want errVectorArgsTruncated", tc.n, err)
+			if _, _, err := DecodeVectorGetBatchResultInto(body, nil, nil); !errors.Is(err, ErrVectorArgsTruncated) {
+				t.Fatalf("n=%d (Into): err = %v, want ErrVectorArgsTruncated", tc.n, err)
 			}
 		})
 	}
@@ -1763,15 +1763,15 @@ func TestVectorGetBatchResultTruncated(t *testing.T) {
 		{ID: 1, Found: true, Vec: []float32{1, 2}, Meta: vector.Metadata{"k": vector.NewInt(1)}, TTLMs: 1000},
 		{ID: 2, Found: false},
 	})
-	if _, err := DecodeVectorGetBatchResult(nil); !errors.Is(err, errVectorArgsTruncated) {
-		t.Errorf("nil: err = %v, want errVectorArgsTruncated", err)
+	if _, err := DecodeVectorGetBatchResult(nil); !errors.Is(err, ErrVectorArgsTruncated) {
+		t.Errorf("nil: err = %v, want ErrVectorArgsTruncated", err)
 	}
-	if _, err := DecodeVectorGetBatchResult(body[:2]); !errors.Is(err, errVectorArgsTruncated) {
-		t.Errorf("header chop: err = %v, want errVectorArgsTruncated", err)
+	if _, err := DecodeVectorGetBatchResult(body[:2]); !errors.Is(err, ErrVectorArgsTruncated) {
+		t.Errorf("header chop: err = %v, want ErrVectorArgsTruncated", err)
 	}
 	// chop mid-row (after the count + part of the first row).
-	if _, err := DecodeVectorGetBatchResult(body[:10]); !errors.Is(err, errVectorArgsTruncated) {
-		t.Errorf("mid-row chop: err = %v, want errVectorArgsTruncated", err)
+	if _, err := DecodeVectorGetBatchResult(body[:10]); !errors.Is(err, ErrVectorArgsTruncated) {
+		t.Errorf("mid-row chop: err = %v, want ErrVectorArgsTruncated", err)
 	}
 }
 
@@ -1820,12 +1820,12 @@ func TestHandleVectorGetBatchDense(t *testing.T) {
 	}
 
 	// projection: with_vector off -> no vec, payload kept; with_payload off -> vec kept, no meta.
-	body, _ = handleVectorGetBatch(tx, EncodeVectorGetBatchArgs("docs", []uint64{1}, getFlagWithPayload))
+	body, _ = handleVectorGetBatch(tx, EncodeVectorGetBatchArgs("docs", []uint64{1}, GetFlagWithPayload))
 	rows, _ = DecodeVectorGetBatchResult(body)
 	if !rows[0].Found || rows[0].Vec != nil || rows[0].Meta["a"].Int != 1 {
 		t.Errorf("with_vector off: %+v", rows[0])
 	}
-	body, _ = handleVectorGetBatch(tx, EncodeVectorGetBatchArgs("docs", []uint64{1}, getFlagWithVector))
+	body, _ = handleVectorGetBatch(tx, EncodeVectorGetBatchArgs("docs", []uint64{1}, GetFlagWithVector))
 	rows, _ = DecodeVectorGetBatchResult(body)
 	if !rows[0].Found || rows[0].Vec[0] != 1 || rows[0].Meta != nil {
 		t.Errorf("with_payload off: %+v", rows[0])

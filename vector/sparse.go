@@ -4,67 +4,23 @@ package vector
 
 import (
 	"bytes"
-	"errors"
 	"io"
 )
 
-// SparseVector is a sparse representation of a document or query: Indices are
-// dimension ids (sorted ascending, unique) and Values are the corresponding
-// weights. len(Indices) must equal len(Values). The zero value (no indices)
-// means "no sparse lane".
-//
-// Typical producers are learned-sparse models (SPLADE) or client-side BM25 —
-// Rostam treats the vector as opaque numeric data and never tokenizes text.
-type SparseVector struct {
-	Indices []uint32  `json:"indices"`
-	Values  []float32 `json:"values"`
-}
-
-// ErrSparseMismatch is returned when Indices and Values have different lengths.
-var ErrSparseMismatch = errors.New("vector: sparse Indices/Values length mismatch")
-
-// ErrSparseUnsorted is returned when Indices are not strictly ascending (which
-// also rejects duplicates).
-var ErrSparseUnsorted = errors.New("vector: sparse Indices must be strictly ascending and unique")
-
-// IsZero reports whether the sparse vector carries no terms.
-func (s SparseVector) IsZero() bool { return len(s.Indices) == 0 }
-
-// Validate checks the invariants: equal lengths and strictly ascending indices.
-// A zero SparseVector is valid (no sparse lane).
-func (s SparseVector) Validate() error {
-	if len(s.Indices) != len(s.Values) {
-		return ErrSparseMismatch
-	}
-	for i := 1; i < len(s.Indices); i++ {
-		if s.Indices[i] <= s.Indices[i-1] {
-			return ErrSparseUnsorted
-		}
-	}
-	return nil
-}
-
-// clone returns a deep copy so the arena does not alias caller-owned slices.
-func (s SparseVector) clone() *SparseVector {
-	if s.IsZero() {
-		return nil
-	}
-	idx := make([]uint32, len(s.Indices))
-	val := make([]float32, len(s.Values))
-	copy(idx, s.Indices)
-	copy(val, s.Values)
-	return &SparseVector{Indices: idx, Values: val}
-}
+// SparseVector, its ErrSparse* sentinels, and its pure IsZero/Validate/Clone
+// methods now live in the engine-free vtypes leaf package and are re-exported
+// via vtypes_aliases.go. The framing/dot helpers below stay here because they
+// depend on the engine wire helpers (writeU32/readU32/…), not just the type.
 
 // cloneSparse deep-copies sv (nil-safe), returning nil for a nil or zero vector
 // so callers can store "no sparse value for this space" uniformly. Used by the
 // named id-keyed sparse path (which holds *SparseVector, unlike the dense arena's
-// value-receiver clone).
+// value-receiver Clone).
 func cloneSparse(sv *SparseVector) *SparseVector {
 	if sv == nil {
 		return nil
 	}
-	return sv.clone()
+	return sv.Clone()
 }
 
 // writeSparseVecFrame encodes sv as the shared sparse-vector framing used by both

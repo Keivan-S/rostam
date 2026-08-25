@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/rostamlabs/rostam/ops"
+	"github.com/rostamlabs/rostam/sdk/wire"
 )
 
 func TestTopologyCacheGetReturnsNilWhenEmpty(t *testing.T) {
@@ -18,9 +18,9 @@ func TestTopologyCacheGetReturnsNilWhenEmpty(t *testing.T) {
 
 func TestTopologyCacheSetAndGet(t *testing.T) {
 	var c topologyCache
-	in := ops.Topology{
+	in := wire.Topology{
 		NumShards: 2,
-		Members:   []ops.TopologyMember{{NodeID: "n1", ServerAddr: "a:1"}},
+		Members:   []wire.TopologyMember{{NodeID: "n1", ServerAddr: "a:1"}},
 		Leaders:   []string{"a:1", ""},
 	}
 	c.set(in)
@@ -44,7 +44,7 @@ func TestTopologyCacheConcurrentReadsWrites(_ *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			for i := range iters {
-				c.set(ops.Topology{NumShards: id*1000 + i})
+				c.set(wire.Topology{NumShards: id*1000 + i})
 			}
 		}(w)
 	}

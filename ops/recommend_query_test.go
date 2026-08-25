@@ -7,12 +7,12 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	"github.com/rostamlabs/rostam/grpcapi/pb"
+	"github.com/rostamlabs/rostam/sdk/pb"
 	"github.com/rostamlabs/rostam/vector"
 )
 
 // TestRecommendQueryLeafRoundTrip checks a recommend-leaf spec survives the
-// proto↔struct conversion (querySpecToProto → querySpecFromProto) carrying the
+// proto↔struct conversion (QuerySpecToProto → QuerySpecFromProto) carrying the
 // example point-ids, and that the leaf lands in the QueryLeaf_Recommend oneof arm.
 // The derive happens in the engine (NOT the codec), so the codec must transport
 // the positive/negative ids + k + filter verbatim.
@@ -33,9 +33,9 @@ func TestRecommendQueryLeafRoundTrip(t *testing.T) {
 		Method: vector.FusionRRF,
 		K:      5,
 	}
-	p, err := querySpecToProto(spec)
+	p, err := QuerySpecToProto(spec)
 	if err != nil {
-		t.Fatalf("querySpecToProto: %v", err)
+		t.Fatalf("QuerySpecToProto: %v", err)
 	}
 	// The root + prefetch[0] must land in the Recommend arm.
 	rootR, ok := p.GetRoot().GetLeaf().(*pb.QueryLeaf_Recommend)
@@ -49,9 +49,9 @@ func TestRecommendQueryLeafRoundTrip(t *testing.T) {
 		t.Fatalf("prefetch[0] not encoded as Recommend: %T", p.GetPrefetch()[0].GetLeaf())
 	}
 
-	got, err := querySpecFromProto(p, 0)
+	got, err := QuerySpecFromProto(p, 0)
 	if err != nil {
-		t.Fatalf("querySpecFromProto: %v", err)
+		t.Fatalf("QuerySpecFromProto: %v", err)
 	}
 	if got.Root.Kind != vector.LeafRecommend {
 		t.Fatalf("root kind = %d, want LeafRecommend", got.Root.Kind)
@@ -87,9 +87,9 @@ func TestRecommendQueryLeafRoundTrip(t *testing.T) {
 	if err := proto.Unmarshal(gotBlob, &pbSpec); err != nil {
 		t.Fatalf("unmarshal spec blob: %v", err)
 	}
-	rt, err := querySpecFromProto(&pbSpec, 0)
+	rt, err := QuerySpecFromProto(&pbSpec, 0)
 	if err != nil {
-		t.Fatalf("querySpecFromProto (blob): %v", err)
+		t.Fatalf("QuerySpecFromProto (blob): %v", err)
 	}
 	if rt.Root.Kind != vector.LeafRecommend || len(rt.Root.Positive) != 3 {
 		t.Fatalf("blob round-trip lost recommend ids: %+v", rt.Root)
@@ -117,9 +117,9 @@ func TestRecommendBestScoreQueryLeafRoundTrip(t *testing.T) {
 		}...),
 		K: 5,
 	}
-	p, err := querySpecToProto(spec)
+	p, err := QuerySpecToProto(spec)
 	if err != nil {
-		t.Fatalf("querySpecToProto: %v", err)
+		t.Fatalf("QuerySpecToProto: %v", err)
 	}
 	r, ok := p.GetPrefetch()[0].GetLeaf().(*pb.QueryLeaf_Recommend)
 	if !ok {
@@ -135,9 +135,9 @@ func TestRecommendBestScoreQueryLeafRoundTrip(t *testing.T) {
 		t.Fatalf("best_pos[1] corrupted: %v", r.Recommend.GetBestPos()[1].GetValues())
 	}
 
-	got, err := querySpecFromProto(p, 0)
+	got, err := QuerySpecFromProto(p, 0)
 	if err != nil {
-		t.Fatalf("querySpecFromProto: %v", err)
+		t.Fatalf("QuerySpecFromProto: %v", err)
 	}
 	gl := got.Prefetch[0].Leaf
 	if gl.Kind != vector.LeafRecommend || gl.Strategy != vector.RecommendBestScore {
@@ -162,9 +162,9 @@ func TestRecommendBestScoreQueryLeafRoundTrip(t *testing.T) {
 	if err := proto.Unmarshal(blob, &pbSpec); err != nil {
 		t.Fatalf("unmarshal blob: %v", err)
 	}
-	rt, err := querySpecFromProto(&pbSpec, 0)
+	rt, err := QuerySpecFromProto(&pbSpec, 0)
 	if err != nil {
-		t.Fatalf("querySpecFromProto (blob): %v", err)
+		t.Fatalf("QuerySpecFromProto (blob): %v", err)
 	}
 	if rt.Prefetch[0].Leaf.Strategy != vector.RecommendBestScore || len(rt.Prefetch[0].Leaf.RecPosVecs) != 2 {
 		t.Fatalf("blob round-trip lost BEST_SCORE payload: %+v", rt.Prefetch[0].Leaf)

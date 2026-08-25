@@ -91,17 +91,8 @@ func (h *hnsw) textLaneLocked(s *layerScratch, terms []uint32, k int, admit func
 	return out
 }
 
-// BM25GlobalStats is the coordinator-supplied GLOBAL corpus statistics injected
-// into the two-phase (dfs_query_then_fetch) text scorer: N is the summed live
-// document count across all partitions, Avgdl is the global average document length
-// (summed tokenTotal / N), and DF is the summed per-query-term document frequency.
-// Built by the ops layer from each shard's CorpusStats; consumed by the
-// *Global scoring entry points so every shard scores with the SAME IDF.
-type BM25GlobalStats struct {
-	N     int
-	Avgdl float32
-	DF    map[uint32]int
-}
+// BM25GlobalStats (the coordinator-supplied GLOBAL corpus statistics) now lives in
+// the engine-free vtypes leaf package and is re-exported from vtypes_aliases.go.
 
 // CorpusStats analyzes query (pre-lock, a pure function of the string) and returns
 // this index's CORPUS-WIDE BM25 statistics for the query's terms under the read
@@ -185,7 +176,7 @@ func (h *hnsw) buildTextLanes(dense []float32, query string, k int, opts HybridO
 	if len(dense) > 0 && len(dense) != h.cfg.Dim {
 		return nil, nil, nil, ErrDimMismatch
 	}
-	pred, err := opts.Filter.Compile()
+	pred, err := CompileFilter(opts.Filter)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -260,7 +251,7 @@ func (h *hnsw) buildTextLanesGlobal(dense []float32, query string, k int, opts H
 	if len(dense) > 0 && len(dense) != h.cfg.Dim {
 		return nil, nil, nil, ErrDimMismatch
 	}
-	pred, err := opts.Filter.Compile()
+	pred, err := CompileFilter(opts.Filter)
 	if err != nil {
 		return nil, nil, nil, err
 	}

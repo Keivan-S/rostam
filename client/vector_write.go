@@ -7,8 +7,8 @@ import (
 	"errors"
 	"time"
 
-	"github.com/rostamlabs/rostam/ops"
-	"github.com/rostamlabs/rostam/vector"
+	"github.com/rostamlabs/rostam/sdk/vtypes"
+	"github.com/rostamlabs/rostam/sdk/wire"
 )
 
 // WriteRequest is the payload for Insert and Upsert.
@@ -16,8 +16,8 @@ type WriteRequest struct {
 	ID       uint64
 	Vector   []float32
 	Content  string              // raw text tokenized into the BM25 lane
-	Metadata vector.Metadata     // build with vector.NewString/NewInt/...
-	Sparse   vector.SparseVector // optional client sparse vector
+	Metadata vtypes.Metadata     // build with vtypes.NewString/NewInt/...
+	Sparse   vtypes.SparseVector // optional client sparse vector
 	TTL      time.Duration       // 0 = no expiry
 	// ExpectedVersion enables optimistic concurrency; HasExpectedVersion must be
 	// true for it to apply.
@@ -31,7 +31,7 @@ type WriteRequest struct {
 // current version matches req.ExpectedVersion; otherwise it returns
 // ErrVersionConflict.
 func (col *Collection) Upsert(ctx context.Context, req WriteRequest) error {
-	args := ops.EncodeVectorUpsertArgsCASKeyTTL(
+	args := wire.EncodeVectorUpsertArgsCASKeyTTL(
 		col.name, req.ID, req.Vector, req.Content, req.TTL, req.Metadata,
 		req.Sparse, req.ExpectedVersion, req.HasExpectedVersion, req.KeyTTLMs)
 	_, err := col.c.Call(ctx, "vector_upsert", args)
@@ -46,7 +46,7 @@ func (col *Collection) Insert(ctx context.Context, req WriteRequest) error {
 	if req.Content != "" {
 		return errors.New("client: Insert does not support Content; use Upsert to store content")
 	}
-	args := ops.EncodeVectorInsertArgsCASKeyTTL(
+	args := wire.EncodeVectorInsertArgsCASKeyTTL(
 		col.name, req.ID, req.Vector, req.TTL, req.Metadata,
 		req.Sparse, req.ExpectedVersion, req.HasExpectedVersion, req.KeyTTLMs)
 	_, err := col.c.Call(ctx, "vector_insert", args)
@@ -64,7 +64,7 @@ type DeleteRequest struct {
 // delete only applies when the point's current version matches
 // req.ExpectedVersion; otherwise it returns ErrVersionConflict.
 func (col *Collection) Delete(ctx context.Context, req DeleteRequest) error {
-	args := ops.EncodeVectorDeleteArgsCAS(col.name, req.ID, req.ExpectedVersion, req.HasExpectedVersion)
+	args := wire.EncodeVectorDeleteArgsCAS(col.name, req.ID, req.ExpectedVersion, req.HasExpectedVersion)
 	_, err := col.c.Call(ctx, "vector_delete", args)
 	return mapWriteErr(err)
 }
@@ -85,8 +85,8 @@ type PointInput struct {
 	ID       uint64
 	Vector   []float32
 	Content  string
-	Metadata vector.Metadata
-	Sparse   vector.SparseVector
+	Metadata vtypes.Metadata
+	Sparse   vtypes.SparseVector
 	TTL      time.Duration
 }
 

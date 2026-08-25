@@ -419,8 +419,8 @@ func TestMVSearchOptsTruncatedTrailer(t *testing.T) {
 	full := EncodeMVSearchArgsOpts("c", q, 5, 128, 1, 1, 0)
 	for _, chop := range []int{1, 2} {
 		truncated := full[:len(full)-chop]
-		if _, _, _, _, _, _, _, err := DecodeMVSearchArgsOpts(truncated); !errors.Is(err, errVectorArgsTruncated) {
-			t.Errorf("chop %d: err = %v, want errVectorArgsTruncated", chop, err)
+		if _, _, _, _, _, _, _, err := DecodeMVSearchArgsOpts(truncated); !errors.Is(err, ErrVectorArgsTruncated) {
+			t.Errorf("chop %d: err = %v, want ErrVectorArgsTruncated", chop, err)
 		}
 	}
 }
@@ -536,8 +536,8 @@ func TestMVSearchFilterLegacyDecode(t *testing.T) {
 func TestMVSearchFilterMalformed(t *testing.T) {
 	q := [][]float32{{1, 0}, {0, 1}}
 	base := EncodeMVSearchArgs("c", q, 5, 128)
-	// marker=mvTrailerFilter, [filterLen=3]["{[}"] — invalid JSON.
-	bad := append(append([]byte(nil), base...), mvTrailerFilter, 0, 0, 0, 3)
+	// marker=MVTrailerFilter, [filterLen=3]["{[}"] — invalid JSON.
+	bad := append(append([]byte(nil), base...), MVTrailerFilter, 0, 0, 0, 3)
 	bad = append(bad, '{', '[', '}')
 	if _, _, _, _, _, _, _, _, err := DecodeMVSearchArgsOptsFilter(bad); err == nil {
 		t.Fatal("malformed filter JSON decoded without error (should fail loud)")
@@ -555,8 +555,8 @@ func TestMVSearchFilterTruncated(t *testing.T) {
 	full := EncodeMVSearchArgsOptsFilter("c", q, 5, 128, 1, 1, mvTestFilter(), 0)
 	for _, chop := range []int{1, 5} {
 		truncated := full[:len(full)-chop]
-		if _, _, _, _, _, _, _, _, err := DecodeMVSearchArgsOptsFilter(truncated); !errors.Is(err, errVectorArgsTruncated) {
-			t.Errorf("chop %d: err = %v, want errVectorArgsTruncated", chop, err)
+		if _, _, _, _, _, _, _, _, err := DecodeMVSearchArgsOptsFilter(truncated); !errors.Is(err, ErrVectorArgsTruncated) {
+			t.Errorf("chop %d: err = %v, want ErrVectorArgsTruncated", chop, err)
 		}
 	}
 }
@@ -680,14 +680,14 @@ func TestMVScrollArgsByteIdenticalLegacy(t *testing.T) {
 func TestMVScrollArgsMalformed(t *testing.T) {
 	base := EncodeMVScrollArgs("docs", vector.Filter{}, 10)
 	// marker promises a cursor (afterID:u64) but only 3 bytes follow.
-	badCursor := append(append([]byte(nil), base...), mvScrollCursor, 1, 2, 3)
-	if _, _, _, _, _, _, _, _, err := DecodeMVScrollArgsOpts(badCursor); !errors.Is(err, errVectorArgsTruncated) {
-		t.Fatalf("truncated cursor: err = %v, want errVectorArgsTruncated", err)
+	badCursor := append(append([]byte(nil), base...), MVScrollCursor, 1, 2, 3)
+	if _, _, _, _, _, _, _, _, err := DecodeMVScrollArgsOpts(badCursor); !errors.Is(err, ErrVectorArgsTruncated) {
+		t.Fatalf("truncated cursor: err = %v, want ErrVectorArgsTruncated", err)
 	}
 	// marker promises opts (rc,opa) but only 1 byte follows.
-	badOpts := append(append([]byte(nil), base...), mvScrollOpts, 2)
-	if _, _, _, _, _, _, _, _, err := DecodeMVScrollArgsOpts(badOpts); !errors.Is(err, errVectorArgsTruncated) {
-		t.Fatalf("truncated opts: err = %v, want errVectorArgsTruncated", err)
+	badOpts := append(append([]byte(nil), base...), MVScrollOpts, 2)
+	if _, _, _, _, _, _, _, _, err := DecodeMVScrollArgsOpts(badOpts); !errors.Is(err, ErrVectorArgsTruncated) {
+		t.Fatalf("truncated opts: err = %v, want ErrVectorArgsTruncated", err)
 	}
 	// A malformed filter JSON in the base block fails loud.
 	bad := []byte{4}
@@ -810,19 +810,19 @@ func TestMVGetBatchResultRoundtrip(t *testing.T) {
 	}
 	// truncation (fail-loud).
 	body := EncodeMVGetBatchResult(rows)
-	if _, err := DecodeMVGetBatchResult(nil); !errors.Is(err, errVectorArgsTruncated) {
-		t.Errorf("nil: err = %v, want errVectorArgsTruncated", err)
+	if _, err := DecodeMVGetBatchResult(nil); !errors.Is(err, ErrVectorArgsTruncated) {
+		t.Errorf("nil: err = %v, want ErrVectorArgsTruncated", err)
 	}
-	if _, err := DecodeMVGetBatchResult(body[:2]); !errors.Is(err, errVectorArgsTruncated) {
-		t.Errorf("header chop: err = %v, want errVectorArgsTruncated", err)
+	if _, err := DecodeMVGetBatchResult(body[:2]); !errors.Is(err, ErrVectorArgsTruncated) {
+		t.Errorf("header chop: err = %v, want ErrVectorArgsTruncated", err)
 	}
-	if _, err := DecodeMVGetBatchResult(body[:10]); !errors.Is(err, errVectorArgsTruncated) {
-		t.Errorf("mid-row chop: err = %v, want errVectorArgsTruncated", err)
+	if _, err := DecodeMVGetBatchResult(body[:10]); !errors.Is(err, ErrVectorArgsTruncated) {
+		t.Errorf("mid-row chop: err = %v, want ErrVectorArgsTruncated", err)
 	}
 }
 
 // TestMVGetBatchTwoRowOffsetAdvance is the regression guard for the
-// decodeMVGetResultAt missing-offset-advance bug: row 0 carries BOTH tokens AND a
+// DecodeMVGetResultAt missing-offset-advance bug: row 0 carries BOTH tokens AND a
 // meta payload, so the decoder must advance off past the meta bytes (off += mlen)
 // before reading row 1. If that advance is missing, row 1's id + record are read
 // from the MIDDLE of row 0's meta JSON — yielding a wrong id, garbage token
@@ -914,12 +914,12 @@ func TestHandleMVGetBatch(t *testing.T) {
 	}
 
 	// projection: with_vector off -> no tokens, payload kept; with_payload off -> tokens kept, no meta.
-	body, _ = handleMVGetBatch(tx, EncodeVectorGetBatchArgs("docs", []uint64{1}, getFlagWithPayload))
+	body, _ = handleMVGetBatch(tx, EncodeVectorGetBatchArgs("docs", []uint64{1}, GetFlagWithPayload))
 	rows, _ = DecodeMVGetBatchResult(body)
 	if !rows[0].Found || len(rows[0].Tokens) != 0 || rows[0].Meta["a"].Int != 1 {
 		t.Errorf("with_vector off: %+v", rows[0])
 	}
-	body, _ = handleMVGetBatch(tx, EncodeVectorGetBatchArgs("docs", []uint64{1}, getFlagWithVector))
+	body, _ = handleMVGetBatch(tx, EncodeVectorGetBatchArgs("docs", []uint64{1}, GetFlagWithVector))
 	rows, _ = DecodeMVGetBatchResult(body)
 	if !rows[0].Found || len(rows[0].Tokens) != 2 || rows[0].Meta != nil {
 		t.Errorf("with_payload off: %+v", rows[0])

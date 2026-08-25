@@ -8,12 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cespare/xxhash/v2"
 
 	"github.com/rostamlabs/rostam/client"
 	"github.com/rostamlabs/rostam/ops"
+	"github.com/rostamlabs/rostam/sdk/wire"
 	"github.com/rostamlabs/rostam/vector"
 )
 
@@ -64,9 +66,21 @@ func NewClient(cfg ClientConfig) (Store, error) {
 	if cfg.TopologyRefreshInterval == 0 {
 		cfg.TopologyRefreshInterval = 5 * time.Second
 	}
+	// client.Config.Ops is a *wire.Registry (the client package cannot import
+	// ops — that is what would drag cache/objstore/vector-analysis into the
+	// networked client). cfg.Ops here is the caller's full server-side
+	// *ops.Registry (routing + handlers); ExportRouting adapts it into the
+	// routing-only registry the low-level client needs.
+	var wireOps *wire.Registry
+	if cfg.Ops != nil {
+		wireOps = wire.NewRegistry()
+		if err := cfg.Ops.ExportRouting(wireOps); err != nil {
+			return nil, fmt.Errorf("rostam: export routing registry: %w", err)
+		}
+	}
 	cc := client.Config{
 		Servers:                 cfg.Servers,
-		Ops:                     cfg.Ops,
+		Ops:                     wireOps,
 		MaxConnsPerServer:       int32(cfg.MaxConnsPerServer), //nolint:gosec // user-supplied, positive
 		MaxNotLeaderHops:        cfg.MaxNotLeaderHops,
 		TopologyRefreshInterval: cfg.TopologyRefreshInterval,
@@ -84,16 +98,58 @@ type networkedStore struct {
 	c *client.Client
 }
 
+// kvArgsPool recycles the small request-args buffer shared by the KV ops
+// (get/del key args, and put args for small values), so Get/GetInto/Del/Put
+// allocate nothing on the request side in steady state. neither the inline
+// doCall framing nor the pipelined encodeRequestFrame retains args past the
+// call, so the buffer is safe to return afterward. Buffers grown past
+// maxPooledKVArgs (a large Put value) are dropped rather than pooled, to bound
+// retained memory.
+const maxPooledKVArgs = 4 << 10
+
+var kvArgsPool = sync.Pool{New: func() any { b := make([]byte, 0, 128); return &b }}
+
+func putKVArgs(bp *[]byte) {
+	if cap(*bp) <= maxPooledKVArgs {
+		kvArgsPool.Put(bp)
+	}
+}
+
 func (n *networkedStore) Get(ctx context.Context, key []byte) ([]byte, error) {
-	raw, err := n.c.Call(ctx, "get", ops.EncodeKeyArgs(key))
+	bp := kvArgsPool.Get().(*[]byte)
+	*bp = ops.AppendKeyArgs((*bp)[:0], key)
+	raw, err := n.c.Call(ctx, "get", *bp)
+	putKVArgs(bp)
 	if err != nil {
 		return nil, mapErr(err)
 	}
 	return raw, nil
 }
 
+// GetInto is the allocation-light Get: the value is copied into dst inside the
+// zero-copy CallFunc callback (no defensive payload copy) and the request args
+// are pooled, so a reused dst yields a zero-allocation read. Returns ErrNotFound
+// (via mapErr) when the key is absent; the returned slice may alias dst.
+func (n *networkedStore) GetInto(ctx context.Context, key, dst []byte) ([]byte, error) {
+	bp := kvArgsPool.Get().(*[]byte)
+	*bp = ops.AppendKeyArgs((*bp)[:0], key)
+	var out []byte
+	err := n.c.CallFunc(ctx, "get", *bp, func(payload []byte) error {
+		out = append(dst[:0], payload...)
+		return nil
+	})
+	putKVArgs(bp)
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return out, nil
+}
+
 func (n *networkedStore) Put(ctx context.Context, key, value []byte, ttl time.Duration) error {
-	_, err := n.c.Call(ctx, "put", ops.EncodePutArgs(key, value, ttl))
+	bp := kvArgsPool.Get().(*[]byte)
+	*bp = ops.AppendPutArgs((*bp)[:0], key, value, ttl)
+	_, err := n.c.Call(ctx, "put", *bp)
+	putKVArgs(bp)
 	return mapErr(err)
 }
 
@@ -105,7 +161,10 @@ func (n *networkedStore) PutBatch(ctx context.Context, entries []ops.PutEntry) e
 }
 
 func (n *networkedStore) Del(ctx context.Context, key []byte) (bool, error) {
-	raw, err := n.c.Call(ctx, "del", ops.EncodeKeyArgs(key))
+	bp := kvArgsPool.Get().(*[]byte)
+	*bp = ops.AppendKeyArgs((*bp)[:0], key)
+	raw, err := n.c.Call(ctx, "del", *bp)
+	putKVArgs(bp)
 	if err != nil {
 		return false, mapErr(err)
 	}
@@ -189,16 +248,27 @@ func (n *networkedStore) VectorSearch(ctx context.Context, collection string, qu
 	return ops.DecodeVectorSearchResults(body)
 }
 
+// vectorSearchArgsPool recycles the request-args buffer for VectorSearchInto so
+// the hot search path allocates nothing on the client: the buffer is filled by
+// AppendVectorSearchArgs, consumed by CallFunc (doCall writes+flushes it before
+// returning), then returned. Initial cap fits a ~128-dim query without growing.
+var vectorSearchArgsPool = sync.Pool{New: func() any { b := make([]byte, 0, 576); return &b }}
+
 // VectorSearchInto sends the search over the zero-copy CallFunc path: the wire
 // response is decoded straight into dst inside the callback (no defensive copy
-// of the payload, and no result-slice allocation when dst is reused).
+// of the payload, and no result-slice allocation when dst is reused). The
+// request-args buffer is pooled, so a reused dst yields a zero-allocation
+// client round-trip.
 func (n *networkedStore) VectorSearchInto(ctx context.Context, collection string, query []float32, k int, dst []VectorResult) ([]VectorResult, error) {
+	bp := vectorSearchArgsPool.Get().(*[]byte)
+	*bp = ops.AppendVectorSearchArgs((*bp)[:0], collection, k, query)
 	var out []VectorResult
-	err := n.c.CallFunc(ctx, "vector_search", ops.EncodeVectorSearchArgs(collection, k, query), func(payload []byte) error {
+	err := n.c.CallFunc(ctx, "vector_search", *bp, func(payload []byte) error {
 		var derr error
 		out, derr = ops.DecodeVectorSearchResultsInto(payload, dst)
 		return derr
 	})
+	vectorSearchArgsPool.Put(bp)
 	if err != nil {
 		return nil, mapErr(err)
 	}

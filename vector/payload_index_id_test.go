@@ -22,7 +22,7 @@ func idCandidates(t *testing.T, p *payloadIndexID, f Filter, limit int, wantOK b
 // filter predicate — the exact ground-truth match set.
 func bruteMatch(t *testing.T, metas map[uint64]Metadata, f Filter) []uint64 {
 	t.Helper()
-	pred, err := f.Compile()
+	pred, err := CompileFilter(f)
 	if err != nil {
 		t.Fatalf("compile filter: %v", err)
 	}

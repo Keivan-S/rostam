@@ -542,19 +542,19 @@ func TestSOARValidate(t *testing.T) {
 	// SOAR on a non-IVF index is rejected.
 	c := base()
 	c.IndexType = IndexHNSW
-	if err := c.Validate(); !errors.Is(err, ErrInvalidSOAR) {
+	if err := ValidateConfig(c); !errors.Is(err, ErrInvalidSOAR) {
 		t.Fatalf("SOAR on HNSW: got %v, want ErrInvalidSOAR", err)
 	}
 	// Negative λ is rejected (even unconditionally — try with SOAR on).
 	c = base()
 	c.SOARLambda = -0.5
-	if err := c.Validate(); !errors.Is(err, ErrInvalidSOARLambda) {
+	if err := ValidateConfig(c); !errors.Is(err, ErrInvalidSOARLambda) {
 		t.Fatalf("negative λ: got %v, want ErrInvalidSOARLambda", err)
 	}
 	// Well-formed SOAR IVF config validates.
 	c = base()
 	c.SOARLambda = 2.0
-	if err := c.Validate(); err != nil {
+	if err := ValidateConfig(c); err != nil {
 		t.Fatalf("valid SOAR IVF config rejected: %v", err)
 	}
 }

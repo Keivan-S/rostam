@@ -251,7 +251,7 @@ func (m *MultiVectorIndex) execMVLeafLocked(leaf QueryLeaf, k int, now int64) ([
 				return nil, ErrDimMismatch
 			}
 		}
-		pred, err := leaf.Filter.Compile()
+		pred, err := CompileFilter(leaf.Filter)
 		if err != nil {
 			return nil, err
 		}
@@ -272,7 +272,7 @@ func (m *MultiVectorIndex) execMVLeafLocked(leaf QueryLeaf, k int, now int64) ([
 		if verr := sq.Validate(); verr != nil {
 			return nil, verr
 		}
-		pred, err := leaf.Filter.Compile()
+		pred, err := CompileFilter(leaf.Filter)
 		if err != nil {
 			return nil, err
 		}
@@ -317,7 +317,7 @@ func (m *MultiVectorIndex) maxSimRerankLocked(root QueryLeaf, cands []uint64, k 
 			return nil, ErrDimMismatch
 		}
 	}
-	pred, err := root.Filter.Compile()
+	pred, err := CompileFilter(root.Filter)
 	if err != nil {
 		return nil, err
 	}
@@ -385,7 +385,7 @@ func (m *MultiVectorIndex) sparseRerankLocked(root QueryLeaf, cands []uint64, k 
 	if verr := sq.Validate(); verr != nil {
 		return nil, verr
 	}
-	pred, err := root.Filter.Compile()
+	pred, err := CompileFilter(root.Filter)
 	if err != nil {
 		return nil, err
 	}

@@ -15,7 +15,7 @@ import (
 
 	"github.com/cespare/xxhash/v2"
 
-	"github.com/rostamlabs/rostam/ops"
+	"github.com/rostamlabs/rostam/sdk/wire"
 )
 
 // Errors surfaced to callers.
@@ -215,12 +215,12 @@ func (c *Client) Call(ctx context.Context, op string, args []byte) ([]byte, erro
 // PutBatch writes many key/value pairs as bulk put_batch ops — the ~10x
 // bulk-insert fast path. It groups entries by their owning shard (the same hash
 // as pickInitialTarget) so each shard receives ONE Raft log entry per chunk, and
-// chunks each group to ops.MaxPutBatchSize. Each Call follows NotLeader hints like
+// chunks each group to wire.MaxPutBatchSize. Each Call follows NotLeader hints like
 // a single put. When the topology is unknown (no cache / NumShards==0) it cannot
 // group, so it falls back to one put per entry (the correctness floor). If a stale
 // topology (mid-reshard) makes the server reject a group as cross-shard, it
 // refreshes the topology once and retries that group re-grouped.
-func (c *Client) PutBatch(ctx context.Context, entries []ops.PutEntry) error {
+func (c *Client) PutBatch(ctx context.Context, entries []wire.PutEntry) error {
 	if len(entries) == 0 {
 		return nil
 	}
@@ -255,24 +255,24 @@ func (c *Client) PutBatch(ctx context.Context, entries []ops.PutEntry) error {
 
 // putBatchFallback issues one put per entry — the correctness floor used when the
 // topology is unknown, so entries cannot be grouped by shard for a put_batch.
-func (c *Client) putBatchFallback(ctx context.Context, entries []ops.PutEntry) error {
+func (c *Client) putBatchFallback(ctx context.Context, entries []wire.PutEntry) error {
 	for _, e := range entries {
-		if _, err := c.Call(ctx, "put", ops.EncodePutArgs(e.Key, e.Val, e.TTL)); err != nil {
+		if _, err := c.Call(ctx, "put", wire.EncodePutArgs(e.Key, e.Val, e.TTL)); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// sendSameShardBatch chunks a single-shard entry group to ops.MaxPutBatchSize and
+// sendSameShardBatch chunks a single-shard entry group to wire.MaxPutBatchSize and
 // dispatches each chunk as a put_batch (Call follows NotLeader hints).
-func (c *Client) sendSameShardBatch(ctx context.Context, g []ops.PutEntry) error {
+func (c *Client) sendSameShardBatch(ctx context.Context, g []wire.PutEntry) error {
 	for len(g) > 0 {
 		chunk := g
-		if len(chunk) > ops.MaxPutBatchSize {
-			chunk = g[:ops.MaxPutBatchSize]
+		if len(chunk) > wire.MaxPutBatchSize {
+			chunk = g[:wire.MaxPutBatchSize]
 		}
-		if _, err := c.Call(ctx, "put_batch", ops.EncodePutBatchArgs(chunk)); err != nil {
+		if _, err := c.Call(ctx, "put_batch", wire.EncodePutBatchArgs(chunk)); err != nil {
 			return err
 		}
 		g = g[len(chunk):]
@@ -283,8 +283,8 @@ func (c *Client) sendSameShardBatch(ctx context.Context, g []ops.PutEntry) error
 // groupEntriesByShard buckets entries by shard index using the same hash formula
 // as pickInitialTarget. Each bucket is dispatched independently, so map iteration
 // order does not matter.
-func groupEntriesByShard(entries []ops.PutEntry, numShards int) map[int][]ops.PutEntry {
-	groups := make(map[int][]ops.PutEntry)
+func groupEntriesByShard(entries []wire.PutEntry, numShards int) map[int][]wire.PutEntry {
+	groups := make(map[int][]wire.PutEntry)
 	for _, e := range entries {
 		shard := int(xxhash.Sum64(e.Key) % uint64(numShards)) //nolint:gosec // numShards bounded by Config validation
 		groups[shard] = append(groups[shard], e)
@@ -332,8 +332,27 @@ func (c *Client) nextServer() string {
 // server forwards to an owner — the correctness floor for dumb routing).
 func (c *Client) pickInitialTarget(op string, args []byte) string {
 	if c.cfg.Ops != nil {
-		if _, _, ke, ok := c.cfg.Ops.Lookup(op); ok && ke != nil {
-			if key, hasKey := ke(args); hasKey {
+		if _, ke, layout, ok := c.cfg.Ops.LookupRouting(op); ok {
+			// maxRouteKeyLen bounds "default/" (8) + a u8-length collection name
+			// (255). Keeping scratch on the stack lets RouteKeyInto extract the
+			// routing key with no heap allocation on the hot path; a DIRECT call
+			// to RouteKeyInto (not through the ke func value) is what lets escape
+			// analysis keep scratch stack-bound — see ops/wire.RouteKeyInto.
+			const maxRouteKeyLen = 8 + 255
+			var scratch [maxRouteKeyLen]byte
+			var key []byte
+			var hasKey bool
+			switch {
+			case layout != wire.RouteLayoutNone:
+				key = wire.RouteKeyInto(layout, args, scratch[:0])
+				hasKey = key != nil
+			case ke != nil:
+				// RouteLayoutNone ops route through ke: KV builtins (the
+				// subslicing stdKeyExtractor, already alloc-free) and
+				// dynamic/WASM ops (no allocation-free layout).
+				key, hasKey = ke(args)
+			}
+			if hasKey {
 				if t := c.topology.get(); t != nil && t.NumShards > 0 {
 					shardID := int(xxhash.Sum64(key) % uint64(t.NumShards)) //nolint:gosec // NumShards bounded by Config validation
 					if len(t.Leaders) == t.NumShards && t.Leaders[shardID] != "" {
@@ -374,7 +393,7 @@ func (c *Client) refreshTopology(ctx context.Context) {
 		if err != nil {
 			continue
 		}
-		t, derr := ops.DecodeTopology(result)
+		t, derr := wire.DecodeTopology(result)
 		if derr != nil {
 			continue
 		}
@@ -563,7 +582,7 @@ func (c *Client) callAddrFunc(ctx context.Context, op string, args []byte, addr 
 // Topology returns the most recent cluster topology snapshot, or nil
 // if the refresh loop has not yet populated it. Callers must not mutate
 // the returned value — it is shared with concurrent readers.
-func (c *Client) Topology() *ops.Topology {
+func (c *Client) Topology() *wire.Topology {
 	return c.topology.get()
 }
 

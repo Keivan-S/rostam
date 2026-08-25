@@ -847,7 +847,7 @@ func (nc *NamedCollection) scoreByIDs(root QueryLeaf, cands []uint64, k int) ([]
 // (nc.metaOf()) — the same admit gate SearchNamed uses. Fails loud on an unknown/
 // modality-mismatched space or a bad filter.
 func (nc *NamedCollection) scoreByIDsDense(space string, query []float32, cands []uint64, k int, filter Filter) ([]Result, error) {
-	pred, err := filter.Compile()
+	pred, err := CompileFilter(filter)
 	if err != nil {
 		return nil, err
 	}
