@@ -43,6 +43,11 @@ func (e *Embedder) Model() string { return "local:" + e.label }
 func (e *Embedder) Dim() int      { return e.eng.Dim() }
 func (e *Embedder) Close() error  { return e.eng.Close() }
 
+// Embed returns one L2-normalized vector per text. ctx bounds scheduling
+// between per-text forward passes — rembed checks ctx.Err() before each — but it
+// does not interrupt a forward pass already in flight, so a deadline can be
+// overrun by up to one text's inference. Do not rely on ctx as a hard inference
+// timeout.
 func (e *Embedder) Embed(ctx context.Context, texts []string) ([][]float32, error) {
 	return e.eng.Embed(ctx, texts)
 }
