@@ -143,53 +143,30 @@ config from above:
     existing data directory to start over. There is no automatic re-embed
     migration in this release.
 
-## Local embeddings (`-tags localembed`)
+## Local embeddings
 
-Building with `-tags localembed` compiles in a third embedder option — an
-in-process ONNX model — alongside BM25-only and `ROSTAM_EMBED_ENDPOINT`. No
-cloud API, no network call per embed:
+Rostam has a third embedder option — an in-process model — alongside BM25-only
+and `ROSTAM_EMBED_ENDPOINT`. No cloud API, no network call per embed. It is
+**pure Go** ([rembed](https://github.com/rostamlabs/rembed)): no cgo, no ONNX
+Runtime, no shared library to install, and no build tag — it is compiled into
+every binary and image. Nothing to build:
 
 ```sh
-CGO_ENABLED=1 go build -tags localembed ./cmd/rostam-server
+go build ./cmd/rostam-server   # local embeddings are already in
 ```
-
-The tag needs cgo for the ONNX Runtime binding, and at runtime, the ONNX
-Runtime shared library installed on the host — Rostam does not vendor it.
-Point `ROSTAM_ONNXRUNTIME_LIB` at the library file, or leave it unset and let
-the conventional install locations be searched.
 
 ### Docker
 
-The default image (`cmd/rostam-server/Dockerfile`) is deliberately lean and has
-no ONNX Runtime. A separate, opt-in image bundles it. Releases publish a prebuilt
-one (linux/amd64), or build it yourself:
-
-```sh
-# Prebuilt (published per release; linux/amd64)
-docker run --rm ghcr.io/rostamlabs/rostam:localembed mcp -list-embed-models
-
-# Or build it yourself
-docker build -f cmd/rostam-server/Dockerfile.localembed -t rostam-server:localembed .
-docker run --rm rostam-server:localembed mcp -list-embed-models
-```
-
-That image builds with `-tags localembed`, bundles ONNX Runtime (≥ 1.29.0), and
-sets `ROSTAM_ONNXRUNTIME_LIB` for you. Models still download on first use — mount
-a named volume at `/models` (the image's `ROSTAM_EMBED_MODELS_DIR`) to persist
+Local embeddings are in the default image (`cmd/rostam-server/Dockerfile`) —
+there is no separate image. Just set the model. Weights download on first use;
+mount a named volume at `/models` (and point `REMBED_CACHE` at it) to persist
 them across restarts:
 
 ```sh
 docker run -p 8080:8080 -e ROSTAM_API_KEY=<token> \
-  -e ROSTAM_EMBED_LOCAL=minilm-l6-v2 -v rostam-models:/models \
-  rostam-server:localembed
+  -e ROSTAM_EMBED_LOCAL=minilm-l6-v2 -e REMBED_CACHE=/models -v rostam-models:/models \
+  ghcr.io/rostamlabs/rostam:latest
 ```
-
-!!! warning "ONNX Runtime version floor"
-
-    This build's binding (`github.com/yalue/onnxruntime_go` v1.34.0) requires
-    `ORT_API_VERSION` 29, which only ONNX Runtime **1.29.0 or newer** provides.
-    An older install fails at load time rather than working with reduced
-    functionality — check your ONNX Runtime version before filing a bug.
 
 Select a model with `ROSTAM_EMBED_LOCAL=<name>`. It is mutually exclusive with
 `ROSTAM_EMBED_ENDPOINT` — setting both is a startup error, the same as the
@@ -200,19 +177,29 @@ catalog from the binary you have installed.
 The catalog has two tiers: a 384-dim tier (smaller and faster) and a higher-
 quality 768-dim "base" tier.
 
-| Name | Dim | Pooling | License |
-|---|--:|---|---|
-| `minilm-l6-v2` (default) | 384 | mean | Apache-2.0 |
-| `bge-small-en-v1.5` | 384 | CLS | MIT |
-| `gte-small` | 384 | mean | MIT |
-| `bge-base-en-v1.5` | 768 | CLS | MIT |
-| `gte-base` | 768 | mean | MIT |
-| `all-mpnet-base-v2` | 768 | mean | Apache-2.0 |
+| Name | Dim | License |
+|---|--:|---|
+| `minilm-l6-v2` (default) | 384 | Apache-2.0 |
+| `bge-small-en-v1.5` | 384 | MIT |
+| `gte-small` | 384 | MIT |
+| `bge-base-en-v1.5` | 768 | MIT |
+| `gte-base` | 768 | MIT |
+| `all-mpnet-base-v2` | 768 | Apache-2.0 |
 
-The selected model's weights download to `~/.rostam/models/<name>/` on first
-run and are SHA-256-verified against a pinned checksum before use; override
-the location with `ROSTAM_EMBED_MODELS_DIR`. Later starts reuse the cached,
-already-verified files with no network call.
+Beyond the catalog, `ROSTAM_EMBED_LOCAL` also accepts any Hugging Face
+`org/model` id directly (e.g. `BAAI/bge-large-en-v1.5`); it is passed straight
+to rembed. rembed reads each model's tokenizer, pooling, and normalization from
+the model itself, so the catalog only curates names, dimensions, and licenses.
+The embedder id stamped into cache scope keys is `local:<value of
+ROSTAM_EMBED_LOCAL>`, so the same model selected by its catalog short name
+(`local:minilm-l6-v2`) and by its full Hub id
+(`local:sentence-transformers/all-MiniLM-L6-v2`) build separate caches — pick
+one form and keep it.
+
+The selected model's weights download from the Hugging Face Hub on first run
+into rembed's cache (`REMBED_CACHE`, default the OS user cache dir; the legacy
+`ROSTAM_EMBED_MODELS_DIR` is honored when `REMBED_CACHE` is unset). Later starts
+reuse the cached files with no network call.
 
 **Known limitation:** every catalog model is used symmetrically — the same
 embedding function for what you store and what you search with. Asymmetric
@@ -231,11 +218,6 @@ omitted, and `search` embeds `query_text` in `dense`/`hybrid` mode when
 {"tool": "upsert", "arguments": {"collection": "docs", "id": 1, "content": "hello rostam"}}
 {"tool": "search", "arguments": {"collection": "docs", "query_text": "hello"}}
 ```
-
-The local embedder is compiled in only when `-tags localembed` is passed to
-`go build`; without it, the feature compiles out entirely — the default
-binary carries no dependency on ONNX Runtime, and setting `ROSTAM_EMBED_LOCAL`
-on a default build fails at startup naming the missing tag.
 
 ## Filters
 

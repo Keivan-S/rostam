@@ -1,53 +1,35 @@
 // SPDX-License-Identifier: Apache-2.0
-//go:build localembed
 
 package local
 
 import (
 	"context"
-	"math"
 	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/rostamlabs/rostam/semcache/localcatalog"
 )
 
-func TestMeanPoolMasksPadding(t *testing.T) {
-	// batch=1, seqLen=3, hdim=2; token 2 is padding (mask 0).
-	hidden := []float32{1, 1, 3, 3, 99, 99}
-	mask := []int64{1, 1, 0}
-	v := meanPool(hidden, mask, 0, 3, 2) // mean of tokens 0,1 => (2,2)
-	if v[0] != 2 || v[1] != 2 {
-		t.Fatalf("meanPool=%v want [2 2]", v)
+// TestModelStamp checks the scope-key stamp the wrapper adds: Model() must be
+// "local:<label>". This is folded into every cache record's scope key, so a
+// change here silently invalidates existing caches — it is worth an always-on
+// (no-network) guard even though the rest of the pipeline lives in rembed.
+func TestModelStamp(t *testing.T) {
+	e := &Embedder{label: "minilm-l6-v2"}
+	if got, want := e.Model(), "local:minilm-l6-v2"; got != want {
+		t.Fatalf("Model()=%q want %q", got, want)
 	}
 }
 
-func TestNormalizeUnitLength(t *testing.T) {
-	v := []float32{3, 4}
-	normalize(v)
-	if l := math.Sqrt(float64(v[0]*v[0] + v[1]*v[1])); math.Abs(l-1) > 1e-6 {
-		t.Fatalf("norm=%v len=%f", v, l)
-	}
-}
-
-// TestEmbedEndToEnd runs a real forward pass for every catalog model. It
-// requires ONNX Runtime installed (ROSTAM_ONNXRUNTIME_LIB) and network (or a
-// warm cache) for the model downloads, so it self-skips when the lib is absent.
-// Each model is a subtest asserting dimension, unit L2 norm, and determinism.
+// TestEmbedEndToEnd runs a real pure-Go forward pass for every catalog model.
+// rembed downloads model weights from the Hugging Face Hub on first use, so this
+// test needs network (or a warm cache) and is opt-in: set ROSTAM_LOCALEMBED_E2E=1
+// to run it. Each model is a subtest asserting dimension, unit L2 norm, and
+// determinism. Point REMBED_CACHE at a persistent dir to reuse downloads across
+// runs instead of re-fetching the multi-hundred-MB base-tier weights.
 func TestEmbedEndToEnd(t *testing.T) {
-	lib, ok := os.LookupEnv("ROSTAM_ONNXRUNTIME_LIB")
-	if !ok {
-		t.Skip("set ROSTAM_ONNXRUNTIME_LIB to run the ONNX end-to-end test")
-	}
-	// A shared, persistent cache (ROSTAM_LOCALEMBED_CACHE) lets repeated runs
-	// reuse the multi-hundred-MB base-tier downloads instead of re-fetching per
-	// subtest; unset, each subtest downloads into its own temp dir. filepath.Clean
-	// sanitizes the env-provided path (it is developer-supplied, not attacker
-	// input, but keeps gosec's taint analysis quiet).
-	var cacheRoot string
-	if v := os.Getenv("ROSTAM_LOCALEMBED_CACHE"); v != "" {
-		cacheRoot = filepath.Clean(v)
+	if os.Getenv("ROSTAM_LOCALEMBED_E2E") == "" {
+		t.Skip("set ROSTAM_LOCALEMBED_E2E=1 to run the local-embedding end-to-end test (downloads models from the Hugging Face Hub)")
 	}
 	for _, name := range localcatalog.Names() {
 		t.Run(name, func(t *testing.T) {
@@ -55,15 +37,18 @@ func TestEmbedEndToEnd(t *testing.T) {
 			if !ok {
 				t.Fatalf("Lookup(%q) failed", name)
 			}
-			root := cacheRoot
-			if root == "" {
-				root = t.TempDir()
-			}
-			e, err := NewEmbedder(context.Background(), spec, root, lib, nil)
+			e, err := New(spec.HFRepo, spec.Name, spec.Dim)
 			if err != nil {
-				t.Fatalf("NewEmbedder: %v", err)
+				t.Fatalf("New: %v", err)
 			}
 			defer func() { _ = e.Close() }()
+
+			if e.Dim() != spec.Dim {
+				t.Fatalf("Dim()=%d want %d", e.Dim(), spec.Dim)
+			}
+			if got, want := e.Model(), "local:"+spec.Name; got != want {
+				t.Fatalf("Model()=%q want %q", got, want)
+			}
 
 			vecs, err := e.Embed(context.Background(), []string{"a cat sits on the mat", "quantum chromodynamics"})
 			if err != nil {
@@ -72,7 +57,7 @@ func TestEmbedEndToEnd(t *testing.T) {
 			if len(vecs) != 2 || len(vecs[0]) != spec.Dim {
 				t.Fatalf("got %d vecs, dim %d, want 2 x %d", len(vecs), len(vecs[0]), spec.Dim)
 			}
-			// Normalized: length ~1.
+			// rembed L2-normalizes its output: |v| ~ 1.
 			var sum float64
 			for _, x := range vecs[0] {
 				sum += float64(x) * float64(x)

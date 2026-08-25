@@ -17,6 +17,12 @@ func TestEmbedderFromEnv_LocalMutualExclusion(t *testing.T) {
 	}
 }
 
-// TestEmbedderFromEnv_LocalCompiledOut lives in localembed_stub_test.go
-// (//go:build !localembed): under -tags localembed, ROSTAM_EMBED_LOCAL
-// dispatches to the real embedder, not the compiled-out stub.
+// A bare (non-catalog, non-"org/model") name is neither a catalog entry nor a
+// valid Hugging Face id, so newLocalEmbedder must reject it before touching the
+// network — no build tag involved, since local embedding is always compiled in.
+func TestEmbedderFromEnv_LocalUnknownBareName(t *testing.T) {
+	_, err := embedderFromEnv(envMap(map[string]string{"ROSTAM_EMBED_LOCAL": "not-a-real-model"}))
+	if err == nil || !strings.Contains(err.Error(), "unknown local embedding model") {
+		t.Fatalf("want unknown-model error, got %v", err)
+	}
+}

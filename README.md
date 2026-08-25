@@ -238,20 +238,20 @@ container image always includes them. `go install` includes them only when it
 builds with cgo — a native build (cgo defaults off when cross-compiling) on a
 machine with a C compiler.
 
-Local in-process embeddings (`-tags localembed`) are a cgo feature too, and need
-an ONNX Runtime shared library at runtime, so they are **not** in the pure-Go
-binaries either. Two supported ways to get them:
+Local in-process embeddings are **pure Go** ([rembed](https://github.com/rostamlabs/rembed)) —
+no cgo, no ONNX Runtime, nothing to install — so they are built into every
+binary and image. Just point at a model:
 
 ```sh
-# Opt-in container image (linux/amd64) — bundles ONNX Runtime, self-contained
 docker run -p 8080:8080 -e ROSTAM_API_KEY=secret \
-  -e ROSTAM_EMBED_LOCAL=minilm-l6-v2 -v rostam-models:/models \
-  ghcr.io/rostamlabs/rostam:localembed
-
-# Or build from source with the tag (needs ONNX Runtime >= 1.29.0 installed)
-CGO_ENABLED=1 go install -tags localembed \
-  github.com/rostamlabs/rostam/cmd/rostam-server@latest
+  -e ROSTAM_EMBED_LOCAL=minilm-l6-v2 -e REMBED_CACHE=/models -v rostam-models:/models \
+  ghcr.io/rostamlabs/rostam:latest
 ```
+
+Weights download from the Hugging Face Hub on first use into `REMBED_CACHE`
+(default the OS user cache dir); point it at a mounted volume — as above — to
+persist them across restarts. `ROSTAM_EMBED_LOCAL` also accepts any Hugging Face
+`org/model` id beyond the built-in catalog.
 
 See [Local embeddings](docs/server/mcp.md) for the model catalog and configuration.
 
@@ -513,7 +513,6 @@ Two optional build tags add cgo-only functionality, compiled out by default:
 | Tag | Enables | Requires |
 |---|---|---|
 | `-tags cuda` | GPU exact-KNN index | cgo + a CUDA toolchain |
-| `-tags localembed` | In-process ONNX embeddings for the MCP server's memory and generic vector-DB tools, no cloud API | cgo + ONNX Runtime 1.29.0+ ([docs](https://docs.rostamlabs.com/server/mcp/#local-embeddings-tags-localembed)) |
 
 ```sh
 make test    # tests           make race   # race detector

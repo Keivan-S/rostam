@@ -3,6 +3,26 @@
 Notable user-visible changes. Entries that alter existing behaviour are marked
 **Breaking** and say what to do about it.
 
+## Unreleased
+
+- **In-process local embeddings, pure Go (no cloud API, no ONNX Runtime).**
+  Rostam can generate semantic embeddings in-process via
+  [rembed](https://github.com/rostamlabs/rembed) — pure Go, no cgo, no ONNX
+  Runtime, and no build tag: it is compiled into every binary and image. Select
+  a model with `ROSTAM_EMBED_LOCAL=<name>` from a catalog of six models — the
+  384-dim `minilm-l6-v2` (default), `bge-small-en-v1.5`, `gte-small`, and the
+  768-dim `bge-base-en-v1.5`, `gte-base`, `all-mpnet-base-v2` — or pass any
+  Hugging Face `org/model` id directly. Weights download from the Hugging Face
+  Hub on first use (cache dir `REMBED_CACHE`, or the legacy
+  `ROSTAM_EMBED_MODELS_DIR`). A configured local embedder also powers the
+  generic vector-DB tools (`upsert` auto-embeds `content`; `search` embeds
+  `query_text`). See `docs/server/mcp.md`. Note: the default weight-cache
+  location is now rembed's (`REMBED_CACHE`, default the OS user cache dir)
+  rather than `~/.rostam/models`; set `REMBED_CACHE`/`ROSTAM_EMBED_MODELS_DIR`
+  to pin it. Selecting a model by its full Hugging Face id instead of its
+  catalog short name uses a distinct cache scope key, so pick one form and keep
+  it.
+
 ## v0.4.1 — 2026-08-24
 
 - **Fix the Docker image build after the module split.** The server image's
@@ -92,20 +112,6 @@ Notable user-visible changes. Entries that alter existing behaviour are marked
   | `r.vector.hybrid_text(...)` | `r.hybrid_text(...)` (flat) |
   | `r.get("k")` (KV read) / `RostamKV` | `r.kv.get("k")` — `r.get` now means `r.get(collection, id, ...)` (vector point-get) |
   | `query(prefetch=...)` on the native client | HTTP-only — raises `TransportError` on TCP; TCP callers use `recommend()` |
-
-- **Local ONNX embeddings (opt-in `-tags localembed`).** Rostam can now generate
-  semantic embeddings in-process from a catalog of downloadable models
-  (`minilm-l6-v2`, `bge-small-en-v1.5`, `gte-small`) with no cloud API. Select
-  one with `ROSTAM_EMBED_LOCAL=<name>`; weights download to `~/.rostam/models`
-  on first run and are checksum-verified. Requires ONNX Runtime installed; the
-  default build is unchanged. See `docs/server/mcp.md`.
-- **768-dim "base" tier for local embeddings.** The `-tags localembed` catalog
-  adds three higher-quality 768-dim models: `bge-base-en-v1.5`, `gte-base`, and
-  `all-mpnet-base-v2`. Select one with `ROSTAM_EMBED_LOCAL=<name>`.
-- **Prebuilt local-embedding image.** Releases now publish an opt-in
-  `ghcr.io/rostamlabs/rostam:localembed` image (linux/amd64) that bundles ONNX
-  Runtime, so local embeddings work without building from source or installing
-  ONNX Runtime yourself. The default image stays lean and ONNX-free.
 
 ## v0.3.0 — 2026-08-16
 
