@@ -88,7 +88,7 @@ func runMcpCmd(args []string) {
 	fs.StringVar(&fl.tlsKey, "tls-key", "", "client private key PEM for mTLS (-connect; requires -tls-cert)")
 	fs.StringVar(&fl.tlsServer, "tls-server-name", "", "expected server certificate name (SNI + verification) for -connect")
 	fs.BoolVar(&fl.destructive, "enable-destructive", false, "register delete/delete_by_filter tools for arbitrary collections (off by default)")
-	listModels := fs.Bool("list-embed-models", false, "print the local embedding models available with -tags localembed, then exit")
+	listModels := fs.Bool("list-embed-models", false, "print the built-in local embedding models, then exit")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
@@ -96,7 +96,7 @@ func runMcpCmd(args []string) {
 	if *listModels {
 		for _, n := range localcatalog.Names() {
 			m, _ := localcatalog.Lookup(n)
-			fmt.Printf("%-20s dim=%d pool=%s license=%s  (%s)\n", m.Name, m.Dim, m.Pooling, m.License, m.HFRepo)
+			fmt.Printf("%-20s dim=%d license=%s  (%s)\n", m.Name, m.Dim, m.License, m.HFRepo)
 		}
 		return
 	}

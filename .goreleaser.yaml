@@ -94,19 +94,20 @@ release:
     # Container (always a cgo build; authentication is required)
     docker run -p 8080:8080 -e ROSTAM_API_KEY=secret ghcr.io/rostamlabs/rostam:{{ .Tag }}
 
-    # Container with local ONNX embeddings (opt-in, linux/amd64; bundles ONNX Runtime)
+    # In-process local embeddings (pure Go, no ONNX Runtime): just set the model
+    # (REMBED_CACHE on a mounted volume persists downloaded weights across restarts)
     docker run -p 8080:8080 -e ROSTAM_API_KEY=secret \
-      -e ROSTAM_EMBED_LOCAL=minilm-l6-v2 -v rostam-models:/models \
-      ghcr.io/rostamlabs/rostam:localembed-{{ .Version }}
+      -e ROSTAM_EMBED_LOCAL=minilm-l6-v2 -e REMBED_CACHE=/models -v rostam-models:/models \
+      ghcr.io/rostamlabs/rostam:{{ .Tag }}
     ```
 
     The binaries attached below are **pure-Go builds**: everything works except
     WASM stored procedures, which return `wasm: stored procedures require a cgo
     build`. The container image always includes them. `go install` includes them
     only when it builds with cgo — a native build (cgo defaults off when
-    cross-compiling) on a machine with a C compiler. Local in-process embeddings
-    (`-tags localembed`) are likewise cgo-only and are shipped as the separate
-    `:localembed` image above, not in these binaries.
+    cross-compiling) on a machine with a C compiler. In-process local embeddings
+    (rembed) are pure Go and built into every binary and image — no build tag,
+    no ONNX Runtime, nothing to install.
 
     Verify a download against `checksums.txt`:
 

@@ -3,16 +3,9 @@
 package localcatalog
 
 import (
-	"regexp"
+	"strings"
 	"testing"
 )
-
-var hex64 = regexp.MustCompile(`^[0-9a-f]{64}$`)
-
-// resolveRev matches a Hugging Face resolve URL pinned to an immutable 40-hex
-// commit SHA (e.g. .../resolve/<sha>/...). Mutable refs like "resolve/main" or
-// "resolve/HEAD" do not match.
-var resolveRev = regexp.MustCompile(`/resolve/[0-9a-f]{40}/`)
 
 func TestCatalogIntegrity(t *testing.T) {
 	names := Names()
@@ -32,32 +25,13 @@ func TestCatalogIntegrity(t *testing.T) {
 		if m.Dim <= 0 {
 			t.Errorf("%s: Dim=%d", m.Name, m.Dim)
 		}
-		if m.OnnxURL == "" || m.VocabURL == "" {
-			t.Errorf("%s: empty URL", m.Name)
-		}
-		if !hex64.MatchString(m.OnnxSHA) || !hex64.MatchString(m.VocabSHA) {
-			t.Errorf("%s: SHA not 64-hex", m.Name)
+		// HFRepo must be a Hugging Face "org/model" id, since it is passed
+		// straight to rembed.Load.
+		if !strings.Contains(m.HFRepo, "/") {
+			t.Errorf("%s: HFRepo %q is not an org/model id", m.Name, m.HFRepo)
 		}
 		if m.License == "" {
 			t.Errorf("%s: empty license", m.Name)
-		}
-	}
-}
-
-// TestNoMutableRevisionURLs ensures every catalog artifact is pinned to an
-// immutable commit SHA rather than a mutable ref like "resolve/main" or
-// "resolve/HEAD": if upstream main moves, a fresh download would fail the
-// pinned SHA and local embedding could not start.
-func TestNoMutableRevisionURLs(t *testing.T) {
-	for _, n := range Names() {
-		m, ok := Lookup(n)
-		if !ok {
-			t.Fatalf("Names() listed %q but Lookup failed", n)
-		}
-		for _, u := range []string{m.OnnxURL, m.VocabURL} {
-			if !resolveRev.MatchString(u) {
-				t.Errorf("%s: URL not pinned to an immutable 40-hex commit SHA revision: %s", m.Name, u)
-			}
 		}
 	}
 }
