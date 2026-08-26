@@ -1,9 +1,11 @@
 name: docs
 
-# Nothing verified the docs before this: a renamed file or a stale nav entry
-# broke the site silently, and internal pages could be published by simply
-# existing under docs/. --strict turns MkDocs warnings (dead internal links,
-# missing nav targets) into a failed build.
+# A build gate. --strict turns MkDocs warnings (dead internal links, missing
+# nav targets) into a failed build, so a renamed file or a stale nav entry is
+# caught in review. Publishing is handled by the unified docs hub
+# (rostamlabs/docs), which imports this repo's docs/ and serves
+# docs.rostamlabs.com; this workflow only checks the build and notifies the hub
+# to rebuild.
 
 on:
   push:
@@ -17,12 +19,6 @@ on:
 
 permissions:
   contents: read
-
-# One publish at a time, and never cancel one midway: a half-deployed site is
-# worse than a slightly stale one.
-concurrency:
-  group: pages
-  cancel-in-progress: false
 
 jobs:
   build:
@@ -65,38 +61,10 @@ jobs:
           fi
           echo "fonts are self-hosted"
 
-      # Only carry the artifact forward for real publishes. A pull_request run
-      # still builds and runs every assertion above -- it just cannot deploy.
-      - name: Upload Pages artifact
-        if: github.event_name != 'pull_request'
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: _site
-
-  deploy:
-    name: publish to GitHub Pages
-    needs: build
-    # Never from a pull request: a fork PR must not be able to publish. Only a
-    # push to main, or an explicit manual dispatch.
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pages: write      # publish the artifact
-      id-token: write   # OIDC token deploy-pages verifies
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy
-        id: deployment
-        uses: actions/deploy-pages@v4
-
   # The unified docs hub (rostamlabs/docs) imports this repo's docs/ at build
-  # time. On a push to main, fire a repository_dispatch so the hub redeploys
-  # immediately instead of waiting for its daily schedule. (Independent of the
-  # deploy job above, which publishes this repo's own Pages site until the
-  # docs.rostamlabs.com custom domain is moved to the hub.)
+  # time and serves docs.rostamlabs.com. On a push to main, fire a
+  # repository_dispatch so the hub redeploys immediately instead of waiting for
+  # its daily schedule.
   #
   # Requires a repo secret DOCS_DISPATCH_TOKEN — a token with Contents:write on
   # rostamlabs/docs. Guarded on it, so this no-ops (never fails) when absent.
