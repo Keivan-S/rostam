@@ -91,3 +91,27 @@ jobs:
       - name: Deploy
         id: deployment
         uses: actions/deploy-pages@v4
+
+  # The unified docs hub (rostamlabs/docs) imports this repo's docs/ at build
+  # time. On a push to main, fire a repository_dispatch so the hub redeploys
+  # immediately instead of waiting for its daily schedule. (Independent of the
+  # deploy job above, which publishes this repo's own Pages site until the
+  # docs.rostamlabs.com custom domain is moved to the hub.)
+  #
+  # Requires a repo secret DOCS_DISPATCH_TOKEN — a token with Contents:write on
+  # rostamlabs/docs. Guarded on it, so this no-ops (never fails) when absent.
+  notify-hub:
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    env:
+      DOCS_DISPATCH_TOKEN: ${{ secrets.DOCS_DISPATCH_TOKEN }}
+    steps:
+      - name: Trigger docs hub rebuild
+        if: env.DOCS_DISPATCH_TOKEN != ''
+        run: |
+          curl -sf -X POST \
+            -H "Authorization: Bearer $DOCS_DISPATCH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/rostamlabs/docs/dispatches \
+            -d '{"event_type":"rebuild-docs"}'
