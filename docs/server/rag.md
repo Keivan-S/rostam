@@ -87,7 +87,7 @@ needed, works immediately after `rag ingest`. Set `-embed-url`,
 `-embed-model`, and `-embed-dim` (or the equivalent `ROSTAM_EMBED_*` env
 vars, plus `ROSTAM_EMBED_KEY` if the endpoint needs one) and retrieval
 switches to **dense+BM25 hybrid fusion** by default (see
-[Hybrid fusion](#hybrid-fusion-dense--bm25) below); `-no-hybrid` selects
+[Hybrid fusion](#hybrid-fusion-dense-bm25) below); `-no-hybrid` selects
 pure dense kNN over the embedded vectors instead.
 
 Note that ingestion and retrieval must agree: chunks embedded at ingest

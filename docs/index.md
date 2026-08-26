@@ -50,7 +50,7 @@ are hand-vectorized (AVX2 with scalar fallback).
 |---|---|
 | Add vector search to a Go program (no server) | [Quickstart → Embedded vector search](quickstart.md#embedded-vector-search-go-library) |
 | Use a fast in-process KV cache / store in Go | [Quickstart → Embedded key-value store](quickstart.md#embedded-key-value-store-go-library) |
-| Run Rostam as a server and talk REST/gRPC | [Quickstart → Run the server](quickstart.md#run-the-server) |
+| Run Rostam as a server and talk REST/gRPC | [Quickstart → Run it](quickstart.md#run-it) |
 | Use Rostam from Python | [Python client](api/python.md) |
 | Run a replicated multi-node cluster | [Clustering](server/clustering.md) |
 | Understand how it all fits together | [Architecture](concepts/architecture.md) |
