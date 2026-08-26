@@ -11,7 +11,7 @@ zero generation cost, no round trip. Everything else (every other `/v1/*`
 route, and any chat request the cache can't safely answer or that doesn't
 match) is forwarded to the real upstream verbatim.
 
-With no embedding endpoint configured it still does useful work out of the
+With no embedder configured it still does useful work out of the
 box: exact byte-identical prompts are cached and served locally, no API key
 or embedding model required. Point it at an embedder and it upgrades to
 semantic matching — near-duplicate prompts (different whitespace, minor
@@ -55,9 +55,12 @@ The mode is decided at startup from whether an embedder is configured — see
   with a deterministic stub embedder at a `0.999` cosine-similarity floor, so
   only a byte-identical prompt (within the same scope) is ever treated as a
   hit.
-- **Semantic mode** (`ROSTAM_EMBED_ENDPOINT` set): prompts are matched with a
-  real hosted embedder at a `0.97` floor by default, so a paraphrased or
-  lightly-edited prompt can still hit the cache.
+- **Semantic mode** (`ROSTAM_EMBED_ENDPOINT` **or** `ROSTAM_EMBED_LOCAL` set):
+  prompts are matched with a real embedder at a `0.97` floor by default, so a
+  paraphrased or lightly-edited prompt can still hit the cache. The embedder is
+  either a hosted OpenAI-compatible endpoint or the in-process, pure-Go local
+  embedder ([`ROSTAM_EMBED_LOCAL`](mcp.md#local-embeddings)) — the latter runs
+  semantic caching with **no endpoint and no API key**.
 
 `-threshold` overrides either mode's default floor.
 
@@ -116,15 +119,26 @@ same `ROSTAM_EMBED_*` variables:
 
 | Variable | Required | Meaning |
 |---|---|---|
-| `ROSTAM_EMBED_ENDPOINT` | trigger | OpenAI-compatible `/embeddings` URL. Unset (with the other three also unset) means exact-match mode. |
+| `ROSTAM_EMBED_LOCAL` | trigger | In-process, pure-Go local embedder — a catalog name (`minilm-l6-v2`, …) or any Hugging Face `org/model` id. No endpoint, no API key. See [Local embeddings](mcp.md#local-embeddings). Mutually exclusive with `ROSTAM_EMBED_ENDPOINT`. |
+| `ROSTAM_EMBED_ENDPOINT` | trigger | OpenAI-compatible `/embeddings` URL (hosted embedder). |
 | `ROSTAM_EMBED_MODEL` | if endpoint set | Model id sent to the endpoint. |
 | `ROSTAM_EMBED_DIM` | if endpoint set | Output embedding dimension, as an integer. |
 | `ROSTAM_EMBED_API_KEY` | optional | Bearer token for the endpoint (local endpoints like Ollama typically don't need one). |
 
-All four unset is the zero-config default: exact-match caching, no embedding
-API key required. Setting `ROSTAM_EMBED_ENDPOINT` without
-`ROSTAM_EMBED_MODEL` or `ROSTAM_EMBED_DIM` fails at startup naming the exact
-missing variable.
+With neither trigger set, the zero-config default is exact-match caching, no
+embedding API key required. `ROSTAM_EMBED_LOCAL` and `ROSTAM_EMBED_ENDPOINT`
+are mutually exclusive (setting both fails at startup); setting
+`ROSTAM_EMBED_ENDPOINT` without `ROSTAM_EMBED_MODEL` or `ROSTAM_EMBED_DIM`
+fails at startup naming the exact missing variable.
+
+Example: the in-process local embedder — semantic caching with no cloud
+service or key (weights download from the Hugging Face Hub on first use; see
+[Local embeddings](mcp.md#local-embeddings) for the model catalog and
+`REMBED_CACHE`):
+
+```sh
+ROSTAM_EMBED_LOCAL=minilm-l6-v2 rostam-server llm-proxy
+```
 
 Example: a local Ollama embedding model for semantic matching:
 

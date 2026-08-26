@@ -100,16 +100,19 @@ command-line arguments baked into `args`.
 
 | Variable | Required | Meaning |
 |---|---|---|
-| `ROSTAM_EMBED_ENDPOINT` | trigger | OpenAI-compatible `/embeddings` URL. Unset (with the other three also unset) means BM25-only mode. |
+| `ROSTAM_EMBED_LOCAL` | trigger | In-process, pure-Go local embedder — a catalog name (`minilm-l6-v2`, …) or any Hugging Face `org/model` id; no endpoint or API key. See [Local embeddings](#local-embeddings) below. Mutually exclusive with `ROSTAM_EMBED_ENDPOINT`. |
+| `ROSTAM_EMBED_ENDPOINT` | trigger | OpenAI-compatible `/embeddings` URL (hosted embedder). |
 | `ROSTAM_EMBED_MODEL` | if endpoint set | Model id sent to the endpoint. |
 | `ROSTAM_EMBED_DIM` | if endpoint set | Output embedding dimension, as an integer. |
 | `ROSTAM_EMBED_API_KEY` | optional | Bearer token for the endpoint (local endpoints like Ollama typically don't need one). |
 
-All four unset is the zero-config default: `remember`/`recall` and the
-generic `search` tool run on BM25 full-text alone. Setting
-`ROSTAM_EMBED_ENDPOINT` without `ROSTAM_EMBED_MODEL` or `ROSTAM_EMBED_DIM`
-fails at startup with a message naming the exact missing variable — never a
-silent fall-back to BM25-only.
+With neither trigger set, the zero-config default is BM25 full-text alone:
+`remember`/`recall` and the generic `search` tool still work, on keyword
+matching. `ROSTAM_EMBED_LOCAL` and `ROSTAM_EMBED_ENDPOINT` are mutually
+exclusive (setting both fails at startup); setting `ROSTAM_EMBED_ENDPOINT`
+without `ROSTAM_EMBED_MODEL` or `ROSTAM_EMBED_DIM` fails at startup with a
+message naming the exact missing variable — never a silent fall-back to
+BM25-only.
 
 Example: a local Ollama embedding model, wired through the Claude Desktop
 config from above:
