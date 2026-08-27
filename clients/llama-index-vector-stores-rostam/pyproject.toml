@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "llama-index-vector-stores-rostam"
+version = "0.1.0"
+description = "LlamaIndex vector store integration for the Rostam vector database"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "Apache-2.0"
+authors = [{ name = "RostamLabs" }]
+keywords = ["llama-index", "llamaindex", "vector", "database", "rostam", "rag"]
+dependencies = [
+  "rostam-client>=0.2",
+  "llama-index-core>=0.10",
+]
+
+[project.urls]
+Homepage = "https://rostamlabs.com"
+Documentation = "https://docs.rostamlabs.com/"
+Repository = "https://github.com/rostamlabs/rostam"
+
+[tool.hatch.build.targets.wheel]
+packages = ["llama_index"]

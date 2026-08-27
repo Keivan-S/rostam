@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "langchain-rostam"
+version = "0.1.0"
+description = "LangChain VectorStore integration for the Rostam vector database"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "Apache-2.0"
+authors = [{ name = "RostamLabs" }]
+keywords = ["langchain", "vector", "database", "rostam", "embeddings", "rag"]
+dependencies = [
+  "rostam-client>=0.2",
+  "langchain-core>=0.2",
+]
+
+[project.urls]
+Homepage = "https://rostamlabs.com"
+Documentation = "https://docs.rostamlabs.com/"
+Repository = "https://github.com/rostamlabs/rostam"
+
+[tool.hatch.build.targets.wheel]
+packages = ["langchain_rostam"]
