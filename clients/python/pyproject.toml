@@ -28,12 +28,12 @@ langchain = ["langchain-core>=0.2"]
 llamaindex = ["llama-index-core>=0.10"]
 haystack = ["haystack-ai>=2.0"]
 mem0 = ["mem0ai>=0.1"]
-semantic-router = ["semantic-router>=0.1"]
+semantic-router = ["semantic-router>=0.1.15"]
 crewai = ["crewai>=0.70"]
 dspy = ["dspy>=2.5"]
 dev = [
   "langchain-core>=0.2", "llama-index-core>=0.10", "haystack-ai>=2.0",
-  "mem0ai>=0.1", "semantic-router>=0.1", "crewai>=0.70", "dspy>=2.5",
+  "mem0ai>=0.1", "semantic-router>=0.1.15", "crewai>=0.70", "dspy>=2.5",
 ]
 # `test` pulls the adapter deps (so the framework adapter tests run instead of
 # skipping) plus pytest itself, for a single reproducible CI install.

@@ -113,6 +113,16 @@ class RostamRetriever(dspy.Module):
         texts = list(texts)
         if not texts:
             return []
+        if embeddings is not None and len(embeddings) != len(texts):
+            raise ValueError(
+                f"embeddings length ({len(embeddings)}) must match texts length ({len(texts)})"
+            )
+        if ids is not None and len(ids) != len(texts):
+            raise ValueError(f"ids length ({len(ids)}) must match texts length ({len(texts)})")
+        if metadatas is not None and len(metadatas) != len(texts):
+            raise ValueError(
+                f"metadatas length ({len(metadatas)}) must match texts length ({len(texts)})"
+            )
         vectors = list(embeddings) if embeddings is not None else [self._embedder(t) for t in texts]
         if vectors:
             self._ensure_collection(len(vectors[0]))
@@ -135,7 +145,11 @@ class RostamRetriever(dspy.Module):
         try:
             self._client.create_collection(self._collection, dim, metric=self._metric)
         except RostamError as e:
-            # Already-exists is fine; anything else propagates.
-            if "exist" not in (e.message or "").lower():
+            # Already-exists is fine; anything else propagates. Match
+            # "already exist" (not the looser "exist"), so an unrelated
+            # "does not exist" error can't be swallowed here and mark the
+            # collection created when it wasn't (the later upsert would then
+            # fail with a confusing error).
+            if "already exist" not in (e.message or "").lower():
                 raise
         self._created = True

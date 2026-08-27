@@ -87,6 +87,63 @@ class SemanticRouterIndexTest(unittest.TestCase):
         self.index.delete_all()
         self.assertEqual(self.index.describe().vectors, 0)
 
+    def test_add_creates_collection_after_dimensions_preset(self):
+        # BaseRouter.__init__ can set index.dimensions before add() is ever
+        # called; _ensure_collection must still create the backing collection
+        # on the first add() rather than early-returning on dimensions alone.
+        self.index.dimensions = 3
+        self.index.add(
+            embeddings=[[1.0, 0.0, 0.0]],
+            routes=["greeting"],
+            utterances=["hello"],
+        )
+        scores, route_names = self.index.query([1.0, 0.0, 0.0], top_k=1)
+        self.assertEqual(route_names, ["greeting"])
+
+    def test_query_score_is_cosine_similarity(self):
+        from rostam.semantic_router import RostamIndex
+
+        cos_index = RostamIndex(client=self.client, collection="sr_cos", metric="cosine")
+        Rostam(self.fake.url).create_collection("sr_cos", dim=3, metric="cosine")
+        cos_index.add(
+            embeddings=[[1.0, 0.0, 0.0]],
+            routes=["greeting"],
+            utterances=["hello"],
+        )
+        scores, route_names = cos_index.query([1.0, 0.0, 0.0], top_k=1)
+        # The fake store reports distance=0.0 for an identical vector, so the
+        # 1.0 - distance conversion yields a perfect cosine-similarity score.
+        self.assertAlmostEqual(scores[0], 1.0)
+
+    def test_get_utterances_round_trip(self):
+        self.index.add(
+            embeddings=[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            routes=["greeting", "farewell"],
+            utterances=["hello", "goodbye"],
+            metadata_list=[{"lang": "en"}, {"lang": "en"}],
+        )
+        utterances = self.index.get_utterances()
+        self.assertEqual(
+            sorted((u.route, u.utterance) for u in utterances),
+            [("farewell", "goodbye"), ("greeting", "hello")],
+        )
+
+    def test_get_utterances_include_metadata(self):
+        self.index.add(
+            embeddings=[[1.0, 0.0, 0.0]],
+            routes=["greeting"],
+            utterances=["hello"],
+            metadata_list=[{"lang": "en"}],
+        )
+        [utt] = self.index.get_utterances(include_metadata=True)
+        self.assertEqual(utt.route, "greeting")
+        self.assertEqual(utt.utterance, "hello")
+        self.assertEqual(utt.metadata.get("lang"), "en")
+        self.assertNotIn("route", utt.metadata)
+
+    def test_get_utterances_empty_before_any_add(self):
+        self.assertEqual(self.index.get_utterances(), [])
+
 
 if __name__ == "__main__":
     unittest.main()

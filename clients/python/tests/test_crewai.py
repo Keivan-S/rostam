@@ -3,7 +3,7 @@ store."""
 
 import unittest
 
-from rostam import Rostam
+from rostam import Rostam, RostamError
 
 try:
     import crewai  # noqa: F401
@@ -74,6 +74,51 @@ class CrewAIStorageTest(unittest.TestCase):
         self.storage.save("same text", {})
         self.storage.save("same text", {})
         self.assertEqual(len(self.client.scroll("mem")), 2)
+
+    def test_search_before_any_save_on_auto_create_store(self):
+        from rostam.crewai import RostamStorage
+
+        # A fresh collection name that no save() has touched yet: search()
+        # must create the collection itself instead of failing against one
+        # that was never created.
+        storage = RostamStorage(self.client, "mem_fresh", embedder=_embed, metric="l2")
+        self.assertEqual(storage.search("anything", limit=3, score_threshold=0.0), [])
+
+    def test_search_with_filter(self):
+        self.storage.save("alpha fact", {"topic": "cats"})
+        self.storage.save("beta fact", {"topic": "dogs"})
+
+        hits = self.storage.search("alpha fact", limit=5, filter={"topic": "cats"}, score_threshold=0.0)
+        self.assertEqual([h["context"] for h in hits], ["alpha fact"])
+
+    def test_reset_propagates_scroll_error(self):
+        def boom(*a, **kw):
+            raise RostamError("internal error: boom")
+
+        self.client.scroll = boom
+        with self.assertRaises(RostamError):
+            self.storage.reset()
+
+    def test_reset_propagates_delete_error(self):
+        self.storage.save("alpha fact", {"topic": "cats"})
+        self.storage.save("beta fact", {"topic": "dogs"})
+
+        calls = []
+        orig_delete = self.client.delete
+
+        def flaky_delete(collection, pid):
+            calls.append(pid)
+            if len(calls) == 2:
+                raise RostamError("internal error: delete failed")
+            return orig_delete(collection, pid)
+
+        self.client.delete = flaky_delete
+        try:
+            with self.assertRaises(RostamError):
+                self.storage.reset()
+        finally:
+            self.client.delete = orig_delete
+        self.assertEqual(len(calls), 2)
 
 
 if __name__ == "__main__":

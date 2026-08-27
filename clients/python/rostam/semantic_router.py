@@ -28,7 +28,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from semantic_router.index.base import BaseIndex, IndexConfig
-from pydantic import Field
+from semantic_router.schema import Utterance
+from pydantic import Field, PrivateAttr
 
 from . import filters as f
 from ._ids import to_uint64
@@ -44,11 +45,18 @@ class RostamIndex(BaseIndex):
     collection: str = "semantic-router"
     auto_create: bool = True
     metric: str = "cosine"
+    # Tracks whether this index has created its backing collection, kept
+    # separate from ``dimensions`` because ``BaseRouter.__init__`` can set
+    # ``dimensions`` on the index before ``add()`` ever runs -- gating
+    # creation on ``dimensions is not None`` would then skip create_collection
+    # forever and every upsert would fail against a collection that never
+    # exists.
+    _created: bool = PrivateAttr(default=False)
 
     def _ensure_collection(self, dim: int) -> None:
-        """Record the embedding dim and (optionally) create the collection on
-        the first ``add``. No-op on later calls."""
-        if self.dimensions is not None:
+        """Create the collection on the first ``add`` (once). No-op on later
+        calls."""
+        if self._created:
             return
         if self.auto_create:
             try:
@@ -57,6 +65,7 @@ class RostamIndex(BaseIndex):
                 if "exist" not in (e.message or "").lower():
                     raise
         self.dimensions = dim
+        self._created = True
 
     def add(
         self,
@@ -84,9 +93,16 @@ class RostamIndex(BaseIndex):
         route_filter: Optional[List[str]] = None,
         sparse_vector: Optional[Any] = None,
     ) -> Tuple[np.ndarray, List[str]]:
+        """Note: this adapter assumes the collection's configured metric is
+        ``cosine`` (this class's default). Rostam returns
+        ``distance = 1 - cosine_similarity`` for that metric, and Semantic
+        Router's route thresholds are compared against cosine similarity, so
+        the score returned here is ``1.0 - distance``. Using a non-cosine
+        ``metric`` will make these scores meaningless against Semantic
+        Router's threshold semantics."""
         flt = f.in_("route", route_filter) if route_filter else None
         hits = self.client.search_docs(self.collection, [float(x) for x in vector], top_k, filter=flt)
-        scores = np.array([1.0 / (1.0 + max(h.distance, 0.0)) for h in hits])
+        scores = np.array([1.0 - h.distance for h in hits])
         route_names = [h.metadata.get("route", "") for h in hits]
         return scores, route_names
 
@@ -113,3 +129,27 @@ class RostamIndex(BaseIndex):
 
     def is_ready(self) -> bool:
         return self.dimensions is not None
+
+    def get_utterances(self, include_metadata: bool = False) -> List[Utterance]:
+        """Reconstruct the persisted (route, utterance) pairs from the
+        collection.
+
+        The inherited ``BaseIndex.get_utterances`` returns ``[]`` because it
+        reads ``self.index``, which this adapter never sets -- leaving
+        ``RouterConfig.from_index``/``auto_sync``/route-diff operations to
+        treat a populated collection as empty. Scroll the collection instead
+        and rebuild an ``Utterance`` per point from its ``content`` (the
+        stored utterance text) and ``metadata["route"]``."""
+        try:
+            docs = self.client.scroll(self.collection)
+        except RostamError:
+            return []
+        out: List[Utterance] = []
+        for d in docs:
+            meta = dict(d.metadata)
+            route = meta.pop("route", "")
+            kwargs: Dict[str, Any] = {"route": route, "utterance": d.content}
+            if include_metadata:
+                kwargs["metadata"] = meta
+            out.append(Utterance(**kwargs))
+        return out

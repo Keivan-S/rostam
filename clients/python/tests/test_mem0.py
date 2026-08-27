@@ -96,6 +96,27 @@ class Mem0AdapterTest(unittest.TestCase):
         results, _ = self.store.list()
         self.assertEqual(sorted(r.id for r in results), ["m1", "m2"])
 
+    def test_search_score_uses_cosine_formula_for_cosine_metric(self):
+        from rostam.mem0 import RostamVectorStore
+
+        cos_store = RostamVectorStore(
+            collection_name="mem0_cos", embedding_model_dims=3, url=self.fake.url, metric="cosine",
+        )
+        cos_store.insert(vectors=[[0.0, 0.0, 0.0]], payloads=[{"data": "alpha"}], ids=["m1"])
+        hits = cos_store.search("ignored", vectors=[0.0, 0.0, 0.0], top_k=1)
+        # The fake store reports L2 distance=0.0 for an identical vector, so
+        # the cosine formula (max(0, 1 - distance)) must yield exactly 1.0 --
+        # the same input that the (wrong) L2 formula would also map to 1.0,
+        # so the divergence is checked below with a non-zero distance.
+        self.assertAlmostEqual(hits[0].score, 1.0)
+
+        cos_store.insert(vectors=[[1.0, 0.0, 0.0]], payloads=[{"data": "beta"}], ids=["m2"])
+        hits = cos_store.search("ignored", vectors=[[0.0, 0.0, 0.0]], top_k=2)
+        far = next(h for h in hits if h.id == "m2")
+        # distance (L2) is 1.0 here; cosine formula: max(0, 1 - 1.0) = 0.0.
+        # The old always-L2 formula would instead have produced 1/(1+1) = 0.5.
+        self.assertAlmostEqual(far.score, 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()

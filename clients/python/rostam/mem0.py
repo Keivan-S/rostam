@@ -192,5 +192,19 @@ class RostamVectorStore(VectorStoreBase):
     def _to_output(self, d, scored: bool = False) -> OutputData:
         meta = dict(d.metadata)
         ext_id = meta.pop(_MEM0_ID, str(d.id))
-        score = (1.0 / (1.0 + max(d.distance, 0.0))) if scored else None
+        score = self._score(d.distance) if scored else None
         return OutputData(id=ext_id, score=score, payload=meta)
+
+    def _score(self, distance: float) -> float:
+        """Convert Rostam's ``distance`` to Mem0's higher-is-better similarity
+        score, per this collection's configured metric — mirroring the
+        conversion mem0/vector_stores/base.py documents for its adapters:
+        cosine -> ``max(0.0, 1.0 - distance)``, l2 -> ``1.0 / (1.0 + distance)``,
+        dot -> the raw (already higher-is-better) value. Rostam's dot metric
+        returns the *negated* dot product as ``distance``, so the raw value is
+        ``-distance``."""
+        if self._metric == "cosine":
+            return max(0.0, 1.0 - distance)
+        if self._metric == "dot":
+            return -distance
+        return 1.0 / (1.0 + max(distance, 0.0))

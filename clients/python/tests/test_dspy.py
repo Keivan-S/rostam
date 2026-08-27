@@ -88,6 +88,21 @@ class DSPyAdapterTest(unittest.TestCase):
         out = r("hello world")
         self.assertEqual(out.passages[0], "hello world")
 
+    def test_index_rejects_mismatched_embeddings_length(self):
+        with self.assertRaises(ValueError):
+            self.retriever.index(["one", "two"], embeddings=[])
+        # Nothing should have been stored: a mismatched batch must not
+        # silently truncate via zip and lose data.
+        self.assertEqual(len(self.client.scroll("dspy")), 0)
+
+    def test_index_rejects_mismatched_ids_length(self):
+        with self.assertRaises(ValueError):
+            self.retriever.index(["one", "two"], ids=["only-one"])
+
+    def test_index_rejects_mismatched_metadatas_length(self):
+        with self.assertRaises(ValueError):
+            self.retriever.index(["one", "two"], metadatas=[{"a": 1}])
+
 
 if __name__ == "__main__":
     unittest.main()
