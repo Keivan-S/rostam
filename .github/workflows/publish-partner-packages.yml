@@ -1,0 +1,72 @@
+name: publish-partner-packages
+
+# Publishes the framework partner packages to PyPI:
+#   - langchain-rostam                     (clients/langchain-rostam)
+#   - llama-index-vector-stores-rostam     (clients/llama-index-vector-stores-rostam)
+#
+# Trigger: push a tag of the form `partners-v<version>` (e.g. partners-v0.1.0),
+# or run the workflow manually from the Actions tab. Each package is built at
+# whatever version its own pyproject.toml declares, so bump those before tagging.
+#
+# Auth uses PyPI Trusted Publishing (OIDC) — no API token stored in the repo,
+# same as publish-python.yml. One-time setup on PyPI, done ONCE PER PROJECT
+# NAME (these are new projects, so register a *pending* publisher for each):
+#   PyPI -> Account settings -> Publishing -> Add a new pending publisher
+#     Project name:  langchain-rostam         (and again: llama-index-vector-stores-rostam)
+#     Owner:         rostamlabs
+#     Repository:    rostam
+#     Workflow name: publish-partner-packages.yml
+#     Environment:   pypi
+# After the first successful publish the pending publisher becomes a normal one.
+# To fall back to a token instead, set a PYPI_API_TOKEN secret and pass
+# `password:` to the publish step.
+
+on:
+  push:
+    tags: ["partners-v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build ${{ matrix.package }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        package: [langchain-rostam, llama-index-vector-stores-rostam]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Build distribution
+        working-directory: clients/${{ matrix.package }}
+        run: |
+          python -m pip install --upgrade build twine
+          python -m build
+          python -m twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.package }}
+          path: clients/${{ matrix.package }}/dist/*
+
+  publish:
+    name: publish ${{ matrix.package }} to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write  # OIDC token for Trusted Publishing
+    strategy:
+      matrix:
+        package: [langchain-rostam, llama-index-vector-stores-rostam]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist-${{ matrix.package }}
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
