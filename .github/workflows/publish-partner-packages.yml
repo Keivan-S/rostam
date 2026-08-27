@@ -9,15 +9,18 @@ name: publish-partner-packages
 # whatever version its own pyproject.toml declares, so bump those before tagging.
 #
 # Auth uses PyPI Trusted Publishing (OIDC) — no API token stored in the repo,
-# same as publish-python.yml. One-time setup on PyPI, done ONCE PER PROJECT
-# NAME (these are new projects, so register a *pending* publisher for each):
+# same as publish-python.yml. Each package uses its OWN environment, because a
+# *pending* trusted publisher is unique per (repo, workflow, environment): two
+# packages sharing one environment collide on registration. One-time setup on
+# PyPI, done ONCE PER PROJECT NAME (register a *pending* publisher for each):
 #   PyPI -> Account settings -> Publishing -> Add a new pending publisher
-#     Project name:  langchain-rostam         (and again: llama-index-vector-stores-rostam)
-#     Owner:         rostamlabs
-#     Repository:    rostam
-#     Workflow name: publish-partner-packages.yml
-#     Environment:   pypi
-# After the first successful publish the pending publisher becomes a normal one.
+#     Project: langchain-rostam
+#       Owner: rostamlabs  Repo: rostam
+#       Workflow: publish-partner-packages.yml   Environment: pypi-langchain-rostam
+#     Project: llama-index-vector-stores-rostam
+#       Owner: rostamlabs  Repo: rostam
+#       Workflow: publish-partner-packages.yml   Environment: pypi-llama-index-vector-stores-rostam
+# After the first successful publish each pending publisher becomes a normal one.
 # To fall back to a token instead, set a PYPI_API_TOKEN secret and pass
 # `password:` to the publish step.
 
@@ -56,7 +59,9 @@ jobs:
     name: publish ${{ matrix.package }} to PyPI
     needs: build
     runs-on: ubuntu-latest
-    environment: pypi
+    # Per-package environment so each project's pending trusted publisher has a
+    # distinct (repo, workflow, environment) — pending publishers can't share one.
+    environment: pypi-${{ matrix.package }}
     permissions:
       id-token: write  # OIDC token for Trusted Publishing
     strategy:
