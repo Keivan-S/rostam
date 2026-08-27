@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "rostam-client"
-version = "0.2.0"
+version = "0.3.0"
 description = "Dependency-free Python client and LangChain adapter for the Rostam vector store"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -27,9 +27,16 @@ dependencies = []  # the core client is standard-library only
 langchain = ["langchain-core>=0.2"]
 llamaindex = ["llama-index-core>=0.10"]
 haystack = ["haystack-ai>=2.0"]
-dev = ["langchain-core>=0.2", "llama-index-core>=0.10", "haystack-ai>=2.0"]
-# `test` pulls the adapter deps (so the langchain/llamaindex/haystack tests run
-# instead of skipping) plus pytest itself, for a single reproducible CI install.
+mem0 = ["mem0ai>=0.1"]
+semantic-router = ["semantic-router>=0.1.15"]
+crewai = ["crewai>=0.70"]
+dspy = ["dspy>=2.5"]
+dev = [
+  "langchain-core>=0.2", "llama-index-core>=0.10", "haystack-ai>=2.0",
+  "mem0ai>=0.1", "semantic-router>=0.1.15", "crewai>=0.70", "dspy>=2.5",
+]
+# `test` pulls the adapter deps (so the framework adapter tests run instead of
+# skipping) plus pytest itself, for a single reproducible CI install.
 test = ["rostam-client[dev]", "pytest>=7"]
 
 [project.urls]

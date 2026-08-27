@@ -35,11 +35,26 @@ def _match(flt, meta):
     if field not in meta:
         return False
     got, want = _dec(meta[field]), _dec(flt["value"])
-    return {
-        "eq": got == want, "ne": got != want, "gt": got > want, "gte": got >= want,
-        "lt": got < want, "lte": got <= want, "in": got in (want or []),
-        "contains": want in (got or []),
-    }.get(op, False)
+    # Evaluate lazily: a single dict literal would compute every comparison
+    # eagerly, and an "in"/"contains" op (list-valued want) then raises
+    # TypeError on the unrelated gt/lt branches (str vs list).
+    if op == "eq":
+        return got == want
+    if op == "ne":
+        return got != want
+    if op == "gt":
+        return got > want
+    if op == "gte":
+        return got >= want
+    if op == "lt":
+        return got < want
+    if op == "lte":
+        return got <= want
+    if op == "in":
+        return got in (want or [])
+    if op == "contains":
+        return want in (got or [])
+    return False
 
 
 def _l2(a, b):
