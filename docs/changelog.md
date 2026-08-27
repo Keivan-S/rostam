@@ -5,6 +5,14 @@ Notable user-visible changes. Entries that alter existing behaviour are marked
 
 ## Unreleased
 
+- **Python client: Mem0, Semantic Router, CrewAI, and DSPy adapters
+  (`rostam-client` 0.3.0).** Framework integrations join the existing LangChain,
+  LlamaIndex, and Haystack adapters, each an optional in-package submodule behind
+  its own extra so the base `import rostam` stays standard-library only:
+  `rostam.mem0` (`RostamVectorStore`, a Mem0 vector-store provider),
+  `rostam.semantic_router` (`RostamIndex`), `rostam.crewai` (`RostamStorage`
+  memory backend), and `rostam.dspy` (`RostamRetriever`). Install with the
+  matching extra, e.g. `pip install rostam-client[mem0]`.
 - **In-process local embeddings, pure Go (no cloud API, no ONNX Runtime).**
   Rostam can generate semantic embeddings in-process via
   [rembed](https://github.com/rostamlabs/rembed) — pure Go, no cgo, no ONNX
