@@ -131,10 +131,10 @@ func (h *hnsw) SavePersist(metaPath string) error {
 
 	// Flush the mmap'd vectors and graph so the sidecar we write references
 	// durable bytes.
-	if err := syncVecMmap(h.arena.mmapRegion); err != nil {
+	if err := syncVecMmap(h.arena.mmapF, h.arena.mmapRegion); err != nil {
 		return err
 	}
-	if err := syncVecMmap(h.graphRegion); err != nil {
+	if err := syncVecMmap(h.graphMmapF, h.graphRegion); err != nil {
 		return err
 	}
 

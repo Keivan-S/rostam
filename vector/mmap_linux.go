@@ -53,7 +53,12 @@ func growVecMmap(f *os.File, old []byte, newSize int64) ([]byte, error) {
 
 // syncVecMmap flushes dirty pages of region to its backing file, so a
 // subsequently-written sidecar can safely reference the mmap'd contents.
-func syncVecMmap(region []byte) error {
+//
+// The file is accepted but unused here: MS_SYNC already returns only once the
+// pages are on the disk. Windows needs the handle for the second half of that
+// same guarantee (see mmap_windows.go), and one signature across the platforms
+// keeps the difference inside these files instead of at every call site.
+func syncVecMmap(_ *os.File, region []byte) error {
 	if len(region) == 0 {
 		return nil
 	}
@@ -75,6 +80,20 @@ func closeVecMmap(f *os.File, region []byte) error {
 		if err := f.Close(); err != nil {
 			return fmt.Errorf("vector: close: %w", err)
 		}
+	}
+	return nil
+}
+
+// unmapVecMmap releases a mapping made by openVecMmap/growVecMmap WITHOUT
+// closing the file — used when a slab migrates from the legacy whole-file
+// mapping onto a reservation, where the file stays but its old mapping must go.
+func unmapVecMmap(region []byte) error {
+	if len(region) == 0 {
+		return nil
+	}
+	_ = unix.Msync(region, unix.MS_SYNC)
+	if err := unix.Munmap(region); err != nil {
+		return fmt.Errorf("vector: munmap (migrate): %w", err)
 	}
 	return nil
 }

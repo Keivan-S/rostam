@@ -298,7 +298,7 @@ func (ix *ivf) savePersist(metaPath string) error {
 		if a.mmapF == nil {
 			return ErrPersistUnsupported
 		}
-		if err := syncVecMmap(a.mmapRegion); err != nil {
+		if err := syncVecMmap(a.mmapF, a.mmapRegion); err != nil {
 			return err
 		}
 	}

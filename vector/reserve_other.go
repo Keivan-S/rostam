@@ -9,9 +9,10 @@ import "os"
 // not available: every non-Linux target, plus 32-bit Linux, where the scheme's
 // free-address-space premise does not hold (see reserve_linux.go's build tag).
 // Every slab keeps the copy/remap growth path it had before — reserve.go's point
-// is that a reservation is an optimization, never a requirement. On non-Linux
-// this only affects heap-backed slabs (mmap storage is Linux-only, per
-// mmap_other.go); on 32-bit Linux it affects both, and both stay correct.
+// is that a reservation is an optimization, never a requirement. Where mmap
+// storage is unavailable (mmap_other.go) this only affects heap-backed slabs;
+// on Windows and 32-bit Linux, which do have mmap storage, it affects both, and
+// both stay correct.
 type slabReservation struct{}
 
 // slabReservationsSupported is false here, so tests that only mean something with
@@ -31,5 +32,3 @@ func (r *slabReservation) region() []byte { return nil }
 func (r *slabReservation) sync() error { return nil }
 
 func (r *slabReservation) release() error { return nil }
-
-func unmapVecMmap(_ []byte) error { return nil }

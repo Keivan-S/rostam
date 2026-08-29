@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//go:build !linux
+//go:build !linux && !windows
 
 package vector
 
@@ -20,6 +20,8 @@ func growVecMmap(_ *os.File, _ []byte, _ int64) ([]byte, error) {
 	return nil, errMmapUnsupported
 }
 
-func syncVecMmap(_ []byte) error { return errMmapUnsupported }
+func syncVecMmap(_ *os.File, _ []byte) error { return errMmapUnsupported }
 
 func closeVecMmap(_ *os.File, _ []byte) error { return nil }
+
+func unmapVecMmap(_ []byte) error { return nil }
