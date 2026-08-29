@@ -283,6 +283,40 @@ jobs:
           echo "working tree unchanged by the test run"
 
 
+  test-windows:
+    name: storage tests (windows/amd64)
+    runs-on: windows-latest
+    env:
+      # Pure Go: wasmtime is the only cgo dependency and none of the packages
+      # below reach it, so there is no C toolchain to arrange on the runner.
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: go build ./...
+
+      # Windows is the only platform besides Linux that maps shard and slab files
+      # (cache/mmap_windows.go, vector/mmap_windows.go), and a mapping bug there
+      # is invisible to every other lane: the cross-compile matrix builds
+      # windows/amd64 but never runs it, so the four persistence test files that
+      # used to be linux-only would compile and never execute. These three
+      # packages are the whole path a Windows user's data travels — the shard
+      # files, the collections on top of them, and the MCP memory store that
+      # reopens both.
+      #
+      # `go vet ./...` is deliberately not run here: the one conversion a file
+      # mapping cannot avoid (MapViewOfFile hands back a uintptr, which has to
+      # become a *byte) is exactly what vet's unsafeptr check reports, and it has
+      # no way to express that an OS mapping address is not a Go pointer. The
+      # ubuntu lane still vets everything that is not windows-tagged.
+      - name: Test (storage + memory packages)
+        run: go test -count=1 -timeout 30m ./cache/... ./mcp/...
+
   cgo-disabled-build:
     name: cgo-disabled build
     runs-on: ubuntu-latest
