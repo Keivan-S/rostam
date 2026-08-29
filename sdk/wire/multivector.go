@@ -381,7 +381,7 @@ func decodeMVAddArgsN(args []byte) (name string, docID uint64, tokens [][]float3
 	}
 	mlen := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
-	if len(args) < off+mlen {
+	if mlen < 0 || len(args)-off < mlen {
 		return "", 0, nil, nil, 0, ErrVectorArgsTruncated
 	}
 	if mlen > 0 {
@@ -680,7 +680,7 @@ func DecodeMVAddArgsVersionedKeyExpiresSparse(args []byte) (name string, docID u
 			}
 			kl := int(binary.BigEndian.Uint32(args[off:]))
 			off += 4
-			if len(args) < off+kl+8 {
+			if kl < 0 || kl > len(args)-off-8 {
 				return "", 0, nil, nil, 0, nil, nil, ErrVectorArgsTruncated
 			}
 			key := string(args[off : off+kl])
@@ -1023,7 +1023,7 @@ func DecodeMVHybridArgs(args []byte) (name string, query [][]float32, sparseQ vt
 		}
 		flen := int(binary.BigEndian.Uint32(args[off:]))
 		off += 4
-		if len(args) < off+flen {
+		if flen < 0 || len(args)-off < flen {
 			return "", nil, vtypes.SparseVector{}, 0, opts, 0, 0, 0, ErrVectorArgsTruncated
 		}
 		if uerr := json.Unmarshal(args[off:off+flen], &opts.Filter); uerr != nil {
@@ -1299,7 +1299,7 @@ func decodeMVScrollArgsN(args []byte) (col string, filter vtypes.Filter, limit i
 	off += 4
 	flen := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
-	if len(args) < off+flen {
+	if flen < 0 || len(args)-off < flen {
 		return "", vtypes.Filter{}, 0, 0, ErrVectorArgsTruncated
 	}
 	if flen > 0 {

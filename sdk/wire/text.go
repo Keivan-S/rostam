@@ -429,7 +429,7 @@ func decodeHybridTextArgsN(args []byte) (collection string, dense []float32, que
 	}
 	qLen := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
-	if len(args) < off+qLen {
+	if qLen < 0 || len(args)-off < qLen {
 		return "", nil, "", 0, opts, 0, ErrVectorArgsTruncated
 	}
 	query = string(args[off : off+qLen])
@@ -440,7 +440,7 @@ func decodeHybridTextArgsN(args []byte) (collection string, dense []float32, que
 		}
 		flen := int(binary.BigEndian.Uint32(args[off:]))
 		off += 4
-		if len(args) < off+flen {
+		if flen < 0 || len(args)-off < flen {
 			return "", nil, "", 0, opts, 0, ErrVectorArgsTruncated
 		}
 		if uerr := json.Unmarshal(args[off:off+flen], &opts.Filter); uerr != nil {
@@ -537,7 +537,7 @@ func decodeBM25StatsArgsN(args []byte) (collection string, query string, n int, 
 	off := 1 + colLen
 	qLen := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
-	if len(args) < off+qLen {
+	if qLen < 0 || len(args)-off < qLen {
 		return "", "", 0, ErrVectorArgsTruncated
 	}
 	query = string(args[off : off+qLen])

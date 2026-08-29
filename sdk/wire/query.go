@@ -75,7 +75,7 @@ func DecodeQueryArgs(args []byte) (collection string, specBytes []byte, readCons
 	off := 1 + colLen
 	specLen := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
-	if len(args) < off+specLen {
+	if specLen < 0 || len(args)-off < specLen {
 		return "", nil, 0, 0, 0, ErrVectorArgsTruncated
 	}
 	specBytes = args[off : off+specLen]

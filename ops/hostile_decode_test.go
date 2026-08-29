@@ -212,6 +212,20 @@ func hostileBodies() [][]byte {
 		}
 		out = append(out, make([]byte, size)) // all zeroes
 	}
+	// Zero-based frames with ONE hostile window swept byte-by-byte. These reach a
+	// length field that sits BEHIND a small/zero preamble (e.g. a second or third
+	// length field). The all-0xFF frames above cannot: a 0xFF preamble makes the
+	// FIRST length huge and the decoder bails before the later field. Stepping by
+	// 1 (not 4) lands on unaligned fields too.
+	for _, size := range []int{12, 16, 24, 32, 48} {
+		for _, p := range patterns {
+			for off := 0; off+4 <= size; off++ {
+				b := make([]byte, size)
+				binary.BigEndian.PutUint32(b[off:], p)
+				out = append(out, b)
+			}
+		}
+	}
 	return out
 }
 

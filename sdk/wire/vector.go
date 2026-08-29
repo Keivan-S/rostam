@@ -157,7 +157,9 @@ func readSparse(args []byte, off int) (vtypes.SparseVector, int, error) {
 	}
 	nnz := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
-	if len(args) < off+8*nnz {
+	// Each term costs 8 bytes ([dim:u32][value:f32]); the divide-form bound rejects a
+	// widened-negative or absurd nnz before the makes (8*nnz cannot overflow here).
+	if !CountFitsIn(nnz, len(args)-off, 8) {
 		return vtypes.SparseVector{}, off, ErrVectorArgsTruncated
 	}
 	sv := vtypes.SparseVector{
@@ -2548,9 +2550,10 @@ func readScrollTail(body []byte, off int) (degraded bool, missing []uint16, next
 	if clen == 0 {
 		return degraded, missing, "", nil
 	}
-	if len(body) < off+clen {
+	if clen < 0 || len(body)-off < clen {
 		// Truncated cursor — tolerate as empty (defensive; a well-formed new body
-		// never hits this).
+		// never hits this). The check is written as len(body)-off (never off+clen)
+		// so a widened-negative or near-MaxInt32 clen cannot overflow past it.
 		return degraded, missing, "", nil
 	}
 	return degraded, missing, string(body[off : off+clen]), nil
@@ -2886,7 +2889,7 @@ func decodeScrollArgsN(args []byte) (collection string, filter vtypes.Filter, li
 	off += 4
 	flen := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
-	if len(args) < off+flen {
+	if flen < 0 || len(args)-off < flen {
 		return "", vtypes.Filter{}, 0, 0, ErrVectorArgsTruncated
 	}
 	if flen > 0 {
@@ -3268,7 +3271,7 @@ func readScrollOrderBlock(args []byte, off int) (order *ScrollOrder, newOff int,
 	}
 	kl := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
-	if len(args) < off+kl+1 {
+	if kl < 0 || kl > len(args)-off-1 {
 		return nil, off, ErrVectorArgsTruncated
 	}
 	o.Key = string(args[off : off+kl])
@@ -3491,7 +3494,7 @@ func DecodeDeleteByFilterArgs(args []byte) (string, vtypes.Filter, error) {
 	off := 1 + colLen
 	flen := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
-	if len(args) < off+flen {
+	if flen < 0 || len(args)-off < flen {
 		return "", vtypes.Filter{}, ErrVectorArgsTruncated
 	}
 	var filter vtypes.Filter
@@ -3952,7 +3955,7 @@ func decodeGroupSearchArgsN(args []byte) (collection string, k int, query []floa
 	off += gbLen
 	dim := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
-	if len(args) < off+4*dim+4 {
+	if !CountFitsIn(dim, len(args)-off, 4) {
 		return fail()
 	}
 	query = make([]float32, dim)
@@ -3960,9 +3963,12 @@ func decodeGroupSearchArgsN(args []byte) (collection string, k int, query []floa
 		query[i] = math.Float32frombits(binary.BigEndian.Uint32(args[off:]))
 		off += 4
 	}
+	if len(args) < off+4 {
+		return fail()
+	}
 	flen := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
-	if len(args) < off+flen {
+	if flen < 0 || len(args)-off < flen {
 		return fail()
 	}
 	if flen > 0 {
@@ -4557,7 +4563,9 @@ func DecodeVectorGetBatchArgs(args []byte) (collection string, ids []uint64, fla
 	off++
 	n := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
-	if n < 0 || len(args) < off+8*n {
+	// Each id costs 8 bytes; the divide-form bound rejects a widened-negative or
+	// absurd n before the make (8*n cannot overflow int here).
+	if !CountFitsIn(n, len(args)-off, 8) {
 		return "", nil, 0, ErrVectorArgsTruncated
 	}
 	ids = make([]uint64, n)
@@ -4786,7 +4794,7 @@ func readKeyTTLBlock(args []byte, off int) (keyTTLMs map[string]int64, next int,
 	}
 	klen := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
-	if len(args) < off+klen {
+	if klen < 0 || len(args)-off < klen {
 		return nil, off, ErrVectorArgsTruncated
 	}
 	km := make(map[string]int64)
@@ -4932,7 +4940,7 @@ func DecodeSetPayloadArgsOpts(args []byte) (collection string, id uint64, meta v
 	off += 8
 	mlen := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
-	if len(args) < off+mlen {
+	if mlen < 0 || len(args)-off < mlen {
 		return "", 0, nil, nil, ErrVectorArgsTruncated
 	}
 	if mlen > 0 {
@@ -4958,7 +4966,7 @@ func DecodeSetPayloadArgsOpts(args []byte) (collection string, id uint64, meta v
 	}
 	klen := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
-	if len(args) < off+klen {
+	if klen < 0 || len(args)-off < klen {
 		return "", 0, nil, nil, ErrVectorArgsTruncated
 	}
 	km := make(map[string]int64)
@@ -4992,7 +5000,7 @@ func DecodeSetPayloadArgsCAS(args []byte) (collection string, id uint64, meta vt
 	off += 8
 	mlen := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
-	if len(args) < off+mlen {
+	if mlen < 0 || len(args)-off < mlen {
 		return "", 0, nil, nil, 0, false, ErrVectorArgsTruncated
 	}
 	if mlen > 0 {
@@ -5015,7 +5023,7 @@ func DecodeSetPayloadArgsCAS(args []byte) (collection string, id uint64, meta vt
 		}
 		klen := int(binary.BigEndian.Uint32(args[off:]))
 		off += 4
-		if len(args) < off+klen {
+		if klen < 0 || len(args)-off < klen {
 			return "", 0, nil, nil, 0, false, ErrVectorArgsTruncated
 		}
 		km := make(map[string]int64)
@@ -5108,6 +5116,11 @@ func DecodeDeletePayloadKeysArgsCAS(args []byte) (collection string, id uint64, 
 	off += 8
 	nKeys := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
+	// Each key costs >= 2 bytes ([keyLen:u16] with an empty key); the divide-form
+	// bound rejects a widened-negative or absurd nKeys before the make cap.
+	if !CountFitsIn(nKeys, len(args)-off, 2) {
+		return "", 0, nil, 0, false, ErrVectorArgsTruncated
+	}
 	if nKeys > 0 {
 		keys = make([]string, 0, nKeys)
 	}

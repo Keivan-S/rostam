@@ -50,7 +50,7 @@ func DecodeNamedCreateArgs(args []byte) (string, map[string]vtypes.NamedVectorPa
 	off := 1 + colLen
 	cfgLen := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
-	if len(args) < off+cfgLen {
+	if cfgLen < 0 || len(args)-off < cfgLen {
 		return "", nil, 0, ErrVectorArgsTruncated
 	}
 	var cfg map[string]vtypes.NamedVectorParams
@@ -226,6 +226,12 @@ func decodeNamedInsertArgsN(args []byte) (col string, id uint64, vectors map[str
 	off += 8
 	numVecs := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
+	// An entry costs >= 6 bytes ([nameLen:u16] with an empty name + [dim:u32]); the
+	// divide-form bound rejects a widened-negative or absurd numVecs before the make
+	// hint (4*dim below cannot overflow because dim is bounded the same way).
+	if !CountFitsIn(numVecs, len(args)-off, 6) {
+		return "", 0, nil, nil, 0, 0, ErrVectorArgsTruncated
+	}
 	if numVecs > 0 {
 		vectors = make(map[string][]float32, numVecs)
 	}
@@ -242,7 +248,7 @@ func decodeNamedInsertArgsN(args []byte) (col string, id uint64, vectors map[str
 		off += nameLen
 		dim := int(binary.BigEndian.Uint32(args[off:]))
 		off += 4
-		if len(args) < off+4*dim {
+		if !CountFitsIn(dim, len(args)-off, 4) {
 			return "", 0, nil, nil, 0, 0, ErrVectorArgsTruncated
 		}
 		vec := make([]float32, dim)
@@ -260,7 +266,7 @@ func decodeNamedInsertArgsN(args []byte) (col string, id uint64, vectors map[str
 	ttl = time.Duration(ttlMs) * time.Millisecond //nolint:gosec
 	mlen := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
-	if len(args) < off+mlen {
+	if mlen < 0 || len(args)-off < mlen {
 		return "", 0, nil, nil, 0, 0, ErrVectorArgsTruncated
 	}
 	if mlen > 0 {
@@ -447,7 +453,7 @@ func decodeNamedSearchArgsN(args []byte) (col, vecName string, query []float32, 
 	off += 4
 	dim := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
-	if len(args) < off+4*dim+4 {
+	if !CountFitsIn(dim, len(args)-off, 4) {
 		return "", "", nil, 0, 0, vtypes.Filter{}, ErrVectorArgsTruncated
 	}
 	query = make([]float32, dim)
@@ -455,9 +461,12 @@ func decodeNamedSearchArgsN(args []byte) (col, vecName string, query []float32, 
 		query[j] = math.Float32frombits(binary.BigEndian.Uint32(args[off:]))
 		off += 4
 	}
+	if len(args) < off+4 {
+		return "", "", nil, 0, 0, vtypes.Filter{}, ErrVectorArgsTruncated
+	}
 	flen := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
-	if len(args) < off+flen {
+	if flen < 0 || len(args)-off < flen {
 		return "", "", nil, 0, 0, vtypes.Filter{}, ErrVectorArgsTruncated
 	}
 	if flen > 0 {
@@ -624,7 +633,7 @@ func decodeNamedSparseSearchArgsN(args []byte) (col, space string, query vtypes.
 	}
 	flen := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
-	if len(args) < off+flen {
+	if flen < 0 || len(args)-off < flen {
 		return "", "", vtypes.SparseVector{}, 0, 0, vtypes.Filter{}, ErrVectorArgsTruncated
 	}
 	if flen > 0 {
@@ -827,7 +836,7 @@ func DecodeNamedHybridArgs(args []byte) (col, denseSpace string, denseQ []float3
 	off += 4
 	dim := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
-	if len(args) < off+4*dim {
+	if !CountFitsIn(dim, len(args)-off, 4) {
 		return "", "", nil, "", sparseQ, 0, opts, 0, 0, 0, ErrVectorArgsTruncated
 	}
 	if dim > 0 {
@@ -847,7 +856,7 @@ func DecodeNamedHybridArgs(args []byte) (col, denseSpace string, denseQ []float3
 		}
 		flen := int(binary.BigEndian.Uint32(args[off:]))
 		off += 4
-		if len(args) < off+flen {
+		if flen < 0 || len(args)-off < flen {
 			return "", "", nil, "", vtypes.SparseVector{}, 0, opts, 0, 0, 0, ErrVectorArgsTruncated
 		}
 		if uerr := json.Unmarshal(args[off:off+flen], &opts.Filter); uerr != nil {
@@ -972,7 +981,7 @@ func decodeNamedScrollArgsN(args []byte) (col string, filter vtypes.Filter, limi
 	off += 4
 	flen := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
-	if len(args) < off+flen {
+	if flen < 0 || len(args)-off < flen {
 		return "", vtypes.Filter{}, 0, 0, ErrVectorArgsTruncated
 	}
 	if flen > 0 {
