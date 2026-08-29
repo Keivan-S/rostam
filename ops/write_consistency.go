@@ -88,8 +88,10 @@ func DecodeWCEnvelope(args []byte) (wcf, wait uint8, innerName string, innerArgs
 	argsLen := int(binary.BigEndian.Uint32(args[off : off+4]))
 	off += 4
 	// [args...] — argsLen is safe on 64-bit (uint32 fits in int); the < 0 check
-	// guards hypothetical 32-bit builds where int(0xffffffff) wraps negative.
-	if argsLen < 0 || off+argsLen > len(args) {
+	// guards 32-bit builds where int(0xffffffff) wraps negative. The comparison is
+	// written as argsLen > len(args)-off (never off+argsLen) so a positive argsLen
+	// near MaxInt32 cannot overflow off+argsLen back into range on 32-bit.
+	if argsLen < 0 || argsLen > len(args)-off {
 		return 0, 0, "", nil, errWCEnvelopeTruncated
 	}
 	innerArgs = args[off : off+argsLen]
