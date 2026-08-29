@@ -185,7 +185,7 @@ func readNamedSparseBlock(args []byte, off int) (sparseVectors map[string]*vtype
 		}
 		nameLen := int(binary.BigEndian.Uint16(args[off:]))
 		off += 2
-		if len(args) < off+nameLen {
+		if nameLen < 0 || len(args)-off < nameLen {
 			return nil, off, false, ErrVectorArgsTruncated
 		}
 		name := string(args[off : off+nameLen])
@@ -241,7 +241,7 @@ func decodeNamedInsertArgsN(args []byte) (col string, id uint64, vectors map[str
 		}
 		nameLen := int(binary.BigEndian.Uint16(args[off:]))
 		off += 2
-		if len(args) < off+nameLen+4 {
+		if nameLen < 0 || nameLen > len(args)-off-4 {
 			return "", 0, nil, nil, 0, 0, ErrVectorArgsTruncated
 		}
 		name := string(args[off : off+nameLen])
@@ -444,7 +444,7 @@ func decodeNamedSearchArgsN(args []byte) (col, vecName string, query []float32, 
 	off := 1 + colLen
 	nameLen := int(binary.BigEndian.Uint16(args[off:]))
 	off += 2
-	if len(args) < off+nameLen+4+4 {
+	if nameLen < 0 || nameLen > len(args)-off-4-4 {
 		return "", "", nil, 0, 0, vtypes.Filter{}, ErrVectorArgsTruncated
 	}
 	vecName = string(args[off : off+nameLen])
@@ -617,7 +617,7 @@ func decodeNamedSparseSearchArgsN(args []byte) (col, space string, query vtypes.
 	off := 1 + colLen
 	nameLen := int(binary.BigEndian.Uint16(args[off:]))
 	off += 2
-	if len(args) < off+nameLen+4 {
+	if nameLen < 0 || nameLen > len(args)-off-4 {
 		return "", "", vtypes.SparseVector{}, 0, 0, vtypes.Filter{}, ErrVectorArgsTruncated
 	}
 	space = string(args[off : off+nameLen])
@@ -810,14 +810,14 @@ func DecodeNamedHybridArgs(args []byte) (col, denseSpace string, denseQ []float3
 	off += colLen
 	dsLen := int(binary.BigEndian.Uint16(args[off:]))
 	off += 2
-	if len(args) < off+dsLen+2 {
+	if dsLen < 0 || dsLen > len(args)-off-2 {
 		return "", "", nil, "", sparseQ, 0, opts, 0, 0, 0, ErrVectorArgsTruncated
 	}
 	denseSpace = string(args[off : off+dsLen])
 	off += dsLen
 	ssLen := int(binary.BigEndian.Uint16(args[off:]))
 	off += 2
-	if len(args) < off+ssLen+4+(1+8+4+4+4)+4 {
+	if ssLen < 0 || ssLen > len(args)-off-4-(1+8+4+4+4)-4 {
 		return "", "", nil, "", sparseQ, 0, opts, 0, 0, 0, ErrVectorArgsTruncated
 	}
 	sparseSpace = string(args[off : off+ssLen])
@@ -1454,14 +1454,16 @@ func DecodeNamedGetResultAt(body []byte, off int) (found bool, vectors map[strin
 		}
 		nameLen := int(binary.BigEndian.Uint16(body[off:]))
 		off += 2
-		if len(body) < off+nameLen+4 {
+		if nameLen < 0 || nameLen > len(body)-off-4 {
 			return false, nil, nil, 0, 0, off, ErrVectorArgsTruncated
 		}
 		name := string(body[off : off+nameLen])
 		off += nameLen
 		dim := int(binary.BigEndian.Uint32(body[off:]))
 		off += 4
-		if len(body) < off+4*dim {
+		// Divide-form: a hostile dim near MaxInt32 overflows 4*dim on 386 and
+		// slips len(body) < off+4*dim, then make([]float32, dim) panics.
+		if !CountFitsIn(dim, len(body)-off, 4) {
 			return false, nil, nil, 0, 0, off, ErrVectorArgsTruncated
 		}
 		vec := make([]float32, dim)
@@ -1484,7 +1486,7 @@ func DecodeNamedGetResultAt(body []byte, off int) (found bool, vectors map[strin
 		}
 		mlen := int(binary.BigEndian.Uint32(body[off:]))
 		off += 4
-		if len(body) < off+mlen {
+		if mlen < 0 || len(body)-off < mlen {
 			return false, nil, nil, 0, 0, off, ErrVectorArgsTruncated
 		}
 		m := make(vtypes.Metadata)

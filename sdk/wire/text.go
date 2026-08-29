@@ -249,7 +249,7 @@ func decodeSearchTextArgsN(args []byte) (collection string, query string, k int,
 		}
 		flen := int(binary.BigEndian.Uint32(args[off:]))
 		off += 4
-		if len(args) < off+flen {
+		if flen < 0 || len(args)-off < flen {
 			return "", "", 0, filter, 0, ErrVectorArgsTruncated
 		}
 		if uerr := json.Unmarshal(args[off:off+flen], &filter); uerr != nil {

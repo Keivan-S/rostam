@@ -1007,7 +1007,7 @@ func DecodeQueryResultGroupedFanOut(body []byte) (vtypes.QueryResult, map[uint64
 		off += 8
 		kl := int(binary.BigEndian.Uint32(body[off:]))
 		off += 4
-		if len(body) < off+kl {
+		if kl < 0 || len(body)-off < kl {
 			return vtypes.QueryResult{}, nil, ErrVectorArgsTruncated
 		}
 		var v vtypes.Value
