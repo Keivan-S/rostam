@@ -6,7 +6,7 @@ Notable user-visible changes. Entries that alter existing behaviour are marked
 ## Unreleased
 
 - **Persistence works on Windows.** `cache.Config.DataDir` and mmap-backed
-  (`Persistent`) vector collections are now supported on `windows/amd64`, so an
+  (`Persistent`) vector collections are now supported on Windows, so an
   embedded store — and the MCP memory server on its default `-data auto` — keeps
   its data across restarts there instead of refusing to open with `cache.Config:
   DataDir set but mmap not supported on windows`. Windows previously had no file

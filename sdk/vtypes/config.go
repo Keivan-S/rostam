@@ -240,7 +240,7 @@ type Config struct {
 	// combine with QuantMmap to push both the vectors and the graph's largest
 	// array off-heap. The file is a native-endian runtime backing store (like
 	// MmapPath), not a portable artifact, and must differ from MmapPath.
-	// Linux-only; other platforms return an mmap-unsupported error.
+	// Linux and Windows only; other platforms return an mmap-unsupported error.
 	GraphMmapPath string
 
 	// FilterFirstThreshold caps the candidate-set size for which an

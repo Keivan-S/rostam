@@ -15,7 +15,7 @@ to `cache.New`).
 | `InitialPagesPerShard` | 0 (lazy) | pre-allocate pages up front instead of on demand |
 | `AtCapPolicy` | `PolicyRingbufEvict` | at capacity: overwrite oldest entries (`PolicyRingbufEvict`) or reject writes with `cache.ErrFull` (`PolicyRejectWrites`) |
 | `TTLSweepIntervalMs` | 1000 | background expiry sweep; 0 disables (lazy expiry on read still applies) |
-| `DataDir` | "" (heap) | directory for per-shard mmap files; enables persistence + warm restart. Linux only. |
+| `DataDir` | "" (heap) | directory for per-shard mmap files; enables persistence + warm restart. Linux and Windows only. |
 | `Durable` | false | `msync` on commit boundaries (bounded by `MsyncIntervalMs`, default 100 ms); false = opportunistic OS flushing |
 | `Mlock` | false | pin the mmap into RAM (needs `ulimit -l` headroom; failure logs and continues) |
 

@@ -43,7 +43,8 @@ type Config struct {
 
 	// DataDir is the directory holding per-shard pages.dat files. When
 	// empty, the cache runs in heap-only mode (heap-only behavior; no
-	// persistence). Linux only — non-Linux platforms reject DataDir != "".
+	// persistence). Requires a platform that can map files (Linux, Windows);
+	// anywhere else Validate rejects DataDir != "".
 	DataDir string
 
 	// Mlock locks the mmap'd region into memory. Requires

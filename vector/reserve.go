@@ -92,8 +92,10 @@ import (
 // heap-backed configuration too.
 //
 // FALLBACK, EVERYWHERE. A reservation is an optimization, never a requirement.
-// Non-Linux builds have no newSlabReservation (mmap-backed storage is already
-// Linux-only — see mmap_other.go), a reservation that cannot be made is simply
+// Only 64-bit Linux has newSlabReservation — Windows maps files too but keeps
+// the copy/remap growth path (see mmap_windows.go), and the platforms in
+// mmap_other.go have no mmap storage at all — a reservation that cannot be made
+// is simply
 // not made, and a reservation that runs out of reserved range relocates once to
 // a bigger one — paying the old copy/remap exactly there. Every one of those
 // paths lands back on the pre-existing grow code, so behavior is identical and

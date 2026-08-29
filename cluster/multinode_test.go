@@ -871,10 +871,12 @@ func TestThreeNodeRestart(t *testing.T) {
 // FSM.Apply's applied-index guard correctly skips log entries that are
 // already reflected in the persisted mmap pages.
 //
-// Linux-only because cache.DataDir (mmap) is Linux-only.
+// Gated to Linux. cache.DataDir also maps files on Windows now, but this
+// suite's 3-node clusters have never been exercised there and no CI lane runs
+// them, so widening the gate belongs to whoever validates it, not here.
 func TestSmartClientWarmRestart(t *testing.T) {
 	if runtime.GOOS != "linux" {
-		t.Skip("mmap is Linux-only")
+		t.Skip("the cluster suite is only exercised on Linux")
 	}
 
 	const n = 3
