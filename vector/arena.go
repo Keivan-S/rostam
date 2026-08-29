@@ -430,6 +430,12 @@ func (a *arena) growVecs(needFloats int) error {
 	if a.mmapF != nil {
 		region, err := growVecMmap(a.mmapF, a.mmapRegion, newBytes)
 		if err != nil {
+			// growVecMmap unmaps the old view BEFORE truncate+remap; on error the old
+			// backing is already gone, so a.mmapRegion/a.vecs (which aliases it) point
+			// at an unmapped region. Nil them so a later access faults cleanly instead
+			// of reading unmapped memory. (a.codes has no file backing — leave it.)
+			a.mmapRegion = nil
+			a.vecs = nil
 			return err
 		}
 		a.mmapRegion = region

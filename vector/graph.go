@@ -173,6 +173,13 @@ func (h *hnsw) growLevel0(needU32 int) error {
 	if h.graphMmapF != nil {
 		region, err := growVecMmap(h.graphMmapF, h.graphRegion, newBytes)
 		if err != nil {
+			// growVecMmap unmaps the old view BEFORE truncate+remap; on error the old
+			// backing is already gone, so h.graphRegion/h.level0 (which aliases it)
+			// point at an unmapped region. Nil them so a later access faults cleanly
+			// instead of reading unmapped memory. (h.nodes/h.level0Len are heap-backed
+			// — leave them.)
+			h.graphRegion = nil
+			h.level0 = nil
 			return err
 		}
 		h.graphRegion = region
