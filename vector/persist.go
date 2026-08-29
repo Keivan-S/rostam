@@ -113,6 +113,11 @@ var (
 // Persistent collection can be flushed after Delete/DeleteByFilter. Metadata,
 // TTL, and sparse vectors are persisted. Safe to call while live (read lock).
 func (h *hnsw) SavePersist(metaPath string) error {
+	// A failed mmap slab growth freed the backing region; reject rather than
+	// flush/serialize from it (see arena.poisoned / ErrIndexPoisoned).
+	if h.arena.poisoned.Load() {
+		return ErrIndexPoisoned
+	}
 	// Exclusive side of the link barrier, for the same reason Snapshot takes it,
 	// and in the same order — BEFORE h.mu, never after. writeMeta walks every
 	// node's level0Len and upper-level edges; an insert holds the barrier's read
@@ -123,6 +128,14 @@ func (h *hnsw) SavePersist(metaPath string) error {
 	defer h.linkMu.Unlock()
 	h.mu.RLock()
 	defer h.mu.RUnlock()
+
+	// Re-check under h.mu: poison + the nil-out are published under the write
+	// lock, so a grow that failed in the window between the pre-lock check and
+	// here would otherwise let this serialize (in a no-recover FSM/backup
+	// goroutine) over the freed regions — a truncated sidecar or a crash.
+	if h.arena.poisoned.Load() {
+		return ErrIndexPoisoned
+	}
 
 	if h.graphMmapF == nil || h.arena.mmapF == nil {
 		return ErrPersistUnsupported

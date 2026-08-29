@@ -213,6 +213,12 @@ func (h *hnsw) buildTextLanes(dense []float32, query string, k int, opts HybridO
 
 	h.mu.RLock()
 	defer h.mu.RUnlock()
+	// Reject on a poisoned index (failed mmap grow) under the lock so the hybrid
+	// text entry points surface the sentinel instead of a silent empty dense lane
+	// — see arena.poisoned.
+	if h.arena.poisoned.Load() {
+		return nil, nil, nil, ErrIndexPoisoned
+	}
 	h.searchOps.Add(1)
 
 	if q != nil {
@@ -288,6 +294,12 @@ func (h *hnsw) buildTextLanesGlobal(dense []float32, query string, k int, opts H
 
 	h.mu.RLock()
 	defer h.mu.RUnlock()
+	// Reject on a poisoned index (failed mmap grow) under the lock so the hybrid
+	// text entry points surface the sentinel instead of a silent empty dense lane
+	// — see arena.poisoned.
+	if h.arena.poisoned.Load() {
+		return nil, nil, nil, ErrIndexPoisoned
+	}
 	h.searchOps.Add(1)
 
 	if q != nil {

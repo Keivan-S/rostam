@@ -444,6 +444,13 @@ func (g *gpuIndex) searchIntoGPU(dst []Result, query []float32, k int, filter Fi
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	// Reject on a poisoned index (failed mmap grow): the GPU search reads
+	// h.arena.vecs, which is nil'd after the failure. The embedded *hnsw's other
+	// ops are already guarded; only these GPU-overridden dense entries bypass them.
+	// See arena.poisoned.
+	if h.arena.poisoned.Load() {
+		return dst, ErrIndexPoisoned
+	}
 	h.searchOps.Add(1)
 
 	return g.gpuSearchLocked(dst, q, k, pred, admit)
@@ -470,6 +477,11 @@ func (g *gpuIndex) gpuSearchBatch(queries [][]float32, k int) ([][]Result, error
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	// Reject on a poisoned index (failed mmap grow) before uploading/scanning the
+	// nil'd h.arena.vecs — see arena.poisoned.
+	if h.arena.poisoned.Load() {
+		return nil, ErrIndexPoisoned
+	}
 	if err := g.ensureResidentLocked(); err != nil {
 		return nil, err
 	}

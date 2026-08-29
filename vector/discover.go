@@ -136,6 +136,11 @@ func (h *hnsw) Discover(k int, opts DiscoverOpts) ([]Result, error) {
 
 	h.mu.RLock()
 	defer h.mu.RUnlock()
+	// Reject on a poisoned index (failed mmap grow) under the lock so the sentinel
+	// surfaces instead of a silent empty result — see arena.poisoned.
+	if h.arena.poisoned.Load() {
+		return nil, ErrIndexPoisoned
+	}
 	h.searchOps.Add(1)
 
 	// Resolve context pair vectors (skip pairs referencing missing ids).
@@ -186,6 +191,11 @@ func (h *hnsw) DiscoverVecs(k int, opts DiscoverVecsOpts) ([]Result, error) {
 
 	h.mu.RLock()
 	defer h.mu.RUnlock()
+	// Reject on a poisoned index (failed mmap grow) under the lock so the sentinel
+	// surfaces instead of a silent empty result — see arena.poisoned.
+	if h.arena.poisoned.Load() {
+		return nil, ErrIndexPoisoned
+	}
 	h.searchOps.Add(1)
 
 	return h.discoverScoredLocked(s, k, fetchK, opts.Target, opts.Context, pred)
@@ -222,6 +232,11 @@ func (h *hnsw) RecommendVecs(k int, opts RecommendVecsOpts) ([]Result, error) {
 
 	h.mu.RLock()
 	defer h.mu.RUnlock()
+	// Reject on a poisoned index (failed mmap grow) under the lock so the sentinel
+	// surfaces instead of a silent empty result — see arena.poisoned.
+	if h.arena.poisoned.Load() {
+		return nil, ErrIndexPoisoned
+	}
 	h.searchOps.Add(1)
 
 	return h.recommendBestLocked(s, k, fetchK, opts.Positive, opts.Negative, pred)

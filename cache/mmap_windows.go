@@ -26,21 +26,32 @@ func mmapFile(path string, size int64, mlockRequested bool) (*os.File, []byte, e
 }
 
 // mmapFileAlloc is mmapFile plus a RESERVATION of the first allocBytes of the
-// file — which on Windows costs nothing to honour, because it has already
-// happened by the time this function looks at allocBytes.
+// file (allocBytes <= 0 reserves nothing, i.e. plain mmapFile), mirroring the
+// Linux fallocate contract.
 //
-// WHY THE PARAMETER IS IGNORED HERE. On Linux the file is sized with a sparse
-// truncate, so blocks are allocated lazily inside a page fault and a full disk
-// turns into SIGBUS, which Go cannot recover from; fallocate exists to pull
-// that failure forward into an ordinary ENOSPC. NTFS does not create the file
-// sparse: os.File.Truncate lands on SetEndOfFile, which commits the clusters
-// there and then, so a full disk fails the Truncate above with an ordinary
-// error and the mapped writes that follow cannot run out of space. The caller's
-// invariant ("the bytes I am about to store are already reserved") therefore
-// holds for the WHOLE file, not just the first allocBytes, without a separate
-// call. The cost of the stronger guarantee is that the file occupies its full
-// length on disk immediately instead of growing as it fills.
-func mmapFileAlloc(path string, size, _ int64, mlockRequested bool) (*os.File, []byte, error) {
+// WHY A SEPARATE RESERVATION IS STILL NEEDED HERE. On Linux the file is sized
+// with a sparse truncate, so blocks are allocated lazily inside a page fault and
+// a full disk turns into SIGBUS, which Go cannot recover from; fallocate exists
+// to pull that failure forward into an ordinary ENOSPC. For an ORDINARY NTFS
+// file this platform does not have that problem — os.File.Truncate lands on
+// SetEndOfFile, which commits the clusters there and then, so a full disk fails
+// the Truncate above with an ordinary error. But a SPARSE or COMPRESSED file
+// (including any file created inside a compressed directory) is the exception:
+// SetEndOfFile can leave AllocationSize < EndOfFile, i.e. the tail unbacked, so
+// a later mapped write into that tail can still hit the delayed out-of-space
+// failure this API exists to prevent. reserveAlloc forces the physical
+// allocation and then VERIFIES it, and ABORTS (returns an error) if the
+// filesystem refused to back the requested bytes, so cold compaction never
+// publishes a shard whose tail is only virtually there.
+//
+// The reservation target is at least allocBytes AND never below size: Windows'
+// FILE_ALLOCATION_INFO controls the whole file's allocation and would shrink a
+// correctly-sized file if set below its length, whereas Linux fallocate only
+// ever adds blocks. Clamping up to size keeps the "never deallocate what
+// Truncate just sized" invariant while still honouring "reserve >= allocBytes".
+// For an ordinary file the clusters are already committed, so the call is a
+// no-op cost.
+func mmapFileAlloc(path string, size, allocBytes int64, mlockRequested bool) (*os.File, []byte, error) {
 	if size <= 0 {
 		return nil, nil, fmt.Errorf("cache: mmap %s: size must be > 0, got %d", path, size)
 	}
@@ -51,6 +62,16 @@ func mmapFileAlloc(path string, size, _ int64, mlockRequested bool) (*os.File, [
 	if err := f.Truncate(size); err != nil {
 		_ = f.Close()
 		return nil, nil, fmt.Errorf("cache: truncate %s to %d: %w", path, size, err)
+	}
+	if allocBytes > 0 {
+		needed := size
+		if allocBytes > needed {
+			needed = allocBytes
+		}
+		if aerr := reserveAlloc(f, needed); aerr != nil {
+			_ = f.Close()
+			return nil, nil, fmt.Errorf("cache: preallocate %d bytes of %s: %w", needed, path, aerr)
+		}
 	}
 	region, err := mapWholeFile(f, size)
 	if err != nil {
@@ -97,6 +118,62 @@ func mapWholeFile(f *os.File, size int64) ([]byte, error) {
 	// this is the one conversion every Windows file mapping has to make.
 	//nolint:govet,gosec // unsafeptr: see above; the view is exactly size bytes long
 	return unsafe.Slice((*byte)(unsafe.Pointer(addr)), size), nil
+}
+
+// fileAllocationInfo is the input for SetFileInformationByHandle's
+// FileAllocationInfo class (Win32 FILE_ALLOCATION_INFO). Setting it forces the
+// filesystem to reserve AllocationSize bytes of physical clusters for the file.
+// x/sys/windows exports the call and the class constant but not this struct, so
+// it is declared locally, matching how the standard library issues the sibling
+// FileEndOfFileInfo call.
+type fileAllocationInfo struct {
+	AllocationSize int64
+}
+
+// fileStandardInfo is the output of GetFileInformationByHandleEx's
+// FileStandardInfo class (Win32 FILE_STANDARD_INFO). AllocationSize is the
+// number of bytes of physical clusters actually reserved for the file, which is
+// what the reservation must be verified against.
+type fileStandardInfo struct {
+	AllocationSize int64
+	EndOfFile      int64
+	NumberOfLinks  uint32
+	DeletePending  byte
+	Directory      byte
+}
+
+// reserveAlloc forces at least needed bytes of physical allocation for f and
+// verifies it, returning an error when the filesystem could not (or would not)
+// back the request — the sparse/compressed case where SetEndOfFile alone leaves
+// the tail unallocated. It is the Windows analogue of Linux fallocate: pull a
+// would-be out-of-space failure forward into an ordinary error at staging time.
+func reserveAlloc(f *os.File, needed int64) error {
+	h := windows.Handle(f.Fd())
+	alloc := fileAllocationInfo{AllocationSize: needed}
+	if err := windows.SetFileInformationByHandle(
+		h,
+		windows.FileAllocationInfo,
+		(*byte)(unsafe.Pointer(&alloc)),
+		uint32(unsafe.Sizeof(alloc)),
+	); err != nil {
+		return fmt.Errorf("SetFileInformationByHandle(FileAllocationInfo, %d): %w", needed, err)
+	}
+	// Verify: a sparse/compressed file can accept the call yet still report a
+	// short AllocationSize, which is exactly the delayed-ENOSPC hazard. Confirm
+	// the clusters are really there before letting the caller map and write.
+	var std fileStandardInfo
+	if err := windows.GetFileInformationByHandleEx(
+		h,
+		windows.FileStandardInfo,
+		(*byte)(unsafe.Pointer(&std)),
+		uint32(unsafe.Sizeof(std)),
+	); err != nil {
+		return fmt.Errorf("GetFileInformationByHandleEx(FileStandardInfo): %w", err)
+	}
+	if std.AllocationSize < needed {
+		return fmt.Errorf("reservation short: allocated %d of %d bytes (sparse or compressed backing refused the reservation)", std.AllocationSize, needed)
+	}
+	return nil
 }
 
 // regionAddr returns the base address of a mapped region. Callers pass either

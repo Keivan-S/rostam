@@ -80,6 +80,30 @@ type arena struct {
 	mmapF      *os.File
 	mmapRegion []byte
 
+	// poisoned marks a TERMINAL failure of an mmap slab growth (growVecs or the
+	// graph's growLevel0). growVecMmap unmaps the old view BEFORE it truncates and
+	// remaps, so a failure partway through leaves the old region freed and the
+	// aliasing slice header (vecs / level0) nil'd — there is no valid mapping to
+	// fall back to. The guard is LAYERED so no op dereferences the freed region:
+	//   - write / persist / snapshot chokepoints (insertBody, SavePersist,
+	//     Snapshot) check the flag at the top and return ErrIndexPoisoned;
+	//   - read chokepoints check UNDER h.mu, which also closes the TOCTOU against a
+	//     concurrent grow: the error-returning read ops (SearchMMR, group, discover,
+	//     the hybrid lane builders) reject with ErrIndexPoisoned, and the two shared
+	//     under-lock helpers — searchDenseLockedWith (all dense search) and vecFor
+	//     (the Get / materialization path) — return an empty/nil result so the
+	//     no-error ops (SearchText, Get*) stay panic-safe;
+	//   - the nil-out of the freed headers at the failure site is a BACKSTOP, so a
+	//     path that ever slips past the flag faults cleanly instead of reading
+	//     unmapped memory.
+	// Set once (never cleared) under the owning index's write lock; read lock-free
+	// via atomic so read-path ops can gate cheaply. A fresh arena installed by
+	// snapshot restore starts un-poisoned, which is the intended recovery. A
+	// poisoned arena OR a poisoned graph poisons the index; the graph failure sets
+	// this same flag through h.arena (the arena is always present), keeping the
+	// terminal state in one place.
+	poisoned atomic.Bool
+
 	// vecsRes, when non-nil, is the address-space reservation vecs is carved
 	// out of — the mechanism that makes growth O(1) with a STABLE base address
 	// instead of an O(n) copy/remap under the write lock (see reserve.go). It
@@ -432,8 +456,11 @@ func (a *arena) growVecs(needFloats int) error {
 		if err != nil {
 			// growVecMmap unmaps the old view BEFORE truncate+remap; on error the old
 			// backing is already gone, so a.mmapRegion/a.vecs (which aliases it) point
-			// at an unmapped region. Nil them so a later access faults cleanly instead
-			// of reading unmapped memory. (a.codes has no file backing — leave it.)
+			// at an unmapped region. Poison the index so every public op rejects with
+			// ErrIndexPoisoned, and nil the headers (belt-and-suspenders) so a bug that
+			// bypasses the guard faults cleanly instead of reading unmapped memory.
+			// (a.codes has no file backing — leave it.)
+			a.poisoned.Store(true)
 			a.mmapRegion = nil
 			a.vecs = nil
 			return err

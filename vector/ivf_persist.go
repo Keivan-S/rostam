@@ -288,6 +288,13 @@ func (ix *ivf) savePersist(metaPath string) error {
 	ix.mu.RLock()
 	defer ix.mu.RUnlock()
 
+	// A failed mmap slab growth freed the arena floats; refuse to persist rather
+	// than externalize a truncated/unbacked sidecar (same hazard as Snapshot; runs
+	// in the same durable-artifact paths). See arena.poisoned.
+	if ix.arena.poisoned.Load() {
+		return ErrIndexPoisoned
+	}
+
 	a := ix.arena
 	vecsPresent := !a.vecsDropped
 	if vecsPresent {

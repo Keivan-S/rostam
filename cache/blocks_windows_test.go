@@ -11,17 +11,6 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// fileStandardInfo is FILE_STANDARD_INFO. AllocationSize is the space the
-// filesystem has actually committed to the file, which is what st_blocks
-// reports on Linux.
-type fileStandardInfo struct {
-	AllocationSize int64
-	EndOfFile      int64
-	NumberOfLinks  uint32
-	DeletePending  bool
-	Directory      bool
-}
-
 // allocatedBlocks reports the 512-byte blocks actually allocated to path, so
 // the compaction tests can assert the same thing they assert on Linux: that the
 // published pages file is fully allocated and carries no hole a later write

@@ -3,7 +3,8 @@
 ## Requirements
 
 - **Go 1.26+** (from `go.mod`)
-- mmap persistence works on Linux and Windows; the AVX2 kernels are Linux/amd64.
+- mmap persistence works on Linux and 64-bit Windows (windows/amd64); the AVX2
+  kernels are Linux/amd64.
   Other platforms use portable fallbacks (and run heap-only, with no `DataDir`)
 - **cgo** for the full module (the WASM backend links `wasmtime-go`); the
   storage and vector packages are pure Go

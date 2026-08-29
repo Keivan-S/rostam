@@ -64,6 +64,11 @@ func (h *hnsw) SearchMMR(query []float32, k int, opts MMROpts) ([]Result, error)
 
 	h.mu.RLock()
 	defer h.mu.RUnlock()
+	// Reject on a poisoned index (failed mmap grow) under the lock so the sentinel
+	// surfaces instead of a silent empty result — see arena.poisoned.
+	if h.arena.poisoned.Load() {
+		return nil, ErrIndexPoisoned
+	}
 	h.searchOps.Add(1)
 
 	cands := h.searchDenseLocked(s, q, fetchK, pred, nil)

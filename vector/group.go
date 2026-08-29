@@ -52,6 +52,11 @@ func (h *hnsw) GroupCandidates(query []float32, opts GroupOpts) ([]Document, err
 
 	h.mu.RLock()
 	defer h.mu.RUnlock()
+	// Reject on a poisoned index (failed mmap grow) under the lock so the sentinel
+	// surfaces instead of a silent empty result — see arena.poisoned.
+	if h.arena.poisoned.Load() {
+		return nil, ErrIndexPoisoned
+	}
 
 	raw := h.searchDenseLocked(s, q, fetchK, pred, nil)
 	docs := make([]Document, 0, len(raw))
@@ -154,6 +159,11 @@ func (h *hnsw) SearchGroups(query []float32, k int, opts GroupOpts) ([]Group, er
 
 	h.mu.RLock()
 	defer h.mu.RUnlock()
+	// Reject on a poisoned index (failed mmap grow) under the lock so the sentinel
+	// surfaces instead of a silent empty result — see arena.poisoned.
+	if h.arena.poisoned.Load() {
+		return nil, ErrIndexPoisoned
+	}
 
 	raw := h.searchDenseLocked(s, q, fetchK, pred, nil)
 	h.searchOps.Add(1)

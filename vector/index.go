@@ -730,4 +730,12 @@ var (
 	// ErrCollectionRateLimited is returned when MaxInsertsPerSecond is configured
 	// and the token bucket is empty. Callers can retry after the bucket refills.
 	ErrCollectionRateLimited = errors.New("vector: collection insert rate limited")
+
+	// ErrIndexPoisoned is returned by every public op once a memory-mapped slab
+	// growth (vecs or the level-0 graph) has failed. That failure unmaps the old
+	// view before it can remap, so the backing region is gone and cannot be
+	// recovered in place; the index is in a TERMINAL state and each op rejects
+	// rather than dereference the freed mapping. It is not retryable — the
+	// collection must be reopened/restored.
+	ErrIndexPoisoned = errors.New("vector: index poisoned by a failed mmap growth")
 )
