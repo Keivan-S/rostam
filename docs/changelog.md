@@ -5,6 +5,20 @@ Notable user-visible changes. Entries that alter existing behaviour are marked
 
 ## Unreleased
 
+- **Persistence works on Windows.** `cache.Config.DataDir` and mmap-backed
+  (`Persistent`) vector collections are now supported on `windows/amd64`, so an
+  embedded store — and the MCP memory server on its default `-data auto` — keeps
+  its data across restarts there instead of refusing to open with `cache.Config:
+  DataDir set but mmap not supported on windows`. Windows previously had no file
+  mapping wired up at all, only stubs that returned that error, which made
+  `-data ""` (heap, no persistence) the one working mode. Durability means the
+  same thing on both platforms: the flush pairs `FlushViewOfFile` with
+  `FlushFileBuffers`, so `-durable` is not claiming a guarantee Windows was never
+  asked for. One difference to plan for: NTFS does not hand out sparse files, so
+  a shard file occupies its full configured size on disk the moment it is
+  created. A fresh embedded store therefore reserves its whole cache budget up
+  front (1 GiB by default off Linux, where system memory is not probed), while on
+  Linux the same file starts as a hole and consumes space only as it fills.
 - **Python client: Mem0, Semantic Router, CrewAI, and DSPy adapters
   (`rostam-client` 0.3.0).** Framework integrations join the existing LangChain,
   LlamaIndex, and Haystack adapters, each an optional in-package submodule behind

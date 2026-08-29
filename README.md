@@ -504,8 +504,9 @@ module stays dependency-light. → [Performance](https://docs.rostamlabs.com/per
 
 ## Development
 
-Requires Go 1.26+. mmap persistence and the AVX2 kernels are Linux/amd64;
-everything has a portable fallback. The full build needs cgo (wasmtime); the
+Requires Go 1.26+. mmap persistence is Linux and Windows (a Windows shard file
+is fully allocated at creation, where a Linux one starts sparse); the AVX2
+kernels are Linux/amd64. Everything else has a portable fallback. The full build needs cgo (wasmtime); the
 vector/cache/ops packages build with `CGO_ENABLED=0`.
 
 Two optional build tags add cgo-only functionality, compiled out by default:
