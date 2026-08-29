@@ -208,7 +208,7 @@ func (c Config) Validate() error {
 	if c.TTLSweepIntervalMs < 0 {
 		return errors.New("config: TTLSweepIntervalMs must be >= 0")
 	}
-	if c.DataDir != "" && runtime.GOOS != "linux" {
+	if c.DataDir != "" && !mmapSupported {
 		return fmt.Errorf("cache.Config: DataDir set but mmap not supported on %s; use DataDir=\"\"", runtime.GOOS)
 	}
 	if c.Durable && c.DataDir == "" {

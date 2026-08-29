@@ -12,6 +12,11 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// mmapSupported reports that a shard on this platform can be backed by a file
+// mapping, so Config.Validate accepts a non-empty DataDir. See mmap_windows.go
+// and mmap_other.go for the other two answers.
+const mmapSupported = true
+
 // mmapFile opens path (creating if missing), truncates to size bytes,
 // and returns the mmap'd region. If mlockRequested is true, attempts
 // mlock; failure logs and continues without lock.
@@ -67,7 +72,12 @@ func mmapFileAlloc(path string, size, allocBytes int64, mlockRequested bool) (*o
 }
 
 // msync flushes the region to disk synchronously.
-func msync(region []byte) error {
+//
+// The file is accepted but unused here: MS_SYNC already returns only once the
+// pages are on the disk. Windows needs the handle for the second half of that
+// same guarantee (see mmap_windows.go), and one signature across the platforms
+// keeps the difference inside these files instead of at every call site.
+func msync(_ *os.File, region []byte) error {
 	if len(region) == 0 {
 		return nil
 	}

@@ -424,7 +424,7 @@ func (s *shard) compactAtOpen(dataDir, pagesPath string, size int64) (int, error
 		stageErr = fmt.Errorf("live set does not fit in %d pages", s.cfg.MaxPagesPerShard())
 	}
 	if stageErr == nil {
-		stageErr = msync(tmpRegion)
+		stageErr = msync(tmpFile, tmpRegion)
 	}
 	if stageErr == nil {
 		stageErr = tmpFile.Sync() // data + metadata durable before anything points here
@@ -522,6 +522,13 @@ func (s *shard) remapPagesFile(pagesPath string, size int64) error {
 
 // syncDir fsyncs a directory so a rename within it is durable.
 func syncDir(dir string) error {
+	// Nothing to force where the platform has no directory fsync (Windows): the
+	// rename's metadata is the filesystem's own to commit there. Returning early
+	// keeps every compaction from logging a durability warning about a step that
+	// is not failing, only absent.
+	if !dirSyncSupported {
+		return nil
+	}
 	d, err := os.Open(dir) //nolint:gosec // G304: dir is the caller-configured DataDir
 	if err != nil {
 		return err

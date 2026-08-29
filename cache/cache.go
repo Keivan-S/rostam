@@ -71,7 +71,7 @@ func (c *Cache) msyncLoop() {
 			failed, lastErr := 0, error(nil)
 			for _, s := range c.shards {
 				if s.isMmap {
-					if err := msync(s.region); err != nil {
+					if err := msync(s.file, s.region); err != nil {
 						failed++
 						lastErr = err
 					}
@@ -368,14 +368,14 @@ func (c *Cache) SetPBFrontier(seq, epoch uint64) {
 			continue
 		}
 		// Data first, unlocked — see above.
-		if err := msync(s.region); err != nil {
+		if err := msync(s.file, s.region); err != nil {
 			slog.Warn("DURABILITY WARNING: page msync failed before pb frontier", "component", "cache", "pb_seq", seq, "pb_epoch", epoch, "err", err)
 		}
 		s.mu.Lock()
 		setPBFrontier(s.region, seq, epoch)
 		s.pbFrontierSeq.Store(seq)
 		s.pbFrontierEpoch.Store(epoch)
-		err := msync(s.region[:headerSize])
+		err := msync(s.file, s.region[:headerSize])
 		s.mu.Unlock()
 		if err != nil {
 			slog.Warn("DURABILITY WARNING: header msync failed for pb frontier", "component", "cache", "pb_seq", seq, "pb_epoch", epoch, "err", err)
@@ -419,12 +419,12 @@ func (c *Cache) SetAppliedIndex(idx uint64, force bool) {
 			// Durability watermark path: a swallowed msync here means the applied
 			// index (and the data it certifies) may not be durable, yet we would
 			// report it committed. Log both flushes' failures loudly.
-			if err := msync(s.region); err != nil {
+			if err := msync(s.file, s.region); err != nil {
 				slog.Warn("DURABILITY WARNING: page msync failed before applied-index", "component", "cache", "applied_index", idx, "err", err)
 			}
 			setAppliedIndex(s.region, idx)
 			s.appliedIndex.Store(idx)
-			if err := msync(s.region[:headerSize]); err != nil {
+			if err := msync(s.file, s.region[:headerSize]); err != nil {
 				slog.Warn("DURABILITY WARNING: header msync failed for applied-index", "component", "cache", "applied_index", idx, "err", err)
 			}
 		} else {

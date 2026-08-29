@@ -889,7 +889,7 @@ func (s *shard) Close() error {
 	close(s.stopSweeper)
 	s.sweepWG.Wait()
 	if s.region != nil {
-		_ = msync(s.region) // best-effort final sync
+		_ = msync(s.file, s.region) // best-effort final sync
 	}
 	return munmapAndClose(s.file, s.region)
 }
