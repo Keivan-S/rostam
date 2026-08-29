@@ -47,7 +47,9 @@ func DecodeMatrix(b []byte) ([][]float32, int, error) {
 		}
 		dim := int(binary.BigEndian.Uint32(b[off:]))
 		off += 4
-		if len(b) < off+4*dim {
+		// Divide-form: a hostile dim near MaxInt32 overflows 4*dim on 386 and
+		// slips len(b) < off+4*dim, then make([]float32, dim) panics.
+		if !CountFitsIn(dim, len(b)-off, 4) {
 			return nil, 0, ErrVectorArgsTruncated
 		}
 		row := make([]float32, dim)
@@ -381,7 +383,7 @@ func decodeMVAddArgsN(args []byte) (name string, docID uint64, tokens [][]float3
 	}
 	mlen := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
-	if len(args) < off+mlen {
+	if mlen < 0 || len(args)-off < mlen {
 		return "", 0, nil, nil, 0, ErrVectorArgsTruncated
 	}
 	if mlen > 0 {
@@ -680,7 +682,7 @@ func DecodeMVAddArgsVersionedKeyExpiresSparse(args []byte) (name string, docID u
 			}
 			kl := int(binary.BigEndian.Uint32(args[off:]))
 			off += 4
-			if len(args) < off+kl+8 {
+			if kl < 0 || kl > len(args)-off-8 {
 				return "", 0, nil, nil, 0, nil, nil, ErrVectorArgsTruncated
 			}
 			key := string(args[off : off+kl])
@@ -893,7 +895,7 @@ func DecodeMVSearchArgsOptsFilter(args []byte) (name string, query [][]float32, 
 		}
 		flen := int(binary.BigEndian.Uint32(args[off:]))
 		off += 4
-		if len(args) < off+flen {
+		if flen < 0 || len(args)-off < flen {
 			return "", nil, 0, 0, 0, 0, vtypes.Filter{}, 0, ErrVectorArgsTruncated
 		}
 		if uerr := json.Unmarshal(args[off:off+flen], &filter); uerr != nil {
@@ -1023,7 +1025,7 @@ func DecodeMVHybridArgs(args []byte) (name string, query [][]float32, sparseQ vt
 		}
 		flen := int(binary.BigEndian.Uint32(args[off:]))
 		off += 4
-		if len(args) < off+flen {
+		if flen < 0 || len(args)-off < flen {
 			return "", nil, vtypes.SparseVector{}, 0, opts, 0, 0, 0, ErrVectorArgsTruncated
 		}
 		if uerr := json.Unmarshal(args[off:off+flen], &opts.Filter); uerr != nil {
@@ -1299,7 +1301,7 @@ func decodeMVScrollArgsN(args []byte) (col string, filter vtypes.Filter, limit i
 	off += 4
 	flen := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
-	if len(args) < off+flen {
+	if flen < 0 || len(args)-off < flen {
 		return "", vtypes.Filter{}, 0, 0, ErrVectorArgsTruncated
 	}
 	if flen > 0 {
@@ -1367,7 +1369,7 @@ func decodeMVResultsN(body []byte) ([]vtypes.MultiResult, int, error) {
 		off += 4
 		mlen := int(binary.BigEndian.Uint32(body[off:]))
 		off += 4
-		if len(body) < off+mlen {
+		if mlen < 0 || len(body)-off < mlen {
 			return nil, 0, ErrVectorArgsTruncated
 		}
 		if mlen > 0 {
@@ -1698,7 +1700,7 @@ func DecodeMVScanResult(body []byte) ([]vtypes.MultiScanRecord, error) {
 		}
 		mlen := int(binary.BigEndian.Uint32(body[off:]))
 		off += 4
-		if len(body) < off+mlen {
+		if mlen < 0 || len(body)-off < mlen {
 			return nil, ErrVectorArgsTruncated
 		}
 		if mlen > 0 {
@@ -1748,7 +1750,7 @@ func DecodeMVScanResult(body []byte) ([]vtypes.MultiScanRecord, error) {
 					}
 					klen := int(binary.BigEndian.Uint32(body[off:]))
 					off += 4
-					if len(body) < off+klen+8 {
+					if klen < 0 || klen > len(body)-off-8 {
 						return nil, ErrVectorArgsTruncated
 					}
 					key := string(body[off : off+klen])
@@ -1962,7 +1964,7 @@ func DecodeMVGetResultAt(body []byte, off int) (found bool, tokens [][]float32, 
 		}
 		mlen := int(binary.BigEndian.Uint32(body[off:]))
 		off += 4
-		if len(body) < off+mlen {
+		if mlen < 0 || len(body)-off < mlen {
 			return false, nil, nil, 0, off, ErrVectorArgsTruncated
 		}
 		m := make(vtypes.Metadata)

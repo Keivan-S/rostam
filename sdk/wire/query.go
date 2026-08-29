@@ -75,7 +75,7 @@ func DecodeQueryArgs(args []byte) (collection string, specBytes []byte, readCons
 	off := 1 + colLen
 	specLen := int(binary.BigEndian.Uint32(args[off:]))
 	off += 4
-	if len(args) < off+specLen {
+	if specLen < 0 || len(args)-off < specLen {
 		return "", nil, 0, 0, 0, ErrVectorArgsTruncated
 	}
 	specBytes = args[off : off+specLen]
@@ -1007,7 +1007,7 @@ func DecodeQueryResultGroupedFanOut(body []byte) (vtypes.QueryResult, map[uint64
 		off += 8
 		kl := int(binary.BigEndian.Uint32(body[off:]))
 		off += 4
-		if len(body) < off+kl {
+		if kl < 0 || len(body)-off < kl {
 			return vtypes.QueryResult{}, nil, ErrVectorArgsTruncated
 		}
 		var v vtypes.Value
