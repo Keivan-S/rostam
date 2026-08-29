@@ -985,6 +985,16 @@ func (h *hnsw) vecsDropped() bool { return h.arena.vecsDropped }
 // reconstructed and aliases arena storage otherwise; callers that retain it must
 // clone. Must hold h.mu (read). Mirrors ivf.vecFor.
 func (h *hnsw) vecFor(slot uint32) []float32 {
+	// Under-lock backstop for the materialization paths (Get/GetProjected/GetInto,
+	// discover context pairs, MMR diversity vecs): a failed mmap grow nils the
+	// arena floats, so arena.Vec would slice a nil region and panic. Return nil
+	// instead. The dense search scorer does NOT route through here (it reads the
+	// arena base pointer directly), so this adds no atomic load to the hot loop;
+	// that path is guarded once at the top of searchDenseLockedWith. See
+	// arena.poisoned.
+	if h.arena.poisoned.Load() {
+		return nil
+	}
 	if !h.arena.vecsDropped {
 		return h.arena.Vec(slot)
 	}
@@ -1892,6 +1902,11 @@ func (h *hnsw) InsertAt(id uint64, vec []float32, ttl time.Duration, meta Metada
 // one-snapshot rule and byte-identical to the historical multi-read path under a
 // stable clock.
 func (h *hnsw) insertBody(id uint64, vec []float32, ttl time.Duration, meta Metadata, sparse *SparseVector, keyTTLMs map[string]int64, cas CASCond, stamped bool, nowMs uint64) (uint64, map[string]uint64, error) {
+	// A failed mmap slab growth freed the backing region; reject rather than
+	// write into it (see arena.poisoned / ErrIndexPoisoned).
+	if h.arena.poisoned.Load() {
+		return 0, nil, ErrIndexPoisoned
+	}
 	start := time.Now()
 	defer func() { h.insertLat.observe(time.Since(start)) }()
 
@@ -3251,6 +3266,11 @@ func (h *hnsw) SearchInto(dst []Result, query []float32, k int, filter Filter) (
 // always traverses the graph (predicate-eval only), gating membership against
 // the external payload via searchDenseLockedWith.
 func (h *hnsw) searchIntoWith(dst []Result, query []float32, k int, filter Filter, metaOf func(id uint64) Metadata) ([]Result, error) {
+	// A failed mmap slab growth freed the backing region; reject rather than
+	// read from it (see arena.poisoned / ErrIndexPoisoned).
+	if h.arena.poisoned.Load() {
+		return dst, ErrIndexPoisoned
+	}
 	start := time.Now()
 	defer func() { h.searchLat.observe(time.Since(start)) }()
 
@@ -3278,6 +3298,13 @@ func (h *hnsw) searchIntoWith(dst []Result, query []float32, k int, filter Filte
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	h.searchOps.Add(1)
+
+	// Re-check under h.mu (poison is published under the write lock): closes the
+	// window between the pre-lock check and here, and covers the filter-first
+	// branch below, whose exact rescore reads vecFor into a distance kernel.
+	if h.arena.poisoned.Load() {
+		return dst, ErrIndexPoisoned
+	}
 
 	// Query planner: when an indexed filter narrows to a materializable candidate
 	// set, choose between exact brute force over those candidates (filter-first)
@@ -3610,6 +3637,17 @@ func (h *hnsw) searchDenseLocked(s *layerScratch, q []float32, k int, pred Predi
 // caller (SearchFilteredWith) never routes the payload index on the provider
 // path, so a metadata-less sub-arena is correctly searched by full traversal.
 func (h *hnsw) searchDenseLockedWith(s *layerScratch, q []float32, k int, pred Predicate, dst []Result, metaOf func(id uint64) Metadata) []Result {
+	// Under-lock backstop: a failed mmap slab growth nils the graph/vector regions,
+	// so every dense read op (Search, MMR, group, discover, hybrid) funnels through
+	// here before touching h.level0 / the arena floats. Return the caller's dst
+	// unchanged rather than dereference the freed region. This runs under the
+	// caller's h.mu RLock, so it also closes the TOCTOU against a concurrent grow
+	// that poisons after a top-of-op check. Ops with an error return additionally
+	// reject with ErrIndexPoisoned at their own top; the no-error ops (SearchText)
+	// rely on this backstop for panic-safety. See arena.poisoned.
+	if h.arena.poisoned.Load() {
+		return dst
+	}
 	// The entry point and the top level are read as ONE pair (see entryState): a
 	// linker running concurrently under the read lock can promote a taller node,
 	// and descending from the old entry through the new top level would walk
@@ -3816,6 +3854,12 @@ func (h *hnsw) buildLanes(dense []float32, sparse SparseVector, k int, opts Hybr
 
 	h.mu.RLock()
 	defer h.mu.RUnlock()
+	// Reject on a poisoned index (failed mmap grow) under the lock so both
+	// HybridSearch and HybridLanes surface the sentinel instead of a silent empty
+	// result — see arena.poisoned.
+	if h.arena.poisoned.Load() {
+		return nil, nil, ErrIndexPoisoned
+	}
 	h.searchOps.Add(1)
 
 	// Dense lane.

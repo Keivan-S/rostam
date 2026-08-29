@@ -173,6 +173,16 @@ func (h *hnsw) growLevel0(needU32 int) error {
 	if h.graphMmapF != nil {
 		region, err := growVecMmap(h.graphMmapF, h.graphRegion, newBytes)
 		if err != nil {
+			// growVecMmap unmaps the old view BEFORE truncate+remap; on error the old
+			// backing is already gone, so h.graphRegion/h.level0 (which aliases it)
+			// point at an unmapped region. Poison the index (via the arena, which is
+			// always present and holds the single terminal flag) so every public op
+			// rejects with ErrIndexPoisoned, and nil the headers (belt-and-suspenders)
+			// so a bug that bypasses the guard faults cleanly instead of reading
+			// unmapped memory. (h.nodes/h.level0Len are heap-backed — leave them.)
+			h.arena.poisoned.Store(true)
+			h.graphRegion = nil
+			h.level0 = nil
 			return err
 		}
 		h.graphRegion = region

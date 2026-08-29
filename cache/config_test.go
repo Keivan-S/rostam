@@ -64,13 +64,16 @@ func TestConfigDataDirCrossPlatform(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.DataDir = t.TempDir()
 	err := cfg.Validate()
-	if runtime.GOOS == "linux" {
+	// Asserted against the same constant Validate consults, so a platform
+	// gaining (or losing) a file-mapping implementation cannot leave the guard
+	// and this test disagreeing about what the platform can do.
+	if mmapSupported {
 		if err != nil {
-			t.Errorf("Linux should accept DataDir: %v", err)
+			t.Errorf("%s maps files and should accept DataDir: %v", runtime.GOOS, err)
 		}
 	} else {
 		if err == nil {
-			t.Error("non-Linux should reject DataDir")
+			t.Errorf("%s cannot map files and should reject DataDir", runtime.GOOS)
 		}
 	}
 }

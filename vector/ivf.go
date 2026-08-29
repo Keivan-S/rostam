@@ -345,6 +345,15 @@ func (ix *ivf) pq4Active() bool {
 // IVFRerank). The returned slice is freshly allocated when reconstructed and
 // aliases arena storage otherwise; callers that retain it must clone.
 func (ix *ivf) vecFor(slot uint32) []float32 {
+	// Under-lock backstop for the materialization paths (Get/GetProjected/GetInto,
+	// discover context pairs): a failed mmap grow nils the arena floats, so
+	// arena.Vec would slice a nil region and panic. Return nil instead. Callers
+	// that dereference the result element-wise (meanOf, discover pairs) reject at
+	// their own top under the lock; this keeps the Get* path panic-safe. See
+	// arena.poisoned.
+	if ix.arena.poisoned.Load() {
+		return nil
+	}
 	if !ix.pqDropped {
 		return ix.arena.Vec(slot)
 	}
@@ -1707,6 +1716,11 @@ func (ix *ivf) SearchInto(dst []Result, query []float32, k int, filter Filter) (
 
 	ix.mu.RLock()
 	defer ix.mu.RUnlock()
+	// Reject on a poisoned index (failed mmap grow) under the lock so the sentinel
+	// surfaces instead of a silent empty result — see arena.poisoned.
+	if ix.arena.poisoned.Load() {
+		return dst, ErrIndexPoisoned
+	}
 	ix.searchOps.Add(1)
 	return ix.searchLocked(q, k, pred, dst), nil
 }
@@ -1743,6 +1757,11 @@ func (ix *ivf) SearchFilteredWith(dst []Result, query []float32, k int, filter F
 
 	ix.mu.RLock()
 	defer ix.mu.RUnlock()
+	// Reject on a poisoned index (failed mmap grow) under the lock so the sentinel
+	// surfaces instead of a silent empty result — see arena.poisoned.
+	if ix.arena.poisoned.Load() {
+		return dst, ErrIndexPoisoned
+	}
 	ix.searchOps.Add(1)
 
 	matched := ix.gatherLockedWith(q, k, pred, metaOf)
@@ -1761,6 +1780,14 @@ func (ix *ivf) SearchFilteredWith(dst []Result, query []float32, k int, filter F
 // re-checked against the live shared payload (the sub-arena carries no metadata).
 // Must hold ix.mu (read).
 func (ix *ivf) gatherLockedWith(q []float32, k int, pred Predicate, metaOf metaProvider) []slotDist {
+	// Under-lock backstop: a failed mmap grow nils the arena floats, so every dense
+	// scan (this and gatherLocked below) would slice the freed region. Return an
+	// empty candidate set instead. Runs under the caller's ix.mu RLock, closing the
+	// TOCTOU against a concurrent grow that poisons after a top-of-op check. See
+	// arena.poisoned.
+	if ix.arena.poisoned.Load() {
+		return nil
+	}
 	if metaOf == nil {
 		return ix.gatherLocked(q, k, pred)
 	}
@@ -2186,6 +2213,13 @@ func (ix *ivf) gatherFlatBatched(batch *batchKernel, cells []int, total int, adm
 // returned set is every admitted candidate in the probed cells (the caller
 // top-k's it). Must hold ix.mu (read).
 func (ix *ivf) gatherLocked(q []float32, k int, pred Predicate) []slotDist {
+	// Under-lock backstop: a failed mmap grow nils the arena floats, so the cell
+	// scan / brute force below (both read arena.Vec) would slice the freed region.
+	// Return an empty candidate set instead; the error-returning ops reject with
+	// ErrIndexPoisoned at their own top. See arena.poisoned.
+	if ix.arena.poisoned.Load() {
+		return nil
+	}
 	dist := ix.metricDist()
 	if !ix.trained || len(ix.centroids) == 0 {
 		return ix.bruteForceLocked(q, dist, pred)
@@ -2531,6 +2565,12 @@ func (ix *ivf) buildLanes(dense []float32, sparse SparseVector, k int, opts Hybr
 
 	ix.mu.RLock()
 	defer ix.mu.RUnlock()
+	// Reject on a poisoned index (failed mmap grow) under the lock so both
+	// HybridSearch and HybridLanes surface the sentinel instead of a silent empty
+	// dense lane — see arena.poisoned.
+	if ix.arena.poisoned.Load() {
+		return nil, nil, ErrIndexPoisoned
+	}
 	ix.searchOps.Add(1)
 
 	if q != nil {
@@ -2587,6 +2627,11 @@ func (ix *ivf) SearchMMR(query []float32, k int, opts MMROpts) ([]Result, error)
 
 	ix.mu.RLock()
 	defer ix.mu.RUnlock()
+	// Reject on a poisoned index (failed mmap grow) under the lock so the sentinel
+	// surfaces instead of a silent empty result — see arena.poisoned.
+	if ix.arena.poisoned.Load() {
+		return nil, ErrIndexPoisoned
+	}
 	ix.searchOps.Add(1)
 
 	cands := ix.searchLocked(q, fetchK, pred, nil)
@@ -2656,6 +2701,13 @@ func (ix *ivf) Recommend(k int, opts RecommendOpts) ([]Result, error) {
 	}
 	target := make([]float32, ix.cfg.Dim)
 	ix.mu.RLock()
+	// Reject on a poisoned index (failed mmap grow) before meanOf dereferences the
+	// freed arena floats element-wise (vecFor's nil return would panic there) —
+	// see arena.poisoned.
+	if ix.arena.poisoned.Load() {
+		ix.mu.RUnlock()
+		return nil, ErrIndexPoisoned
+	}
 	nPos := ix.meanOf(target, opts.Positive)
 	if nPos == 0 {
 		ix.mu.RUnlock()
@@ -2744,6 +2796,12 @@ func (ix *ivf) Discover(k int, opts DiscoverOpts) ([]Result, error) {
 
 	ix.mu.RLock()
 	defer ix.mu.RUnlock()
+	// Reject on a poisoned index (failed mmap grow) before the context-pair vectors
+	// are materialized (vecFor returns nil, which discoverScoredLocked would
+	// dereference) — see arena.poisoned.
+	if ix.arena.poisoned.Load() {
+		return nil, ErrIndexPoisoned
+	}
 	ix.searchOps.Add(1)
 
 	pairs := make([]DiscoverPair, 0, len(opts.Context))
@@ -2788,6 +2846,11 @@ func (ix *ivf) DiscoverVecs(k int, opts DiscoverVecsOpts) ([]Result, error) {
 
 	ix.mu.RLock()
 	defer ix.mu.RUnlock()
+	// Reject on a poisoned index (failed mmap grow) under the lock so the sentinel
+	// surfaces instead of a silent empty result — see arena.poisoned.
+	if ix.arena.poisoned.Load() {
+		return nil, ErrIndexPoisoned
+	}
 	ix.searchOps.Add(1)
 
 	return ix.discoverScoredLocked(k, fetchK, opts.Target, opts.Context, pred)
@@ -2816,6 +2879,11 @@ func (ix *ivf) RecommendVecs(k int, opts RecommendVecsOpts) ([]Result, error) {
 
 	ix.mu.RLock()
 	defer ix.mu.RUnlock()
+	// Reject on a poisoned index (failed mmap grow) under the lock so the sentinel
+	// surfaces instead of a silent empty result — see arena.poisoned.
+	if ix.arena.poisoned.Load() {
+		return nil, ErrIndexPoisoned
+	}
 	ix.searchOps.Add(1)
 
 	return ix.recommendBestLocked(k, fetchK, opts.Positive, opts.Negative, pred)
@@ -2911,6 +2979,11 @@ func (ix *ivf) GroupCandidates(query []float32, opts GroupOpts) ([]Document, err
 
 	ix.mu.RLock()
 	defer ix.mu.RUnlock()
+	// Reject on a poisoned index (failed mmap grow) under the lock so the sentinel
+	// surfaces instead of a silent empty result — see arena.poisoned.
+	if ix.arena.poisoned.Load() {
+		return nil, ErrIndexPoisoned
+	}
 
 	raw := ix.searchLocked(q, fetchK, pred, nil)
 	docs := make([]Document, 0, len(raw))
@@ -3839,6 +3912,13 @@ func (ix *ivf) ivfSOARActive() bool { return ix.soarTrained }
 func (ix *ivf) Snapshot(w io.Writer) error {
 	ix.mu.RLock()
 	defer ix.mu.RUnlock()
+	// A failed mmap slab growth freed the arena floats; refuse to serialize rather
+	// than emit a silently truncated snapshot. Called from the raft FSM snapshot
+	// and backup paths (goroutines with no panic recovery), so checked under ix.mu
+	// (closes the TOCTOU with a concurrent grow) — see arena.poisoned.
+	if ix.arena.poisoned.Load() {
+		return ErrIndexPoisoned
+	}
 	bw := bufio.NewWriter(w)
 
 	// Choose snapshot version: v5 (SOAR block) when SOAR built a secondary

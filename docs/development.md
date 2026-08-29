@@ -3,8 +3,9 @@
 ## Requirements
 
 - **Go 1.26+** (from `go.mod`)
-- Linux/amd64 gets mmap persistence and the AVX2 kernels; other platforms use
-  portable fallbacks
+- mmap persistence works on Linux and 64-bit Windows (windows/amd64); the AVX2
+  kernels are Linux/amd64.
+  Other platforms use portable fallbacks (and run heap-only, with no `DataDir`)
 - **cgo** for the full module (the WASM backend links `wasmtime-go`); the
   storage and vector packages are pure Go
 
@@ -62,6 +63,7 @@ GitHub Actions runs these lanes on every push/PR:
 | `test-root` / `test-inttest` / `test-cluster` / `test-shard` | the heavy integration suites, each isolated in its own job so they never oversubscribe one runner |
 | `cgo-disabled-build` | the whole module keeps building with `CGO_ENABLED=0` (the wasmtime backend swaps to its `!cgo` stub) |
 | `cross-compile` | build-only matrix across linux/386, linux/arm, linux/arm64, darwin, windows, freebsd — catches 32-bit and cross-platform breakage the linux/amd64 lanes can't |
+| `test-windows` | the cache and MCP-memory packages **run** on windows/amd64 — the only other platform that maps shard and slab files. The cross-compile lane builds windows but never executes it, so a file-mapping bug there would reach users unseen |
 | `test-386` | the wire-decoding packages **run** as a linux/386 binary, so `int(uint32)` length conversions execute with a 32-bit `int` — where an over-MaxInt32 length widens negative and slips past `len(args) < off+n` checks. The cross-compile lane only builds; this one executes |
 | `race` | race detector over the concurrency-critical packages, with `-short`: the heavy differential suites in `vector/` size their corpora off it by design (see `filter_bitset_test.go`), and without it the package alone exceeds the lane's timeout |
 | `python-client` | the Python client's pytest suite |

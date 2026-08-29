@@ -14,8 +14,11 @@ runtime dependencies.
 - The default full-module build requires **cgo** (the WASM stored-procedure
   backend uses `wasmtime-go`). The vector engine and cache packages are pure Go —
   see [Development](development.md#building) for `CGO_ENABLED=0` builds.
-- mmap persistence and the AVX2 kernels are Linux/amd64; everything has a
-  portable fallback.
+- mmap persistence works on Linux and 64-bit Windows (windows/amd64); the AVX2
+  kernels are Linux/amd64.
+  Everything else has a portable fallback. On Windows a shard file is fully
+  allocated when it is created rather than growing from a hole, so a data
+  directory takes its configured size on disk up front.
 
 ## Install the server
 

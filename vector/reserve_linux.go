@@ -188,17 +188,3 @@ func (r *slabReservation) release() error {
 	}
 	return nil
 }
-
-// unmapVecMmap releases a mapping made by openVecMmap/growVecMmap WITHOUT
-// closing the file — used when a slab migrates from the legacy whole-file
-// mapping onto a reservation, where the file stays but its old mapping must go.
-func unmapVecMmap(region []byte) error {
-	if len(region) == 0 {
-		return nil
-	}
-	_ = unix.Msync(region, unix.MS_SYNC)
-	if err := unix.Munmap(region); err != nil {
-		return fmt.Errorf("vector: munmap (migrate): %w", err)
-	}
-	return nil
-}

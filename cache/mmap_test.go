@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//go:build linux
+//go:build linux || windows
 
 package cache
 
@@ -19,7 +19,7 @@ func TestMmapFileRoundtrip(t *testing.T) {
 		t.Fatalf("region size = %d, want 4096", len(region))
 	}
 	copy(region, []byte("HELLO"))
-	if err := msync(region); err != nil {
+	if err := msync(f, region); err != nil {
 		t.Fatalf("msync: %v", err)
 	}
 	if err := munmapAndClose(f, region); err != nil {

@@ -5,6 +5,20 @@ Notable user-visible changes. Entries that alter existing behaviour are marked
 
 ## Unreleased
 
+- **Persistence works on Windows.** `cache.Config.DataDir` and mmap-backed
+  (`Persistent`) vector collections are now supported on Windows, so an
+  embedded store — and the MCP memory server on its default `-data auto` — keeps
+  its data across restarts there instead of refusing to open with `cache.Config:
+  DataDir set but mmap not supported on windows`. Windows previously had no file
+  mapping wired up at all, only stubs that returned that error, which made
+  `-data ""` (heap, no persistence) the one working mode. Durability means the
+  same thing on both platforms: the flush pairs `FlushViewOfFile` with
+  `FlushFileBuffers`, so `-durable` is not claiming a guarantee Windows was never
+  asked for. One difference to plan for: NTFS does not hand out sparse files, so
+  a shard file occupies its full configured size on disk the moment it is
+  created. A fresh embedded store therefore reserves its whole cache budget up
+  front (1 GiB by default off Linux, where system memory is not probed), while on
+  Linux the same file starts as a hole and consumes space only as it fills.
 - **Atomic conditional KV writes: `set_nx`, `cas`, and compare-and-delete.**
   Three new key-value ops give you an atomic conditional write, the primitive
   needed for correct distributed locks, once-only writes, and idempotency keys:

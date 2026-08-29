@@ -443,6 +443,15 @@ func (h *hnsw) Snapshot(w io.Writer) error {
 	defer h.linkMu.Unlock()
 	h.mu.RLock()
 	defer h.mu.RUnlock()
+	// A failed mmap slab growth freed the backing region; refuse to serialize
+	// rather than emit a silently truncated snapshot (Capacity()/vecs are 0 after
+	// the poison). This is called from the raft FSM snapshot and backup paths,
+	// both in goroutines with no panic recovery, so a broken checkpoint here would
+	// otherwise be produced silently. Checked under h.mu (closes the TOCTOU with a
+	// concurrent grow) — see arena.poisoned / ErrIndexPoisoned.
+	if h.arena.poisoned.Load() {
+		return ErrIndexPoisoned
+	}
 	return h.writeSnapshot(w)
 }
 
