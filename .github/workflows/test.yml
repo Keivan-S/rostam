@@ -317,6 +317,20 @@ jobs:
       - name: Test (storage + memory packages)
         run: go test -count=1 -timeout 30m ./cache/... ./mcp/...
 
+      # The step above maps the CACHE slab on Windows, but the VECTOR mmap code
+      # (vector/mmap_windows.go: openVecMmap/growVecMmap/syncVecMmap/... and the
+      # level-0 graph slab) is only compile-checked here — the mcp test falls back
+      # to heap-backed vectors (QuantInRAM, no MmapPath/GraphMmapPath), so a
+      # Windows-specific mapping/grow/flush bug in the vector or graph slab would
+      # ship undetected. Run a TARGETED slice of ./vector/ that hits the
+      # open→grow→sync→close→reopen round-trip (mmap/persist/reopen/grow/reserve/
+      # slab tests) — deliberately NOT the full vector suite. The -skip drops the
+      # concurrent/latency grow tests: on a shared runner CPU oversubscription
+      # makes those the flakiest, and they add no Windows-mapping coverage the
+      # serial round-trip doesn't already give (they still run on the Linux lanes).
+      - name: Test (vector mmap/persist round-trip, targeted)
+        run: go test -count=1 -timeout 15m -run 'Mmap|Persist|Reopen|Grow|Reserve|Slab' -skip 'Concurrent|Latency|SIFT' ./vector/
+
   cgo-disabled-build:
     name: cgo-disabled build
     runs-on: ubuntu-latest

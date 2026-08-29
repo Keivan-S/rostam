@@ -381,6 +381,108 @@ func TestPersistMetadataRoundtrip(t *testing.T) {
 	}
 }
 
+// TestPersistMmapGrowReopen exercises the full Windows-critical round-trip on the
+// VECTOR and GRAPH mmap slabs together: build an mmap-backed collection with
+// serial inserts that cross the initial 1024-slot reserve on BOTH slabs (forcing
+// at least one growVecMmap each — the unmap+truncate+remap grow path that only the
+// windows CI lane now actually runs), sync+close via SavePersist, then reopen from
+// the same paths and assert the vectors and graph survived (ids present, count
+// matches, search results identical). Small dim + fixed seed keep it deterministic
+// and fast; the two file-size asserts prove a grow really happened (else the test
+// would be a no-op for the grow path it exists to cover).
+func TestPersistMmapGrowReopen(t *testing.T) {
+	const dim, k = 16, 10
+	// > mmapInitVectors (1024) so BOTH the vector slab (initial 1024*dim floats) and
+	// the level-0 graph slab (initial 1024*m0 u32) grow at least once via growVecMmap.
+	// At these sizes newBytes stays well under slabReserveThreshold, so growth takes
+	// the mmap truncate+remap path (not a reservation) — exactly the Windows code.
+	const n = 1500
+	dir := t.TempDir()
+	cfg := Config{
+		Dim: dim, Metric: Cosine, M: 16, EfConstruction: 100, EfSearch: 64, Seed: 1,
+		Quant: QuantSQ8, QuantStorage: QuantMmap, MmapPath: filepath.Join(dir, "vecs.dat"),
+		RescoreFactor: 3, GraphMmapPath: filepath.Join(dir, "graph.dat"),
+	}
+	h, err := newHNSW(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids, vecs := siftLikeCorpus(n, dim, 4)
+	for _, v := range vecs { // SQ8 is cosine-scope
+		normalize(v)
+	}
+	// Serial Insert exercises the incremental remap-on-grow path (each insert can
+	// extend both mmap regions), unlike BuildConcurrent's single pre-sizing grow.
+	for i := range vecs {
+		if _, _, err := h.Insert(ids[i], vecs[i], 0, nil, nil, nil, CASCond{}); err != nil {
+			t.Fatalf("insert %d: %v", i, err)
+		}
+	}
+
+	// Both slabs must have grown past their initial reserve — otherwise this test
+	// never engaged growVecMmap and would silently stop covering it.
+	initVec := int64(mmapInitVectors * dim * 4)
+	initGraph := int64(mmapInitVectors * h.m0 * 4)
+	if fi, err := os.Stat(cfg.MmapPath); err != nil {
+		t.Fatalf("stat vec file: %v", err)
+	} else if fi.Size() <= initVec {
+		t.Fatalf("vec file = %d bytes, want > initial reserve %d (no growVecMmap happened)", fi.Size(), initVec)
+	}
+	if fi, err := os.Stat(cfg.GraphMmapPath); err != nil {
+		t.Fatalf("stat graph file: %v", err)
+	} else if fi.Size() <= initGraph {
+		t.Fatalf("graph file = %d bytes, want > initial reserve %d (no growVecMmap happened)", fi.Size(), initGraph)
+	}
+
+	_, queries := siftLikeCorpus(40, dim, 9)
+	for _, q := range queries {
+		normalize(q)
+	}
+	before := make([][]uint64, len(queries))
+	for i, q := range queries {
+		res, err := h.Search(q, k)
+		if err != nil {
+			t.Fatal(err)
+		}
+		before[i] = resultIDs(res)
+	}
+
+	metaPath := filepath.Join(dir, "meta.bin")
+	if err := h.SavePersist(metaPath); err != nil { // sync mmaps + write sidecar
+		t.Fatalf("SavePersist: %v", err)
+	}
+	if err := h.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	// Reopen by MAPPING the same files (no rebuild / no Insert loop).
+	h2, err := openPersist(cfg, metaPath)
+	if err != nil {
+		t.Fatalf("openPersist: %v", err)
+	}
+	defer func() { _ = h2.Close() }()
+
+	if got := h2.arena.Size(); got != n {
+		t.Errorf("reopened size = %d, want %d", got, n)
+	}
+	for _, id := range ids {
+		if _, ok := h2.arena.idMap[id]; !ok {
+			t.Errorf("id %d missing after reopen", id)
+			break
+		}
+	}
+	for i, q := range queries {
+		res, err := h2.Search(q, k)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !eqUint64(resultIDs(res), before[i]) {
+			t.Errorf("query %d: reopened results %v != original %v", i, resultIDs(res), before[i])
+			break
+		}
+	}
+}
+
 // TestPersistConfigMismatch checks OpenPersist rejects a Config whose
 // dim/metric/M/quant differ from the saved index.
 func TestPersistConfigMismatch(t *testing.T) {
