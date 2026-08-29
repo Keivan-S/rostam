@@ -173,16 +173,39 @@ func (h *hnsw) growLevel0(needU32 int) error {
 	if h.graphMmapF != nil {
 		region, err := growVecMmap(h.graphMmapF, h.graphRegion, newBytes)
 		if err != nil {
-			// growVecMmap unmaps the old view BEFORE truncate+remap; on error the old
-			// backing is already gone, so h.graphRegion/h.level0 (which aliases it)
-			// point at an unmapped region. Poison the index (via the arena, which is
-			// always present and holds the single terminal flag) so every public op
-			// rejects with ErrIndexPoisoned, and nil the headers (belt-and-suspenders)
-			// so a bug that bypasses the guard faults cleanly instead of reading
-			// unmapped memory. (h.nodes/h.level0Len are heap-backed — leave them.)
+			// A graph-slab grow failure is TERMINAL — even when growVecMmap restored a
+			// valid mapping of the old edges. This is the deliberate ASYMMETRY with
+			// arena.growVecs, and the reason is WHEN each grow runs relative to the point
+			// commit:
+			//
+			//   - arena.growVecs grows INSIDE arena.Insert, BEFORE the point is committed,
+			//     so a restored failure aborts that Insert as a clean no-op and the index
+			//     stays consistent → non-terminal, no poison.
+			//   - growLevel0 runs from setNode, AFTER placeLockedAt has already committed
+			//     the point: idMap/ids/Size, its version, the payload/sparse/bm25 indexes,
+			//     bytesUsed, and ensureGraphSlot has already extended h.nodes with a nil
+			//     entry + h.level0Len. There is NO clean rollback from here.
+			//
+			// Returning "restored, usable" would therefore leave a TORN insert: the point
+			// is present in the id set and secondary indexes but has a nil graph node —
+			// invisible to Search, un-retryable (arena.Insert would report ErrDuplicateID),
+			// reported to the caller as a failed insert (WAL / replica divergence), and a
+			// latent nil-deref of h.nodes[slot] in Snapshot. Poisoning is strictly safer
+			// than that half-committed state, so a graph-grow failure always goes terminal.
+			if region != nil {
+				// Rebind to the restored mapping anyway, so it is neither leaked nor left
+				// dangling: any access that slips past the poison guard then faults cleanly
+				// on real data rather than an unmapped region. (len(region) == oldLen*4.)
+				h.graphRegion = region
+				h.level0 = uint32sOver(region)[:oldLen]
+			} else {
+				h.graphRegion = nil
+				h.level0 = nil
+			}
+			// Poison via the arena (always present, holds the single terminal flag) so
+			// every public op rejects with ErrIndexPoisoned. (h.nodes/h.level0Len are
+			// heap-backed — leave them.)
 			h.arena.poisoned.Store(true)
-			h.graphRegion = nil
-			h.level0 = nil
 			return err
 		}
 		h.graphRegion = region
