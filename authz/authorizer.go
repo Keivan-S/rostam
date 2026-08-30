@@ -220,12 +220,14 @@ var adminOps = map[string]struct{}{
 }
 
 // readOps is the small set of cluster-introspection ops that are explicitly
-// "read": __ping__ (liveness) and __topology__ (cluster map). Both are also
-// registered OpReadOnly, but enumerating them keeps the classification explicit
-// and independent of registration order.
+// "read": __ping__ (liveness), __topology__ (cluster map) and __collections__
+// (the dashboard's dense-collection list). All are also registered OpReadOnly,
+// but enumerating them keeps the classification explicit and independent of
+// registration order.
 var readOps = map[string]struct{}{
-	"__ping__":     {},
-	"__topology__": {},
+	"__ping__":        {},
+	"__topology__":    {},
+	"__collections__": {},
 }
 
 // actionFor returns the required action ("read"|"write"|"admin") for op.

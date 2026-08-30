@@ -53,11 +53,12 @@ var BuiltinOps = []BuiltinOp{
 	// the read counterpart of put_batch. The client groups keys by owning shard
 	// before it calls, so every key in one mget hashes to the same shard.
 	{"mget", OpReadOnly, mgetKeyExtractor, RouteLayoutNone, false},
-	// __ping__/__ready__/__metrics__/__repl_metrics__ are shardless (nil KeyExtractor).
+	// __ping__/__ready__/__metrics__/__repl_metrics__/__collections__ are shardless (nil KeyExtractor).
 	{"__ping__", OpReadOnly, nil, RouteLayoutNone, false},
 	{ReadyOp, OpReadOnly, nil, RouteLayoutNone, false},
 	{MetricsOp, OpReadOnly, nil, RouteLayoutNone, false},
 	{ReplMetricsOp, OpReadOnly, nil, RouteLayoutNone, false},
+	{CollectionsOp, OpReadOnly, nil, RouteLayoutNone, false},
 
 	{"vector_create_collection", OpReadWrite, routeAt1.ke, routeAt1.layout, false},
 	{"vector_drop_collection", OpReadWrite, routeAt1.ke, routeAt1.layout, false},

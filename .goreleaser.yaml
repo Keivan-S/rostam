@@ -25,6 +25,10 @@ git:
 before:
   hooks:
     - go mod download
+    # Builds the Vite dashboard and syncs it into dashboard/dist/ (the
+    # go:embed'd tree) so a released binary ships the real UI instead of the
+    # unbuilt placeholder. Requires Node/npm on the release runner's PATH.
+    - make ui
 
 builds:
   - id: rostam-server

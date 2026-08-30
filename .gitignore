@@ -38,6 +38,7 @@ perf-desktop.png
 # Python client artifacts
 __pycache__/
 *.pyc
+
 clients/python/.venv/
 clients/python/dist/
 clients/python/build/
@@ -61,3 +62,16 @@ site/
 
 # goreleaser build output
 dist/
+
+# Built dashboard (Vite) output. dashboard/dist/ is a staging dir the go:embed
+# reads from; `make ui` syncs the compiled Vite output into it. Only the .gitkeep
+# is tracked — it keeps the directory present so `go:embed all:dist` compiles
+# without a node build (the handler then serves a built-in placeholder). Every
+# real asset (index.html + hashed assets/) is generated and stays ignored.
+# The generic dist/ rule above (goreleaser) also matches dashboard/dist/ and would
+# exclude the whole directory — negations for files inside an excluded directory
+# are ignored — so we must re-include the directory FIRST (this rule wins as it is
+# later), re-ignore its contents, then keep only the .gitkeep.
+!dashboard/dist/
+dashboard/dist/*
+!dashboard/dist/.gitkeep

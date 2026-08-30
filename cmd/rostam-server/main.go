@@ -576,6 +576,28 @@ func main() {
 			// block before this assignment takes effect.)
 			Authenticator: cfg.Authenticator,
 		}
+
+		// Register a single-node __topology__ so the discovery op works WITHOUT
+		// -cluster: the dashboard's cluster view (and any smart client's
+		// IsLeader/LeaderAddr accessors) then see one node that leads its one
+		// logical shard, instead of the op 500-ing as "not registered". In -cluster
+		// mode cluster.Node registers the real, live topology on this same registry;
+		// this branch never builds a cluster.Node, so there is no double-register.
+		selfAddr := *tcpAddr
+		if selfAddr == "" {
+			selfAddr = *httpAddr
+		}
+		selfID := *nodeID
+		if err := ops.RegisterTopology(reg, func() (ops.Topology, error) {
+			return ops.Topology{
+				NumShards: 1,
+				Members:   []ops.TopologyMember{{NodeID: selfID, ServerAddr: selfAddr}},
+				Leaders:   []string{selfAddr},
+				Placement: [][]string{{selfID}},
+			}, nil
+		}); err != nil {
+			fatal("register single-node topology failed", "err", err)
+		}
 	}
 
 	// OPT-IN S3 tier (backup cron + cold-tier sweeper + admin REST surface). Build

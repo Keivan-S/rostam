@@ -1,0 +1,7 @@
+node_modules
+dist
+dist-ssr
+*.local
+*.tsbuildinfo
+.playwright-mcp
+.DS_Store

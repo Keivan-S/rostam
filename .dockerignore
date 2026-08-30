@@ -18,3 +18,10 @@
 .vscode
 .idea
 .DS_Store
+
+# UI: the Dockerfile's ui stage runs its own npm ci/build inside the image, so
+# a locally installed node_modules or a stale local dist/ would only bloat the
+# build context (and dist/ specifically must NOT be copied in, since the ui
+# stage's own build output is what gets COPYed into dashboard/dist/).
+ui/node_modules
+ui/dist

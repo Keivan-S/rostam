@@ -1,4 +1,6 @@
-.PHONY: all build docker lint test test-serial race bench test-python dist-python publish-python tidy clean
+.PHONY: all build ui docker lint test test-serial race bench test-python dist-python publish-python tidy clean
+
+NPM ?= npm
 
 GO ?= go
 PYTHON ?= python3
@@ -13,6 +15,16 @@ all: lint test race bench
 # themselves build with CGO_ENABLED=0 if you only need the library.
 build:
 	$(GO) build -trimpath -ldflags="-s -w" -o $(BIN) ./cmd/rostam-server
+
+# Build the embedded web dashboard and sync it into the go:embed staging dir
+# (dashboard/dist/). Run this before `make build`/goreleaser to bake the real UI
+# into the binary; without it the server serves a build-me placeholder. The sync
+# clears only assets/ (hashed filenames accumulate otherwise) and preserves the
+# tracked .gitkeep. Requires Node/npm on PATH.
+ui:
+	cd ui && $(NPM) ci && $(NPM) run build
+	rm -rf dashboard/dist/assets
+	cp -R ui/dist/. dashboard/dist/
 
 # Build the container image. Context is the repo root; the Dockerfile lives with
 # the server command.

@@ -39,6 +39,14 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # goreleaser's before.hooks run `make ui` (builds the Vite dashboard and
+      # syncs it into dashboard/dist/), which needs npm on PATH.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> v2"

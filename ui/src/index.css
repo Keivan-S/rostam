@@ -1,0 +1,134 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+  Rostam Dashboard theme tokens.
+  Dark-mode-first developer tool: a cool near-black slate base with a single
+  warm brand accent (Persian gold) reserved for identity, focus, and active
+  state. Status colors stay semantic (green / amber / red).
+
+  Colors are stored as space-separated RGB channels so Tailwind's alpha
+  modifiers (e.g. bg-brand/10) compose via `rgb(var(--c-x) / <alpha-value>)`.
+  The [data-theme] attribute is stamped by the inline script in index.html
+  before paint, so there is never a flash of the wrong palette.
+*/
+:root,
+:root[data-theme='light'] {
+  --c-surface: 247 248 250;
+  --c-panel: 255 255 255;
+  --c-panel-2: 241 243 246;
+  --c-line: 227 231 236;
+  --c-line-strong: 211 217 224;
+  --c-ink: 25 29 35;
+  --c-muted: 89 97 109;
+  --c-faint: 138 146 158;
+  --c-brand: 183 121 31;
+  --c-brand-soft: 251 241 222;
+  --c-brand-ink: 255 255 255;
+  --c-ok: 26 127 69;
+  --c-warn: 183 121 31;
+  --c-down: 207 47 54;
+  --c-info: 37 99 168;
+  --c-brand-ring: rgba(183, 121, 31, 0.28);
+}
+
+:root[data-theme='dark'] {
+  --c-surface: 10 12 16;
+  --c-panel: 17 20 25;
+  --c-panel-2: 23 27 33;
+  --c-line: 35 42 49;
+  --c-line-strong: 47 56 65;
+  --c-ink: 231 235 241;
+  --c-muted: 139 149 163;
+  --c-faint: 91 102 115;
+  --c-brand: 240 180 41;
+  --c-brand-soft: 42 36 17;
+  --c-brand-ink: 26 20 0;
+  --c-ok: 63 185 80;
+  --c-warn: 210 153 34;
+  --c-down: 248 81 73;
+  --c-info: 88 166 255;
+  --c-brand-ring: rgba(240, 180, 41, 0.32);
+}
+
+* {
+  border-color: rgb(var(--c-line));
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: rgb(var(--c-surface));
+  color: rgb(var(--c-ink));
+  font-family: theme('fontFamily.sans');
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+@layer base {
+  :focus-visible {
+    outline: none;
+    box-shadow:
+      0 0 0 2px rgb(var(--c-surface)),
+      0 0 0 4px var(--c-brand-ring);
+    border-radius: 4px;
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-xl border border-line bg-panel shadow-card;
+  }
+
+  .input {
+    @apply w-full rounded-lg border border-line bg-panel-2 px-3 py-2 text-sm text-ink
+      placeholder:text-faint transition-colors focus:border-brand focus:bg-panel;
+  }
+
+  .btn {
+    @apply inline-flex select-none items-center justify-center gap-1.5 rounded-lg
+      px-3 py-2 text-sm font-medium transition-all active:scale-[0.98]
+      disabled:pointer-events-none disabled:opacity-50;
+  }
+
+  .btn-primary {
+    @apply btn bg-brand text-brand-ink hover:brightness-110;
+  }
+
+  .btn-ghost {
+    @apply btn border border-line bg-panel text-ink hover:bg-panel-2;
+  }
+
+  .btn-danger {
+    @apply btn border border-down/40 bg-transparent text-down hover:bg-down/10;
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-md border border-line bg-panel-2
+      px-1.5 py-0.5 font-mono text-2xs text-muted;
+  }
+}
+
+/* Thin, unobtrusive scrollbars that match the theme. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(var(--c-line-strong)) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgb(var(--c-line-strong));
+  border-radius: 9999px;
+  border: 2px solid rgb(var(--c-surface));
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--c-faint));
+}

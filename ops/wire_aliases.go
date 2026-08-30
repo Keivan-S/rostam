@@ -54,6 +54,7 @@ const (
 	GetFlagsBoth                = wire.GetFlagsBoth
 	MaxCollectionNameWire       = wire.MaxCollectionNameWire
 	MaxPutBatchSize             = wire.MaxPutBatchSize
+	CollectionsOp               = wire.CollectionsOp
 	MetricsOp                   = wire.MetricsOp
 	OpKeysAdd                   = wire.OpKeysAdd
 	OpKeysList                  = wire.OpKeysList
@@ -118,6 +119,8 @@ var (
 	EncodeGetDelResult                        = wire.EncodeGetDelResult
 	DecodeTTLResult                           = wire.DecodeTTLResult
 	EncodeTTLResult                           = wire.EncodeTTLResult
+	DecodeCollectionsResult                   = wire.DecodeCollectionsResult
+	EncodeCollectionsResult                   = wire.EncodeCollectionsResult
 	DecodeIncrExArgs                          = wire.DecodeIncrExArgs
 	EncodeIncrExArgs                          = wire.EncodeIncrExArgs
 	DecodeMGetArgs                            = wire.DecodeMGetArgs
