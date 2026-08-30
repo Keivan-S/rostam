@@ -155,6 +155,14 @@ const mmapInitVectors = 1024
 // the platform files and is visible to the platform-agnostic test.
 var growVecMmapFailpoint func() error
 
+// growVecMmapRestoreFailpoint is the second seam: when non-nil, the real
+// growVecMmap impls consult it right before the RESTORE remap and, on a non-nil
+// return, skip that remap so it fails too — driving the (region==nil) terminal
+// tri-state (grow AND restore both failed). Same test-only, nil-in-production
+// contract and platform coverage as growVecMmapFailpoint; used together with it
+// to exercise the double-failure poison + errors.Join path.
+var growVecMmapRestoreFailpoint func() error
+
 // floatsOver reinterprets a byte region as a []float32 spanning its full
 // length (len == cap == len(region)/4). The region must outlive the slice;
 // arena rebuilds this header whenever the mapping moves.

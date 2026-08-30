@@ -49,6 +49,10 @@ func TestGrowFailureRestoresIndex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newHNSW(mmap): %v", err)
 	}
+	// Release the vector+graph mmaps at test end. On Windows a still-mapped
+	// graph.dat/vecs.dat blocks the t.TempDir RemoveAll ("being used by another
+	// process"), so this Close is what keeps the storage CI lane green.
+	t.Cleanup(func() { _ = h.Close() })
 
 	rng := rand.New(rand.NewSource(7))
 	vecs := make([][]float32, preN+1)
@@ -175,6 +179,9 @@ func TestGraphGrowFailurePoisonsIndex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newHNSW(graph-mmap): %v", err)
 	}
+	// Release the graph mmap at test end (see TestGrowFailureRestoresIndex) so the
+	// Windows t.TempDir cleanup can delete graph.dat.
+	t.Cleanup(func() { _ = h.Close() })
 
 	rng := rand.New(rand.NewSource(11))
 	mkVec := func() []float32 {
@@ -244,5 +251,94 @@ func TestGraphGrowFailurePoisonsIndex(t *testing.T) {
 		// No error return; the contract is panic-safety on the torn slot.
 		defer mustNotPanic(t)
 		_, _, _, _, _, _ = h.Get(1)
+	})
+}
+
+// TestGrowDoubleFailurePoisons exercises the terminal (region == nil) tri-state:
+// BOTH the original grow AND the restore remap fail. This is the one path where a
+// mmap-backed arena — otherwise the recoverable, pre-commit slab — must poison,
+// because after the restore fails there is genuinely no valid mapping to fall back
+// to. It also pins the errors.Join wrap: the returned error must carry BOTH the
+// grow cause and the restore cause reachably via errors.Is (a %v wrap of either
+// would break one of the two assertions below).
+func TestGrowDoubleFailurePoisons(t *testing.T) {
+	t.Cleanup(func() { growVecMmapFailpoint = nil; growVecMmapRestoreFailpoint = nil })
+
+	const (
+		dim  = 8
+		preN = mmapInitVectors
+	)
+
+	dir := t.TempDir()
+	cfg := Config{
+		Dim: dim, Metric: L2, M: 8, EfConstruction: 64, EfSearch: 32, Seed: 1,
+		Quant: QuantSQ8, RescoreFactor: 3,
+		QuantStorage:  QuantMmap,
+		MmapPath:      filepath.Join(dir, "vecs.dat"),
+		GraphMmapPath: filepath.Join(dir, "graph.dat"),
+	}
+	h, err := newHNSW(cfg)
+	if err != nil {
+		t.Fatalf("newHNSW(mmap): %v", err)
+	}
+	t.Cleanup(func() { _ = h.Close() })
+
+	rng := rand.New(rand.NewSource(13))
+	mkVec := func() []float32 {
+		v := make([]float32, dim)
+		for j := range v {
+			v[j] = float32(rng.NormFloat64())
+		}
+		return v
+	}
+	for i := 0; i < preN; i++ {
+		if _, _, err := h.Insert(uint64(i+1), mkVec(), 0, nil, nil, nil, CASCond{}); err != nil {
+			t.Fatalf("pre-grow insert %d: %v", i+1, err)
+		}
+	}
+	if h.arena.poisoned.Load() {
+		t.Fatalf("index poisoned before any grow failure")
+	}
+
+	// Arm BOTH seams with DISTINCT sentinels: the grow fails, then the restore remap
+	// also fails. The arena grow fires first (pre-commit), so this drives
+	// arena.growVecs into its (region == nil) terminal branch.
+	sentinelGrow := errors.New("injected grow failure (double)")
+	sentinelRestore := errors.New("injected restore failure (double)")
+	growVecMmapFailpoint = func() error { return sentinelGrow }
+	growVecMmapRestoreFailpoint = func() error { return sentinelRestore }
+
+	_, _, insErr := h.Insert(uint64(preN+1), mkVec(), 0, nil, nil, nil, CASCond{})
+	if insErr == nil {
+		t.Fatalf("grow-triggering insert: got nil err, want a double failure")
+	}
+
+	// Terminal: both mappings are gone, so the index must be poisoned.
+	if !h.arena.poisoned.Load() {
+		t.Fatalf("index NOT poisoned after a grow+restore double failure")
+	}
+
+	// The wrap must keep BOTH causes reachable (this is what errors.Join buys over
+	// a %v of either cause).
+	if !errors.Is(insErr, sentinelGrow) {
+		t.Fatalf("returned error does not wrap the GROW cause reachably: %v", insErr)
+	}
+	if !errors.Is(insErr, sentinelRestore) {
+		t.Fatalf("returned error does not wrap the RESTORE cause reachably: %v", insErr)
+	}
+
+	// And the index rejects cleanly from here on.
+	t.Run("Search", func(t *testing.T) {
+		defer mustNotPanic(t)
+		if _, err := h.Search(make([]float32, dim), 5); !errors.Is(err, ErrIndexPoisoned) {
+			t.Fatalf("Search: got %v, want ErrIndexPoisoned", err)
+		}
+	})
+	t.Run("Snapshot", func(t *testing.T) {
+		defer mustNotPanic(t)
+		var buf bytes.Buffer
+		if err := h.Snapshot(&buf); !errors.Is(err, ErrIndexPoisoned) {
+			t.Fatalf("Snapshot: got %v, want ErrIndexPoisoned", err)
+		}
 	})
 }

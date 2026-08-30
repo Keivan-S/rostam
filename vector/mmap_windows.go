@@ -47,10 +47,12 @@ func openVecMmap(path string, size int64) (*os.File, []byte, error) {
 // and the TRI-STATE return (kept mirror-identical to mmap_linux.go):
 //
 //   - (region != nil, err == nil): grew successfully; region covers newSize bytes.
-//   - (region != nil, err != nil): the grow failed, but a mapping of the OLD data
-//     was restored (grow only ever appends, so bytes [0,oldSize) are intact).
-//     len(region) == oldSize; the caller MUST rebind its header to region at the
-//     old logical length so the valid mapping is neither leaked nor left dangling.
+//   - (region != nil, err != nil): the grow failed, but a valid mapping of the OLD
+//     data remains — either the initial unmap itself failed (so old is still mapped
+//     and is handed straight back), or the later steps failed and a fresh mapping of
+//     the old extent was restored (grow only ever appends, so bytes [0,oldSize) are
+//     intact). len(region) == oldSize; the caller MUST rebind its header to region
+//     at the old logical length so the valid mapping is neither leaked nor dangling.
 //     Whether the failure is then RECOVERABLE is the caller's call, and the two
 //     callers differ: arena.growVecs grows pre-commit, so it treats this as
 //     non-terminal (only the one op fails); hnsw.growLevel0 grows post-commit with
@@ -61,7 +63,11 @@ func growVecMmap(f *os.File, old []byte, newSize int64) ([]byte, error) {
 	oldSize := int64(len(old))
 	if oldSize > 0 {
 		if err := windows.UnmapViewOfFile(vecRegionAddr(old)); err != nil {
-			return nil, fmt.Errorf("vector: UnmapViewOfFile (grow): %w", err)
+			// The unmap FAILED, so old is still mapped and valid. Return it as the
+			// "middle" tri-state (region non-nil at the OLD extent) rather than nil:
+			// nothing was grown, but the caller can rebind to old and stay usable, and
+			// old — the only slice that can later unmap this view — is not dropped.
+			return old, fmt.Errorf("vector: UnmapViewOfFile (grow): %w", err)
 		}
 	}
 
@@ -98,7 +104,14 @@ func growVecMmap(f *os.File, old []byte, newSize int64) ([]byte, error) {
 	if truncated {
 		_ = f.Truncate(oldSize)
 	}
-	restored, rerr := mapVecView(f, oldSize)
+	var rerr error
+	if fp := growVecMmapRestoreFailpoint; fp != nil {
+		rerr = fp() // test-only: simulate the restore remap ALSO failing.
+	}
+	var restored []byte
+	if rerr == nil {
+		restored, rerr = mapVecView(f, oldSize)
+	}
 	if rerr != nil {
 		// Both the grow and the restore failed. Join them so errors.Is can reach EITHER
 		// cause (the restore failure is primary, the original grow failure secondary).
