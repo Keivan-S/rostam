@@ -40,6 +40,18 @@ def _enc_key(key: bytes) -> bytes:
     return struct.pack(">H", len(key)) + key
 
 
+def _dec_found_value(payload: Optional[bytes]) -> Optional[bytes]:
+    """Decode a ``[found u8](+[valLen u32][val])`` result (getdel / getset).
+
+    ``found=0`` (or an empty payload) is ``None``; ``found=1`` returns the value
+    bytes (a non-``None`` empty ``bytes`` when the stored value was empty).
+    """
+    if not payload or payload[0] == 0:
+        return None
+    (vlen,) = struct.unpack_from(">I", payload, 1)
+    return bytes(payload[5 : 5 + vlen])
+
+
 class _KV:
     """Key-value operations over Rostam's native binary TCP protocol.
 
@@ -115,6 +127,76 @@ class _KV:
         args = _enc_key(k) + struct.pack(">I", len(e)) + e
         payload = self._t._call("cad", args)
         return bool(payload and payload[0])
+
+    def exists(self, key: Key) -> bool:
+        """Return whether ``key`` is currently present (an expired key is absent)."""
+        payload = self._t._call("exists", _enc_key(_as_bytes(key)), idempotent=True)
+        return bool(payload and payload[0])
+
+    def getdel(self, key: Key) -> Optional[bytes]:
+        """Atomically return ``key``'s value and delete it; ``None`` if absent."""
+        payload = self._t._call("getdel", _enc_key(_as_bytes(key)))
+        return _dec_found_value(payload)
+
+    def getset(self, key: Key, value: Key, *, ttl_ms: int = 0) -> Optional[bytes]:
+        """Atomically set ``key`` to ``value`` and return the OLD value (``None`` if
+        the key had no prior value). ``ttl_ms`` > 0 sets an expiry on the new value.
+        """
+        k, v = _as_bytes(key), _as_bytes(value)
+        args = _enc_key(k) + struct.pack(">I", len(v)) + v + struct.pack(">Q", ttl_ms)
+        payload = self._t._call("getset", args)
+        return _dec_found_value(payload)
+
+    def persist(self, key: Key) -> bool:
+        """Remove ``key``'s TTL so it never expires. Returns True if a TTL was
+        removed, False if the key is absent or already had no expiry.
+        """
+        payload = self._t._call("persist", _enc_key(_as_bytes(key)))
+        return bool(payload and payload[0])
+
+    def ttl(self, key: Key) -> int:
+        """Return ``key``'s remaining time-to-live in milliseconds (Redis
+        convention): ``-2`` if absent, ``-1`` if present but with no expiry, else
+        the remaining ms (>= 0).
+        """
+        payload = self._t._call("ttl", _enc_key(_as_bytes(key)), idempotent=True)
+        return struct.unpack(">q", payload)[0]
+
+    def incr_ex(self, key: Key, delta: int = 1, *, ttl_ms: int = 0) -> int:
+        """Atomically add ``delta`` and return the new value, setting ``ttl_ms`` as
+        the expiry only when the key is newly created — on an existing key the
+        increment leaves the deadline untouched. The fixed-window rate-limit
+        primitive: the first hit creates the counter with the window TTL, later
+        hits increment it without extending the window.
+        """
+        args = _enc_key(_as_bytes(key)) + struct.pack(">q", delta) + struct.pack(">Q", ttl_ms)
+        payload = self._t._call("incr_ex", args)
+        return struct.unpack(">q", payload)[0]
+
+    def compare_and_expire(self, key: Key, expected: Key, *, ttl_ms: int) -> bool:
+        """Refresh ``key``'s TTL only if its current value equals ``expected`` — the
+        lock-renewal primitive (extend a lease only while you still hold the token).
+        Returns True if the TTL was refreshed, False on a mismatch or absent key.
+        """
+        k, e = _as_bytes(key), _as_bytes(expected)
+        args = _enc_key(k) + struct.pack(">I", len(e)) + e + struct.pack(">Q", ttl_ms)
+        payload = self._t._call("caex", args)
+        return bool(payload and payload[0])
+
+    def mget(self, keys) -> list:
+        """Fetch many keys, returning a list of ``Optional[bytes]`` aligned to
+        ``keys`` (``None`` for each absent key).
+
+        Implemented as one ``get`` per key — NOT a single server-side batch. The
+        server routes the ``mget`` op to ONE shard (by its first key), and the
+        Python client carries no shard topology to group keys by, so a single
+        batched call would silently return ``None`` for keys owned by other
+        shards in a cluster. Per-key ``get`` is routed and served correctly for
+        every key on both a single-node store and a cluster, at the cost of N
+        round trips. (The Go client, which does carry topology, fans out one
+        ``mget`` per owning shard instead.)
+        """
+        return [self.get(k) for k in keys]
 
     def expire(self, key: Key, ttl_ms: int) -> None:
         """Set a TTL (in milliseconds) on an existing key."""

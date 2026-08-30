@@ -202,6 +202,41 @@ func (c *Cache) PutAt(key, value []byte, ttl time.Duration, nowMs uint64) error 
 	return s.putAtH(key, value, ttl, nowMs, h)
 }
 
+// NowMs returns the cache's EFFECTIVE wall-clock now in milliseconds — the same
+// clock the non-apply read path judges liveness with (an injected SetNowFunc
+// override, else real wall time), NOT raw time.Now. The read-only ttl op turns a
+// stored absolute expiry into a remaining-ms value against this so it can never
+// report a key expired that the same-clock read would still accept. SetNowFunc
+// sets one nowFn across every shard, so shard 0's clock is that shared clock.
+func (c *Cache) NowMs() uint64 { return c.shards[0].now() }
+
+// GetWithExpiry is Get that ALSO returns the entry's stored absolute expiry
+// (ms since epoch; 0 = no expiry). It is the read primitive the ttl / persist /
+// incr_ex ops need to inspect (and, for incr_ex, preserve) a key's deadline. It
+// evaluates liveness against the wall clock exactly like Get and returns
+// ErrNotFound for an absent or expired key.
+//
+// The returned val has EXACTLY Get's value-ownership contract (it shares Get's
+// code path, only additionally surfacing the expiry): under PolicyRingbufEvict
+// it is a freshly-allocated owned copy, but under PolicyRejectWrites it ALIASES
+// the page backing store and must not be retained across subsequent writes to
+// this shard — copy it if you need to. It does NOT unconditionally copy; see
+// shard.Get for the full contract.
+func (c *Cache) GetWithExpiry(key []byte) (val []byte, expiryMs uint64, err error) {
+	h, s := c.shardForH(key)
+	return s.getWithExpiryH(key, h)
+}
+
+// GetWithExpiryAt is GetWithExpiry with expiry evaluated against the EXPLICIT
+// clock nowMs rather than the wall clock — the apply-path counterpart used by
+// TxContext.GetWithExpiry under a leader apply stamp, mirroring GetAt. The
+// returned val carries the same ownership contract as Get/GetAt (see
+// GetWithExpiry): an owned copy under ringbuf, a page alias under reject-writes.
+func (c *Cache) GetWithExpiryAt(key []byte, nowMs uint64) (val []byte, expiryMs uint64, err error) {
+	h, s := c.shardForH(key)
+	return s.getWithExpiryAtH(key, h, nowMs)
+}
+
 // PutAbs inserts key with a pre-computed ABSOLUTE expiry (ms since epoch; 0 =
 // no expiry), bypassing any TTL→expiry conversion. Snapshot restore uses it to
 // install the exact expiry recorded in the snapshot verbatim, so two followers

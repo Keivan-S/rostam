@@ -58,6 +58,19 @@ var builtinHandlers = map[string]Handler{
 	"set_nx": handleSetNX,
 	"cas":    handleCAS,
 	"cad":    handleCompareAndDel,
+	// KV roadmap ops (all atomic under the shard write lock held for the whole
+	// handler): exists (liveness probe), getdel (read-then-delete), getset
+	// (read-then-replace), persist (drop TTL), ttl (remaining ms), incr_ex (incr
+	// setting the TTL only on create — the rate-limit primitive), caex
+	// (compare-and-expire — the lock-renewal primitive), mget (same-shard batch read).
+	"exists":  handleExists,
+	"getdel":  handleGetDel,
+	"getset":  handleGetSet,
+	"persist": handlePersist,
+	"ttl":     handleTTL,
+	"incr_ex": handleIncrEx,
+	"caex":    handleCAEX,
+	"mget":    handleMGet,
 	// put_batch packs N puts into one Raft log entry (one fsync / round-trip /
 	// apply for the whole batch). It routes by its FIRST key, so every key in a
 	// batch must hash to the same shard — the cluster fan-out (Node.PutBatch)
@@ -168,6 +181,14 @@ var builtinHandlers = map[string]Handler{
 //   - "set_nx" (read-write)  args: [keyLen u16][key][valLen u32][val][ttlMs u64] → 1-byte 1=stored/0=present
 //   - "cas"    (read-write)  args: [keyLen u16][key][valLen u32][val][hasExpected u8][expLen u32][expected][ttlMs u64] → 1-byte 1=stored/0=mismatch
 //   - "cad"    (read-write)  args: [keyLen u16][key][expLen u32][expected] → 1-byte 1=deleted/0=mismatch|absent
+//   - "exists"  (read-only)  args: [keyLen u16][key]                       → 1-byte 1=present/0=absent
+//   - "getdel"  (read-write) args: [keyLen u16][key]                       → [found u8](+[valLen u32][val] if found)
+//   - "getset"  (read-write) args: [keyLen u16][key][valLen u32][val][ttlMs u64] → [found u8](+[valLen u32][old] if found)
+//   - "persist" (read-write) args: [keyLen u16][key]                       → 1-byte 1=TTL removed/0=absent|already permanent
+//   - "ttl"     (read-only)  args: [keyLen u16][key]                       → i64 remaining ms (-2 absent, -1 no expiry)
+//   - "incr_ex" (read-write) args: [keyLen u16][key][delta i64][ttlMs u64] → new value as i64 BE (TTL set on create only)
+//   - "caex"    (read-write) args: [keyLen u16][key][expLen u32][expected][ttlMs u64] → 1-byte 1=TTL refreshed/0=mismatch|absent
+//   - "mget"    (read-only)  args: [count u16]([keyLen u16][key])*         → [count u16]([found u8](+[valLen u32][val] if found))*
 //   - "__ping__" (read-only) args: (ignored)                             → empty
 //
 // Routing metadata (kind/wire.KeyExtractor/wire.RouteLayout) comes from wire.BuiltinOps,
@@ -332,6 +353,235 @@ func handleCompareAndDel(tx *TxContext, args []byte) ([]byte, error) {
 		return []byte{1}, nil
 	}
 	return []byte{0}, nil
+}
+
+// handleExists reports whether key is currently present (and live). Result:
+// 1=present, 0=absent/expired. Read-only, so liveness is judged against the wall
+// clock, exactly like get (read ops are not apply-stamped).
+func handleExists(tx *TxContext, args []byte) ([]byte, error) {
+	key, err := wire.DecodeKeyArgs(args)
+	if err != nil {
+		return nil, err
+	}
+	switch _, err = tx.Get(key); {
+	case err == cache.ErrNotFound:
+		return []byte{0}, nil
+	case err != nil:
+		return nil, err
+	default:
+		return []byte{1}, nil
+	}
+}
+
+// handleGetDel atomically returns key's value and deletes it — a one-shot
+// take. Result: [found u8](+[valLen u32][val]). An absent key returns found=0.
+// The whole get→del runs under the shard write lock.
+func handleGetDel(tx *TxContext, args []byte) ([]byte, error) {
+	key, err := wire.DecodeKeyArgs(args)
+	if err != nil {
+		return nil, err
+	}
+	v, err := tx.Get(key)
+	if err == cache.ErrNotFound {
+		return wire.EncodeGetDelResult(nil, false), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	// Get aliases the page; copy before the Del can overwrite/free that region.
+	val := make([]byte, len(v))
+	copy(val, v)
+	if _, err := tx.Del(key); err != nil {
+		return nil, err
+	}
+	return wire.EncodeGetDelResult(val, true), nil
+}
+
+// handleGetSet atomically replaces key's value (reusing the put arg wire) and
+// returns the OLD value. Result: [found u8](+[valLen u32][old]); found=0 when the
+// key was absent. Atomic under the shard write lock.
+func handleGetSet(tx *TxContext, args []byte) ([]byte, error) {
+	key, val, ttl, err := wire.DecodePutArgs(args)
+	if err != nil {
+		return nil, err
+	}
+	old, err := tx.Get(key)
+	var oldCopy []byte
+	found := false
+	switch {
+	case err == cache.ErrNotFound:
+		// No prior value; found stays false.
+	case err != nil:
+		return nil, err
+	default:
+		found = true
+		// Copy the aliased old value before the Put overwrites the page.
+		oldCopy = make([]byte, len(old))
+		copy(oldCopy, old)
+	}
+	if err := tx.Put(key, val, ttl); err != nil {
+		return nil, err
+	}
+	return wire.EncodeGetDelResult(oldCopy, found), nil
+}
+
+// handlePersist removes key's TTL so it never expires. Result: 1=TTL removed,
+// 0=key absent OR already had no expiry. It reads the stored absolute expiry and,
+// when set, rewrites the SAME value with PutAbs(key, val, 0) — an absolute-expiry
+// write, deterministic across replicas because the committed value it read is
+// identical on every apply. Atomic under the shard write lock.
+func handlePersist(tx *TxContext, args []byte) ([]byte, error) {
+	key, err := wire.DecodeKeyArgs(args)
+	if err != nil {
+		return nil, err
+	}
+	val, expiryMs, err := tx.GetWithExpiry(key)
+	if err == cache.ErrNotFound {
+		return []byte{0}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if expiryMs == 0 {
+		return []byte{0}, nil // already permanent — nothing to remove
+	}
+	// Copy the aliased value before rewriting it with no expiry.
+	buf := make([]byte, len(val))
+	copy(buf, val)
+	if err := tx.PutAbs(key, buf, 0); err != nil {
+		return nil, err
+	}
+	return []byte{1}, nil
+}
+
+// handleTTL returns key's remaining time-to-live in ms (Redis convention): -2 if
+// the key is absent, -1 if it is present but has no expiry, else the remaining ms
+// (>= 0; 0 when it is about to expire). Read-only, so it is NOT stamped — the
+// remaining time is computed against the cache's EFFECTIVE clock (Cache.NowMs,
+// which honours an injected SetNowFunc), the SAME clock the GetWithExpiry read
+// above judged liveness with, so a live key can never report a wrong remaining.
+func handleTTL(tx *TxContext, args []byte) ([]byte, error) {
+	key, err := wire.DecodeKeyArgs(args)
+	if err != nil {
+		return nil, err
+	}
+	_, expiryMs, err := tx.GetWithExpiry(key)
+	if err == cache.ErrNotFound {
+		return wire.EncodeTTLResult(-2), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if expiryMs == 0 {
+		return wire.EncodeTTLResult(-1), nil
+	}
+	remaining := int64(expiryMs) - int64(tx.Cache().NowMs()) //nolint:gosec // ms timestamps fit int64
+	if remaining < 0 {
+		remaining = 0
+	}
+	return wire.EncodeTTLResult(remaining), nil
+}
+
+// handleIncrEx is incr that sets the TTL only when the key is newly created; on an
+// existing key it increments WITHOUT touching the deadline — the rate-limit
+// primitive (INCR ... EXPIRE-on-first-hit). Result: [newValue i64].
+//
+// Determinism: the create branch uses tx.Put(...,ttl), which on the replicated
+// path computes exp = leaderStamp + ttl (PutAt) identically on every replica; the
+// update branch uses tx.PutAbs(key, next, expiryMs), re-applying the ALREADY
+// STORED absolute expiry — the committed value's deadline is the same on every
+// replica, so writing it back verbatim is deterministic and preserves it exactly.
+func handleIncrEx(tx *TxContext, args []byte) ([]byte, error) {
+	key, delta, ttl, err := wire.DecodeIncrExArgs(args)
+	if err != nil {
+		return nil, err
+	}
+	v, expiryMs, err := tx.GetWithExpiry(key)
+	var (
+		next   int64
+		create bool
+	)
+	switch {
+	case err == cache.ErrNotFound:
+		next = delta
+		create = true
+	case err != nil:
+		return nil, err
+	case len(v) != 8:
+		return nil, errors.New("ops: incr_ex value is not 8 bytes")
+	default:
+		next = int64(binary.BigEndian.Uint64(v)) + delta //nolint:gosec // reinterpret stored i64 as u64 for binary read
+	}
+	buf := make([]byte, 8)
+	binary.BigEndian.PutUint64(buf, uint64(next)) //nolint:gosec // store i64 as u64 for binary write
+	if create {
+		// Newly created: stamp the TTL (relative ttl → now+ttl, stamped on the
+		// replicated path).
+		if err := tx.Put(key, buf, ttl); err != nil {
+			return nil, err
+		}
+	} else {
+		// Existing: preserve the stored absolute expiry, leaving the window intact.
+		if err := tx.PutAbs(key, buf, expiryMs); err != nil {
+			return nil, err
+		}
+	}
+	return wire.EncodeIncrResult(next), nil
+}
+
+// handleCAEX (compare-and-expire) refreshes key's TTL only if its current value
+// equals expected — the lock-renewal primitive (extend a lease only while you
+// still hold the token). Result: 1=TTL refreshed, 0=value mismatch or key absent.
+// Atomic under the shard write lock; Expire re-stamps the deadline on the
+// replicated path.
+func handleCAEX(tx *TxContext, args []byte) ([]byte, error) {
+	key, expected, ttl, err := wire.DecodeCAEXArgs(args)
+	if err != nil {
+		return nil, err
+	}
+	cur, err := tx.Get(key)
+	if err == cache.ErrNotFound {
+		return []byte{0}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !bytes.Equal(cur, expected) {
+		return []byte{0}, nil
+	}
+	if err := tx.Expire(key, ttl); err != nil {
+		return nil, err
+	}
+	return []byte{1}, nil
+}
+
+// handleMGet reads many same-shard keys in one op. Result: [count u16] then, per
+// requested key in order, [found u8](+[valLen u32][val]). A missing key is a
+// found=0 entry (never an op error). Read-only; the client groups keys by owning
+// shard and routes each batch by its first key.
+func handleMGet(tx *TxContext, args []byte) ([]byte, error) {
+	keys, err := wire.DecodeMGetArgs(args)
+	if err != nil {
+		return nil, err
+	}
+	vals := make([][]byte, len(keys))
+	found := make([]bool, len(keys))
+	for i, k := range keys {
+		v, err := tx.Get(k)
+		switch {
+		case err == cache.ErrNotFound:
+			// found[i] stays false
+		case err != nil:
+			return nil, err
+		default:
+			// v aliases the page; EncodeMGetResult copies it into the result buffer
+			// immediately below, and this read op performs no intervening write, so
+			// the alias is safe.
+			vals[i] = v
+			found[i] = true
+		}
+	}
+	return wire.EncodeMGetResult(vals, found), nil
 }
 
 // handlePing is a no-op heartbeat used by the client pool's stale-conn check.

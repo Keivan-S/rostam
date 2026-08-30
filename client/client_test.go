@@ -480,6 +480,88 @@ func TestClientIdempotentOpStillReplaysAcrossAmbiguousFailure(t *testing.T) {
 	}
 }
 
+// TestClientNewMutationsNotReplayedAcrossAmbiguousFailure: each of the new
+// outcome-returning / non-idempotent KV mutations (getdel, getset, incr_ex,
+// caex, persist) must behave like set_nx/cas — server A drops the response after
+// the op would have applied (ambiguous EOF), and the wrapper must surface that
+// error, NEVER transparently replay onto server B (which would report a
+// double-increment or a wrong bit).
+func TestClientNewMutationsNotReplayedAcrossAmbiguousFailure(t *testing.T) {
+	ctx := context.Background()
+	cases := []struct {
+		name string
+		call func(c *Client) error
+	}{
+		{"getdel", func(c *Client) error { _, _, err := c.GetDel(ctx, []byte("k")); return err }},
+		{"getset", func(c *Client) error { _, _, err := c.GetSet(ctx, []byte("k"), []byte("v"), 0); return err }},
+		{"incr_ex", func(c *Client) error { _, err := c.IncrEx(ctx, []byte("k"), 1, time.Second); return err }},
+		{"caex", func(c *Client) error {
+			_, err := c.CompareAndExpire(ctx, []byte("k"), []byte("e"), time.Second)
+			return err
+		}},
+		{"persist", func(c *Client) error { _, err := c.Persist(ctx, []byte("k")); return err }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var callB atomic.Int32
+			addrA, stopA := startDropAfterReadServer(t, nil)
+			defer stopA()
+			addrB, stopB := startFakeServer(t, func(_ []byte) (uint8, []byte) {
+				callB.Add(1)
+				return StatusOK, []byte{0}
+			})
+			defer stopB()
+			c, err := New(Config{Servers: []string{addrA, addrB}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = c.Close() }()
+
+			err = tc.call(c)
+			if err == nil {
+				t.Fatalf("%s returned nil; want a non-nil ambiguous transport error", tc.name)
+			}
+			if !isAmbiguous(err) {
+				t.Fatalf("%s err = %v; want an ambiguous (post-transmission) error", tc.name, err)
+			}
+			if n := callB.Load(); n != 0 {
+				t.Fatalf("%s: server B calls = %d, want 0 (non-replayable mutation must not replay)", tc.name, n)
+			}
+		})
+	}
+}
+
+// TestClientReadOnlyNewOpReplaysAcrossAmbiguousFailure: a read-only new op
+// (exists) is NOT in nonReplayableOp, so an ambiguous failure MUST still
+// transparently replay onto server B — the gating must not over-restrict.
+func TestClientReadOnlyNewOpReplaysAcrossAmbiguousFailure(t *testing.T) {
+	var callB atomic.Int32
+	addrA, stopA := startDropAfterReadServer(t, nil)
+	defer stopA()
+	addrB, stopB := startFakeServer(t, func(_ []byte) (uint8, []byte) {
+		callB.Add(1)
+		return StatusOK, []byte{1} // exists -> present
+	})
+	defer stopB()
+
+	c, err := New(Config{Servers: []string{addrA, addrB}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Close() }()
+
+	present, err := c.Exists(context.Background(), []byte("k"))
+	if err != nil {
+		t.Fatalf("Exists: %v; want transparent replay onto B for a read-only op", err)
+	}
+	if !present {
+		t.Fatal("Exists = false, want true from B")
+	}
+	if n := callB.Load(); n != 1 {
+		t.Fatalf("server B calls = %d, want 1 (idempotent replay expected)", n)
+	}
+}
+
 // TestClientRespectsCanceledContext: a pre-canceled context must cause Call to
 // return immediately with a context error, before any server dial is attempted
 // on the second hop.

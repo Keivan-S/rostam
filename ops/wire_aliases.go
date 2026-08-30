@@ -112,6 +112,18 @@ var (
 	DecodeCADArgs                             = wire.DecodeCADArgs
 	DecodeCASArgs                             = wire.DecodeCASArgs
 	DecodeCASResult                           = wire.DecodeCASResult
+	DecodeCAEXArgs                            = wire.DecodeCAEXArgs
+	EncodeCAEXArgs                            = wire.EncodeCAEXArgs
+	DecodeGetDelResult                        = wire.DecodeGetDelResult
+	EncodeGetDelResult                        = wire.EncodeGetDelResult
+	DecodeTTLResult                           = wire.DecodeTTLResult
+	EncodeTTLResult                           = wire.EncodeTTLResult
+	DecodeIncrExArgs                          = wire.DecodeIncrExArgs
+	EncodeIncrExArgs                          = wire.EncodeIncrExArgs
+	DecodeMGetArgs                            = wire.DecodeMGetArgs
+	EncodeMGetArgs                            = wire.EncodeMGetArgs
+	DecodeMGetResult                          = wire.DecodeMGetResult
+	EncodeMGetResult                          = wire.EncodeMGetResult
 	DecodeClearPayloadArgs                    = wire.DecodeClearPayloadArgs
 	DecodeClearPayloadArgsCAS                 = wire.DecodeClearPayloadArgsCAS
 	DecodeCreateCollectionArgs                = wire.DecodeCreateCollectionArgs
@@ -423,6 +435,7 @@ var (
 	ErrCursorOrderMismatch                    = wire.ErrCursorOrderMismatch
 	ErrMalformedPayloadJSON                   = wire.ErrMalformedPayloadJSON
 	ErrShortArgs                              = wire.ErrShortArgs
+	ErrTTLOutOfRange                          = wire.ErrTTLOutOfRange
 	ErrWASMModuleNotResident                  = wire.ErrWASMModuleNotResident
 	ErrWASMNoGroupBinding                     = wire.ErrWASMNoGroupBinding
 	KeyExtractorByHandle                      = wire.KeyExtractorByHandle

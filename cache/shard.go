@@ -454,7 +454,25 @@ func (s *shard) nextGen() uint16 {
 // client read. Non-replicated shards keep the lazy drop-on-read reclamation exactly
 // as before.
 func (s *shard) getH(key []byte, h uint64) ([]byte, error) {
+	v, _, err := s.getCore(key, h, s.now(), !s.cfg.Replicated)
+	return v, err
+}
+
+// getWithExpiryH is getH that ALSO surfaces the entry's stored absolute expiry
+// (ms since epoch; 0 = no expiry) — the read primitive the ttl / persist / incr_ex
+// ops need. It shares getCore, so the wall-clock filtering, the copy-vs-alias
+// return contract, and the ErrNotFound-on-absent-or-expired behaviour are all
+// identical to getH; the only difference is the extra expiry return.
+func (s *shard) getWithExpiryH(key []byte, h uint64) ([]byte, uint64, error) {
 	return s.getCore(key, h, s.now(), !s.cfg.Replicated)
+}
+
+// getWithExpiryAtH is getAtH that ALSO surfaces the entry's stored absolute
+// expiry — the apply-path counterpart of getWithExpiryH, judging liveness against
+// the explicit leader-stamped nowMs. See getAtH for the stamp-fold rationale.
+func (s *shard) getWithExpiryAtH(key []byte, h, nowMs uint64) ([]byte, uint64, error) {
+	s.advanceAppliedStamp(nowMs)
+	return s.getCore(key, h, nowMs, true)
 }
 
 // getAtH is the APPLY-path Get: expiry is evaluated against the explicit
@@ -470,7 +488,8 @@ func (s *shard) getAtH(key []byte, h, nowMs uint64) ([]byte, error) {
 	// putAtH) lets a stamped read alone drive reclamation forward on a read-mostly
 	// workload.
 	s.advanceAppliedStamp(nowMs)
-	return s.getCore(key, h, nowMs, true)
+	v, _, err := s.getCore(key, h, nowMs, true)
+	return v, err
 }
 
 // getCore is the shared Get implementation. now is the clock expiry is judged
@@ -486,7 +505,7 @@ func (s *shard) getAtH(key []byte, h, nowMs uint64) ([]byte, error) {
 // slabRef generation, so neither can race a writer. Only mmap ringbuf overwrites
 // its fixed region in place and takes the read lock for the probe and value
 // copy. reject-writes returns a zero-copy alias; ringbuf returns an owned copy.
-func (s *shard) getCore(key []byte, h, now uint64, allowPhysicalRemove bool) ([]byte, error) {
+func (s *shard) getCore(key []byte, h, now uint64, allowPhysicalRemove bool) ([]byte, uint64, error) {
 	s.gets.Add(1)
 
 	if s.needsReadLockForGet() {
@@ -510,19 +529,19 @@ func (s *shard) getCore(key []byte, h, now uint64, allowPhysicalRemove bool) ([]
 		case lkCorrupt:
 			s.corrupt.Add(1)
 			s.misses.Add(1)
-			return nil, ErrNotFound
+			return nil, 0, ErrNotFound
 		case lkMiss:
 			s.misses.Add(1)
-			return nil, ErrNotFound
+			return nil, 0, ErrNotFound
 		}
 		if isExpired(exp, now) {
 			if allowPhysicalRemove {
 				s.dropExpiredLocked(h, ref)
 			}
 			s.misses.Add(1)
-			return nil, ErrNotFound
+			return nil, 0, ErrNotFound
 		}
-		return vCopy, nil
+		return vCopy, exp, nil
 	}
 
 	// Lock-free path: reject-writes (heap+mmap) and heap-mode ringbuf. For heap
@@ -535,17 +554,17 @@ func (s *shard) getCore(key []byte, h, now uint64, allowPhysicalRemove bool) ([]
 	case lkCorrupt:
 		s.corrupt.Add(1)
 		s.misses.Add(1)
-		return nil, ErrNotFound
+		return nil, 0, ErrNotFound
 	case lkMiss:
 		s.misses.Add(1)
-		return nil, ErrNotFound
+		return nil, 0, ErrNotFound
 	}
 	if isExpired(exp, now) {
 		if allowPhysicalRemove {
 			s.dropExpiredLocked(h, ref)
 		}
 		s.misses.Add(1)
-		return nil, ErrNotFound
+		return nil, 0, ErrNotFound
 	}
 	if s.cfg.AtCapPolicy == PolicyRingbufEvict {
 		// Ringbuf callers own (and may mutate) the returned slice, and the frozen
@@ -554,9 +573,9 @@ func (s *shard) getCore(key []byte, h, now uint64, allowPhysicalRemove bool) ([]
 		// frozen/append-only page whose bytes at this range are immutable.
 		vCopy := make([]byte, len(v))
 		copy(vCopy, v)
-		return vCopy, nil
+		return vCopy, exp, nil
 	}
-	return v, nil
+	return v, exp, nil
 }
 
 // getIntoH is getH that appends the value into dst instead of returning a fresh

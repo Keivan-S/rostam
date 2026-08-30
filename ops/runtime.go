@@ -143,6 +143,34 @@ func (tx *TxContext) Put(key, value []byte, ttl time.Duration) error {
 	return tx.c.Put(key, value, ttl)
 }
 
+// GetWithExpiry is Get that ALSO returns the entry's stored absolute expiry
+// (ms since epoch; 0 = no expiry). Handlers use it to inspect a key's deadline
+// (ttl / persist) or preserve it across a rewrite (incr_ex). Like Get, under a
+// replicated apply stamp liveness is judged against the leader-stamped clock via
+// GetWithExpiryAt so every replica agrees on what is live; otherwise it uses the
+// wall-clock GetWithExpiry. Branches on applyStamped, not applyNowMs != 0, so a
+// stamp of 0 is still deterministic (see the field doc). The returned value
+// slice aliases the page backing store; copy if you need to retain it.
+func (tx *TxContext) GetWithExpiry(key []byte) (val []byte, expiryMs uint64, err error) {
+	if tx.applyStamped {
+		return tx.c.GetWithExpiryAt(key, tx.applyNowMs)
+	}
+	return tx.c.GetWithExpiry(key)
+}
+
+// PutAbs inserts or replaces the entry for key with a pre-computed ABSOLUTE
+// expiry (ms since epoch; 0 = no expiry), bypassing any TTL→now+ttl conversion.
+// It is the primitive for REPLACING a value while preserving an existing
+// deadline: the caller reads the stored expiry with GetWithExpiry and writes it
+// back verbatim (incr_ex on an existing key), or clears it with 0 (persist).
+//
+// It is deterministic across replicas because the absolute expiry is supplied by
+// the caller and is identical on every apply — the committed state the read
+// returned is the same everywhere — so unlike Put it needs no apply-stamp branch.
+func (tx *TxContext) PutAbs(key, value []byte, expiryMs uint64) error {
+	return tx.c.PutAbs(key, value, expiryMs)
+}
+
 // Del removes the entry for key. Returns true if the entry existed. Del carries
 // no TTL, so it is clock-independent and needs no At-variant.
 //
