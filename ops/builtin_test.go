@@ -192,23 +192,32 @@ func TestBuiltinSetNXReacquiresAfterExpiry(t *testing.T) {
 	r, tx := newTestSetup(t)
 	h, _, _, _ := r.Lookup("set_nx")
 
-	res, _ := h(tx, EncodeSetNXArgs([]byte("lock"), []byte("a"), 10*time.Millisecond))
+	// Liveness uses a long TTL so the "still live → refused" check can never race
+	// the expiry: on a slow/loaded runner (seen on the 386 lane) a 10ms TTL could
+	// lapse between the two synchronous set_nx calls, letting the second one
+	// acquire and flaking the test. A live key is a live key regardless of load.
+	res, _ := h(tx, EncodeSetNXArgs([]byte("live"), []byte("a"), time.Hour))
 	if stored, _ := DecodeCASResult(res); !stored {
 		t.Fatal("first set_nx not stored")
 	}
-	// While live, a second set_nx is refused.
-	res, _ = h(tx, EncodeSetNXArgs([]byte("lock"), []byte("b"), 10*time.Millisecond))
+	res, _ = h(tx, EncodeSetNXArgs([]byte("live"), []byte("b"), time.Hour))
 	if stored, _ := DecodeCASResult(res); stored {
 		t.Fatal("set_nx acquired a still-live key")
 	}
-	// After expiry, set_nx re-acquires.
-	time.Sleep(30 * time.Millisecond)
-	res, _ = h(tx, EncodeSetNXArgs([]byte("lock"), []byte("c"), 0))
+
+	// Re-acquire after expiry on a SEPARATE key: a short TTL, then a sleep well
+	// past it (the margin is one-directional, so a slow runner only helps).
+	res, _ = h(tx, EncodeSetNXArgs([]byte("exp"), []byte("a"), 20*time.Millisecond))
+	if stored, _ := DecodeCASResult(res); !stored {
+		t.Fatal("expiry-key set_nx not stored")
+	}
+	time.Sleep(120 * time.Millisecond)
+	res, _ = h(tx, EncodeSetNXArgs([]byte("exp"), []byte("c"), 0))
 	if stored, _ := DecodeCASResult(res); !stored {
 		t.Fatal("set_nx did not re-acquire after expiry")
 	}
 	getH, _, _, _ := r.Lookup("get")
-	got, _ := getH(tx, EncodeKeyArgs([]byte("lock")))
+	got, _ := getH(tx, EncodeKeyArgs([]byte("exp")))
 	if !bytes.Equal(got, []byte("c")) {
 		t.Fatalf("value = %q, want c", got)
 	}
