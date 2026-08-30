@@ -5,6 +5,8 @@ Notable user-visible changes. Entries that alter existing behaviour are marked
 
 ## Unreleased
 
+## v0.5.0 — 2026-08-30
+
 - **Eight new key-value ops: `exists`, `getdel`, `getset`, `persist`, `ttl`,
   `incr_ex`, compare-and-expire, and `mget`.** The KV store gains the everyday
   Redis-style verbs: `exists` reports whether a key is present, `getdel`
@@ -73,6 +75,17 @@ Notable user-visible changes. Entries that alter existing behaviour are marked
   to pin it. Selecting a model by its full Hugging Face id instead of its
   catalog short name uses a distinct cache scope key, so pick one form and keep
   it.
+- **Reliability: a failed mmap slab grow no longer bricks a collection.** When a
+  persistent vector collection needs to grow its on-disk slab and the OS grow
+  fails (disk full, address-space exhaustion), the index now re-maps its existing
+  data and stays fully usable — only the one write that triggered the grow errors
+  and can be retried once space frees. Previously the collection was left in a
+  terminal error state.
+- **Hardening: the wire decoders reject hostile length fields on 32-bit builds.**
+  A crafted request could previously panic a decoder on a 32-bit target via an
+  integer-width overflow; every decoder now bounds-checks in an overflow-safe
+  form. No effect on the shipped 64-bit binaries; closes the class the 32-bit CI
+  lane exists to catch.
 
 ## v0.4.1 — 2026-08-24
 

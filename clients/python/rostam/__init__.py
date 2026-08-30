@@ -59,4 +59,4 @@ __all__ = [
 # anything asking rostam.__version__ was told the wrong release, and nothing
 # noticed. It is a literal rather than an importlib.metadata lookup so that
 # importing the package stays free of a dist-info read.
-__version__ = "0.3.0"
+__version__ = "0.4.0"
