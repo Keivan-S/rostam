@@ -261,6 +261,125 @@ func TestClientCloseIdempotent(t *testing.T) {
 	}
 }
 
+func TestClientGetDel(t *testing.T) {
+	addr, stop := startTestStack(t)
+	defer stop()
+	c, _ := client.New(client.Config{Servers: []string{addr}})
+	defer func() { _ = c.Close() }()
+	ctx := context.Background()
+
+	// Absent → found=false.
+	if _, found, err := c.GetDel(ctx, []byte("gd")); err != nil || found {
+		t.Fatalf("GetDel absent = (found=%v, err=%v), want (false, nil)", found, err)
+	}
+	if _, err := c.Call(ctx, "put", wire.EncodePutArgs([]byte("gd"), []byte("val"), 0)); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	// Present → returns value and deletes.
+	val, found, err := c.GetDel(ctx, []byte("gd"))
+	if err != nil || !found || !bytes.Equal(val, []byte("val")) {
+		t.Fatalf("GetDel present = (%q, %v, %v), want (val, true, nil)", val, found, err)
+	}
+	if _, err := c.Call(ctx, "get", wire.EncodeKeyArgs([]byte("gd"))); !errors.Is(err, client.ErrNotFound) {
+		t.Fatalf("GetDel did not delete: get err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestClientIncrExRateLimit(t *testing.T) {
+	addr, stop := startTestStack(t)
+	defer stop()
+	c, _ := client.New(client.Config{Servers: []string{addr}})
+	defer func() { _ = c.Close() }()
+	ctx := context.Background()
+
+	// First hit creates the counter with a 60s window.
+	v, err := c.IncrEx(ctx, []byte("rl"), 1, 60*time.Second)
+	if err != nil || v != 1 {
+		t.Fatalf("IncrEx create = (%d, %v), want (1, nil)", v, err)
+	}
+	ttl1, err := c.TTL(ctx, []byte("rl"))
+	if err != nil || ttl1 <= 0 {
+		t.Fatalf("TTL after create = (%d, %v), want positive", ttl1, err)
+	}
+	// A second hit increments but keeps the ORIGINAL window (the ttl passed here
+	// is ignored on an existing key), so the remaining TTL does not jump up.
+	v, err = c.IncrEx(ctx, []byte("rl"), 1, 600*time.Second)
+	if err != nil || v != 2 {
+		t.Fatalf("IncrEx re-incr = (%d, %v), want (2, nil)", v, err)
+	}
+	ttl2, err := c.TTL(ctx, []byte("rl"))
+	if err != nil {
+		t.Fatalf("TTL after re-incr: %v", err)
+	}
+	if ttl2 > ttl1 {
+		t.Fatalf("IncrEx slid the window: ttl %d -> %d, want <= original", ttl1, ttl2)
+	}
+}
+
+func TestClientCompareAndExpire(t *testing.T) {
+	addr, stop := startTestStack(t)
+	defer stop()
+	c, _ := client.New(client.Config{Servers: []string{addr}})
+	defer func() { _ = c.Close() }()
+	ctx := context.Background()
+
+	// Absent → false.
+	if refreshed, err := c.CompareAndExpire(ctx, []byte("lk"), []byte("tok"), time.Hour); err != nil || refreshed {
+		t.Fatalf("CompareAndExpire absent = (%v, %v), want (false, nil)", refreshed, err)
+	}
+	if _, err := c.Call(ctx, "put", wire.EncodePutArgs([]byte("lk"), []byte("tok"), 0)); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	// Wrong token → false.
+	if refreshed, err := c.CompareAndExpire(ctx, []byte("lk"), []byte("WRONG"), time.Hour); err != nil || refreshed {
+		t.Fatalf("CompareAndExpire wrong = (%v, %v), want (false, nil)", refreshed, err)
+	}
+	// Right token → true, and a TTL now exists.
+	if refreshed, err := c.CompareAndExpire(ctx, []byte("lk"), []byte("tok"), time.Hour); err != nil || !refreshed {
+		t.Fatalf("CompareAndExpire right = (%v, %v), want (true, nil)", refreshed, err)
+	}
+	if ttl, err := c.TTL(ctx, []byte("lk")); err != nil || ttl <= 0 {
+		t.Fatalf("TTL after refresh = (%d, %v), want positive", ttl, err)
+	}
+}
+
+// TestClientMGet drives MGet through the mget op end-to-end via the routed
+// client (so a topology is known and keys group to a real shard, one mget call),
+// covering mixed found/missing with original-order stitching.
+func TestClientMGet(t *testing.T) {
+	addr, stop := startTestStack(t)
+	defer stop()
+	c, err := client.NewRouted(client.Config{Servers: []string{addr}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Close() }()
+	ctx := context.Background()
+
+	for _, kv := range []struct{ k, v string }{{"m:a", "va"}, {"m:c", "vc"}} {
+		if _, err := c.Call(ctx, "put", wire.EncodePutArgs([]byte(kv.k), []byte(kv.v), 0)); err != nil {
+			t.Fatalf("put %s: %v", kv.k, err)
+		}
+	}
+	keys := [][]byte{[]byte("m:a"), []byte("m:b"), []byte("m:c")}
+	vals, err := c.MGet(ctx, keys)
+	if err != nil {
+		t.Fatalf("MGet: %v", err)
+	}
+	if len(vals) != 3 {
+		t.Fatalf("MGet returned %d values, want 3", len(vals))
+	}
+	if !bytes.Equal(vals[0], []byte("va")) {
+		t.Fatalf("MGet[0] = %q, want va", vals[0])
+	}
+	if vals[1] != nil {
+		t.Fatalf("MGet[1] = %q, want nil (missing)", vals[1])
+	}
+	if !bytes.Equal(vals[2], []byte("vc")) {
+		t.Fatalf("MGet[2] = %q, want vc", vals[2])
+	}
+}
+
 // TestNewRoutedKeyedRoundTrip exercises the routed client's Call path against a
 // real node stack: a keyed put must round-trip. The routing-registry wiring
 // itself is asserted white-box in the client module

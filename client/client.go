@@ -267,6 +267,153 @@ func (c *Client) CompareAndDelete(ctx context.Context, key, expected []byte) (bo
 	return wire.DecodeCASResult(res)
 }
 
+// Exists reports whether key is currently present (and live). An expired key
+// reads as absent.
+func (c *Client) Exists(ctx context.Context, key []byte) (bool, error) {
+	res, err := c.Call(ctx, "exists", wire.EncodeKeyArgs(key))
+	if err != nil {
+		return false, err
+	}
+	return wire.DecodeCASResult(res)
+}
+
+// GetDel atomically returns key's value and deletes it. found is false (and value
+// nil) when the key was absent; a found empty value comes back as a non-nil
+// zero-length slice.
+func (c *Client) GetDel(ctx context.Context, key []byte) (value []byte, found bool, err error) {
+	res, err := c.Call(ctx, "getdel", wire.EncodeKeyArgs(key))
+	if err != nil {
+		return nil, false, err
+	}
+	return wire.DecodeGetDelResult(res)
+}
+
+// GetSet atomically replaces key's value (with ttl > 0 setting an expiry) and
+// returns the OLD value. found is false when the key had no prior value.
+func (c *Client) GetSet(ctx context.Context, key, value []byte, ttl time.Duration) (old []byte, found bool, err error) {
+	res, err := c.Call(ctx, "getset", wire.EncodePutArgs(key, value, ttl))
+	if err != nil {
+		return nil, false, err
+	}
+	return wire.DecodeGetDelResult(res)
+}
+
+// Persist removes key's TTL so it never expires. Returns true if a TTL was
+// removed, false if the key is absent or already had no expiry.
+func (c *Client) Persist(ctx context.Context, key []byte) (bool, error) {
+	res, err := c.Call(ctx, "persist", wire.EncodeKeyArgs(key))
+	if err != nil {
+		return false, err
+	}
+	return wire.DecodeCASResult(res)
+}
+
+// TTL returns key's remaining time-to-live in milliseconds, following the Redis
+// convention: -2 if the key is absent, -1 if it exists but has no expiry, else
+// the remaining ms (>= 0).
+func (c *Client) TTL(ctx context.Context, key []byte) (int64, error) {
+	res, err := c.Call(ctx, "ttl", wire.EncodeKeyArgs(key))
+	if err != nil {
+		return 0, err
+	}
+	return wire.DecodeTTLResult(res)
+}
+
+// IncrEx atomically adds delta and returns the new value, setting the TTL only
+// when the key is newly created — on an existing key the increment leaves the
+// deadline untouched. This is the fixed-window rate-limit primitive: the first
+// hit in a window creates the counter with the window's TTL, and subsequent hits
+// increment it without extending the window.
+func (c *Client) IncrEx(ctx context.Context, key []byte, delta int64, ttl time.Duration) (int64, error) {
+	res, err := c.Call(ctx, "incr_ex", wire.EncodeIncrExArgs(key, delta, ttl))
+	if err != nil {
+		return 0, err
+	}
+	return wire.DecodeIncrResult(res)
+}
+
+// CompareAndExpire refreshes key's TTL only if its current value equals expected
+// — the lock-renewal primitive (extend a lease only while you still hold the
+// token). Returns true if the TTL was refreshed, false on a value mismatch or an
+// absent key.
+//
+// Like the other conditional writes, an ambiguous transport failure returns a
+// non-nil error rather than a possibly-wrong false; the write is not replayed.
+func (c *Client) CompareAndExpire(ctx context.Context, key, expected []byte, ttl time.Duration) (bool, error) {
+	res, err := c.Call(ctx, "caex", wire.EncodeCAEXArgs(key, expected, ttl))
+	if err != nil {
+		return false, err
+	}
+	return wire.DecodeCASResult(res)
+}
+
+// maxMGetKeys caps how many keys ride in one mget call — the u16 count field's
+// range. MGet chunks each shard's key group to this size.
+const maxMGetKeys = 65535
+
+// MGet reads many keys in one round trip per shard, returning a slice aligned to
+// keys where a missing key is a nil entry (a stored empty value is a non-nil
+// zero-length slice). It groups keys by their owning shard — the same hash as
+// PutBatch — issues one mget per shard (chunked to maxMGetKeys), and stitches the
+// results back into the original key order. When the topology is unknown (no
+// cache / NumShards==0) it cannot group, so it falls back to one get per key (the
+// correctness floor), like PutBatch.
+func (c *Client) MGet(ctx context.Context, keys [][]byte) ([][]byte, error) {
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	out := make([][]byte, len(keys))
+	t := c.topology.get()
+	if t == nil || t.NumShards == 0 {
+		for i, k := range keys {
+			v, err := c.Call(ctx, "get", wire.EncodeKeyArgs(k))
+			if errors.Is(err, ErrNotFound) {
+				continue // out[i] stays nil
+			}
+			if err != nil {
+				return nil, err
+			}
+			out[i] = v
+		}
+		return out, nil
+	}
+	// Group key INDICES by owning shard so each shard is read with one mget and
+	// each returned value lands back at its original position.
+	groups := make(map[int][]int)
+	for i, k := range keys {
+		shard := int(xxhash.Sum64(k) % uint64(t.NumShards)) //nolint:gosec // NumShards bounded by Config validation
+		groups[shard] = append(groups[shard], i)
+	}
+	for _, idxs := range groups {
+		for start := 0; start < len(idxs); start += maxMGetKeys {
+			end := start + maxMGetKeys
+			if end > len(idxs) {
+				end = len(idxs)
+			}
+			chunk := idxs[start:end]
+			batchKeys := make([][]byte, len(chunk))
+			for j, ki := range chunk {
+				batchKeys[j] = keys[ki]
+			}
+			res, err := c.Call(ctx, "mget", wire.EncodeMGetArgs(batchKeys))
+			if err != nil {
+				return nil, err
+			}
+			vals, err := wire.DecodeMGetResult(res)
+			if err != nil {
+				return nil, err
+			}
+			if len(vals) != len(chunk) {
+				return nil, fmt.Errorf("client: mget returned %d values for %d keys", len(vals), len(chunk))
+			}
+			for j, ki := range chunk {
+				out[ki] = vals[j]
+			}
+		}
+	}
+	return out, nil
+}
+
 // PutBatch writes many key/value pairs as bulk put_batch ops — the ~10x
 // bulk-insert fast path. It groups entries by their owning shard (the same hash
 // as pickInitialTarget) so each shard receives ONE Raft log entry per chunk, and

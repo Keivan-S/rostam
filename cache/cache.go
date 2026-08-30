@@ -202,6 +202,24 @@ func (c *Cache) PutAt(key, value []byte, ttl time.Duration, nowMs uint64) error 
 	return s.putAtH(key, value, ttl, nowMs, h)
 }
 
+// GetWithExpiry is Get that ALSO returns the entry's stored absolute expiry
+// (ms since epoch; 0 = no expiry). It is the read primitive the ttl / persist /
+// incr_ex ops need to inspect (and, for incr_ex, preserve) a key's deadline. It
+// evaluates liveness against the wall clock exactly like Get and returns
+// ErrNotFound for an absent or expired key.
+func (c *Cache) GetWithExpiry(key []byte) (val []byte, expiryMs uint64, err error) {
+	h, s := c.shardForH(key)
+	return s.getWithExpiryH(key, h)
+}
+
+// GetWithExpiryAt is GetWithExpiry with expiry evaluated against the EXPLICIT
+// clock nowMs rather than the wall clock — the apply-path counterpart used by
+// TxContext.GetWithExpiry under a leader apply stamp, mirroring GetAt.
+func (c *Cache) GetWithExpiryAt(key []byte, nowMs uint64) (val []byte, expiryMs uint64, err error) {
+	h, s := c.shardForH(key)
+	return s.getWithExpiryAtH(key, h, nowMs)
+}
+
 // PutAbs inserts key with a pre-computed ABSOLUTE expiry (ms since epoch; 0 =
 // no expiry), bypassing any TTL→expiry conversion. Snapshot restore uses it to
 // install the exact expiry recorded in the snapshot verbatim, so two followers

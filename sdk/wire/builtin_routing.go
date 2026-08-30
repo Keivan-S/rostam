@@ -35,10 +35,24 @@ var BuiltinOps = []BuiltinOp{
 	{"set_nx", OpReadWrite, StdKeyExtractor, RouteLayoutNone, false},
 	{"cas", OpReadWrite, StdKeyExtractor, RouteLayoutNone, false},
 	{"cad", OpReadWrite, StdKeyExtractor, RouteLayoutNone, false},
+	// KV roadmap ops. All seven point ops lead with [keyLen u16][key], so they
+	// route by that key via StdKeyExtractor exactly like get/put/incr. exists /
+	// ttl are read-only; getdel / getset / persist / incr_ex / caex are writes.
+	{"exists", OpReadOnly, StdKeyExtractor, RouteLayoutNone, false},
+	{"getdel", OpReadWrite, StdKeyExtractor, RouteLayoutNone, false},
+	{"getset", OpReadWrite, StdKeyExtractor, RouteLayoutNone, false},
+	{"persist", OpReadWrite, StdKeyExtractor, RouteLayoutNone, false},
+	{"ttl", OpReadOnly, StdKeyExtractor, RouteLayoutNone, false},
+	{"incr_ex", OpReadWrite, StdKeyExtractor, RouteLayoutNone, false},
+	{"caex", OpReadWrite, StdKeyExtractor, RouteLayoutNone, false},
 	// put_batch packs N puts into one Raft log entry. It routes by its FIRST key,
 	// so every key in a batch must hash to the same shard — the cluster fan-out
 	// (Node.PutBatch) guarantees that by grouping before it calls.
 	{"put_batch", OpReadWrite, putBatchKeyExtractor, RouteLayoutNone, false},
+	// mget is a same-shard batch READ routed by its first key (mgetKeyExtractor),
+	// the read counterpart of put_batch. The client groups keys by owning shard
+	// before it calls, so every key in one mget hashes to the same shard.
+	{"mget", OpReadOnly, mgetKeyExtractor, RouteLayoutNone, false},
 	// __ping__/__ready__/__metrics__/__repl_metrics__ are shardless (nil KeyExtractor).
 	{"__ping__", OpReadOnly, nil, RouteLayoutNone, false},
 	{ReadyOp, OpReadOnly, nil, RouteLayoutNone, false},

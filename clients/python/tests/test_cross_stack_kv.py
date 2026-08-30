@@ -134,6 +134,54 @@ class CrossStackKVTest(unittest.TestCase):
         self.assertTrue(self.r.kv.compare_and_delete("k:cad", "tok"))     # match -> delete
         self.assertIsNone(self.r.kv.get("k:cad"))
 
+    def test_exists(self):
+        self.assertFalse(self.r.kv.exists("k:ex"))     # absent
+        self.r.kv.put("k:ex", "v")
+        self.assertTrue(self.r.kv.exists("k:ex"))       # present
+
+    def test_getdel_returns_and_deletes(self):
+        self.assertIsNone(self.r.kv.getdel("k:gd"))     # absent -> None
+        self.r.kv.put("k:gd", "v")
+        self.assertEqual(self.r.kv.getdel("k:gd"), b"v")  # returns value
+        self.assertIsNone(self.r.kv.get("k:gd"))          # and deleted it
+
+    def test_getset_returns_old(self):
+        self.assertIsNone(self.r.kv.getset("k:gs", "v1"))  # no old value
+        self.assertEqual(self.r.kv.get("k:gs"), b"v1")
+        self.assertEqual(self.r.kv.getset("k:gs", "v2"), b"v1")  # returns old
+        self.assertEqual(self.r.kv.get("k:gs"), b"v2")
+
+    def test_persist_and_ttl(self):
+        self.assertEqual(self.r.kv.ttl("k:ttl_absent"), -2)  # absent
+        self.r.kv.put("k:persist", "v", ttl_ms=60_000)
+        self.assertGreater(self.r.kv.ttl("k:persist"), 0)    # has a window
+        self.assertTrue(self.r.kv.persist("k:persist"))      # TTL removed
+        self.assertEqual(self.r.kv.ttl("k:persist"), -1)     # now no expiry
+        self.assertFalse(self.r.kv.persist("k:persist"))     # already permanent
+
+    def test_incr_ex_keeps_window(self):
+        self.assertEqual(self.r.kv.incr_ex("k:rl", 1, ttl_ms=60_000), 1)  # create
+        ttl1 = self.r.kv.ttl("k:rl")
+        self.assertGreater(ttl1, 0)
+        # A second hit increments but keeps the original window (ttl ignored).
+        self.assertEqual(self.r.kv.incr_ex("k:rl", 1, ttl_ms=600_000), 2)
+        self.assertLessEqual(self.r.kv.ttl("k:rl"), ttl1)
+
+    def test_compare_and_expire(self):
+        self.assertFalse(self.r.kv.compare_and_expire("k:lk", "tok", ttl_ms=60_000))  # absent
+        self.r.kv.put("k:lk", "tok")
+        self.assertFalse(self.r.kv.compare_and_expire("k:lk", "WRONG", ttl_ms=60_000))  # mismatch
+        self.assertTrue(self.r.kv.compare_and_expire("k:lk", "tok", ttl_ms=60_000))     # match
+        self.assertGreater(self.r.kv.ttl("k:lk"), 0)
+
+    def test_mget_mixed_found_missing(self):
+        self.r.kv.put("k:mg:a", "va")
+        self.r.kv.put("k:mg:c", b"")  # stored empty value
+        vals = self.r.kv.mget(["k:mg:a", "k:mg:b", "k:mg:c"])
+        self.assertEqual(vals[0], b"va")
+        self.assertIsNone(vals[1])    # missing
+        self.assertEqual(vals[2], b"")  # empty, distinct from missing
+
 
 @unittest.skipUnless(_BIN, _WHY)
 class CrossStackKVAuthTest(unittest.TestCase):

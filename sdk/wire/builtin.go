@@ -301,12 +301,265 @@ func DecodeCADArgs(args []byte) (key, expected []byte, err error) {
 
 // DecodeCASResult parses the 1-byte 0/1 result shared by set_nx, cas, and cad:
 // 1 = the write happened (stored / deleted), 0 = the condition failed (key
-// present / value mismatch / absent).
+// present / value mismatch / absent). exists / persist / caex reuse it too:
+// their 1-byte result has the identical present/absent-1/0 shape.
 func DecodeCASResult(b []byte) (bool, error) {
 	if len(b) != 1 {
 		return false, ErrShortArgs
 	}
 	return b[0] != 0, nil
+}
+
+// --- KV roadmap ops (exists / getdel / getset / persist / ttl / incr_ex /
+// caex / mget) -----------------------------------------------------------------
+//
+// exists / persist reuse EncodeKeyArgs+DecodeKeyArgs (args) and DecodeCASResult
+// (1-byte result). getset reuses EncodePutArgs+DecodePutArgs (args, same layout
+// as put) and the getdel result codec below. caex reuses DecodeCASResult.
+
+// EncodeGetDelResult encodes the getdel / getset result: [found u8] then, when
+// found, [valLen u32][val]. A found=0 result carries no value bytes. getset
+// reuses it for its OLD value with the identical found/not-found shape.
+func EncodeGetDelResult(val []byte, found bool) []byte {
+	if !found {
+		return []byte{0}
+	}
+	buf := make([]byte, 1+4+len(val))
+	buf[0] = 1
+	binary.BigEndian.PutUint32(buf[1:5], uint32(len(val))) //nolint:gosec // bounded by upstream value length limits
+	copy(buf[5:], val)
+	return buf
+}
+
+// DecodeGetDelResult reads a result produced by EncodeGetDelResult. found=false
+// means the key was absent (no value); found=true returns the value bytes (a
+// zero-length but non-nil slice when the stored value was empty). Bounds-checked
+// in the 32-bit-safe `len-off < n` form with an explicit `< 0` guard, like the
+// cas/cad decoders.
+func DecodeGetDelResult(b []byte) (val []byte, found bool, err error) {
+	if len(b) < 1 {
+		return nil, false, ErrShortArgs
+	}
+	if b[0] == 0 {
+		return nil, false, nil
+	}
+	off := 1
+	if len(b)-off < 4 {
+		return nil, false, ErrShortArgs
+	}
+	vlen := int(binary.BigEndian.Uint32(b[off : off+4]))
+	off += 4
+	if vlen < 0 || len(b)-off < vlen {
+		return nil, false, ErrShortArgs
+	}
+	return b[off : off+vlen], true, nil
+}
+
+// EncodeTTLResult encodes the ttl op's i64 result (Redis convention: -2 absent,
+// -1 present-but-no-expiry, else remaining ms >= 0).
+func EncodeTTLResult(ms int64) []byte {
+	buf := make([]byte, 8)
+	binary.BigEndian.PutUint64(buf, uint64(ms)) //nolint:gosec // reinterpret i64 as u64 for binary write
+	return buf
+}
+
+// DecodeTTLResult parses an EncodeTTLResult i64 back.
+func DecodeTTLResult(b []byte) (int64, error) {
+	if len(b) != 8 {
+		return 0, ErrShortArgs
+	}
+	return int64(binary.BigEndian.Uint64(b)), nil //nolint:gosec // reinterpret stored u64 as i64 for binary read
+}
+
+// EncodeIncrExArgs encodes "{keyLen u16}{key}{delta i64}{ttlMs u64}" for incr_ex:
+// incr with a TTL applied only when the key is newly created.
+func EncodeIncrExArgs(key []byte, delta int64, ttl time.Duration) []byte {
+	buf := make([]byte, 2+len(key)+8+8)
+	binary.BigEndian.PutUint16(buf[0:2], uint16(len(key))) //nolint:gosec // bounded by upstream key length limits
+	copy(buf[2:], key)
+	off := 2 + len(key)
+	binary.BigEndian.PutUint64(buf[off:off+8], uint64(delta)) //nolint:gosec // reinterpret i64 as u64 for binary write
+	off += 8
+	binary.BigEndian.PutUint64(buf[off:off+8], uint64(ttl/time.Millisecond)) //nolint:gosec // duration to milliseconds always positive
+	return buf
+}
+
+// DecodeIncrExArgs reads args produced by EncodeIncrExArgs.
+func DecodeIncrExArgs(args []byte) (key []byte, delta int64, ttl time.Duration, err error) {
+	if len(args) < 2 {
+		return nil, 0, 0, ErrShortArgs
+	}
+	klen := int(binary.BigEndian.Uint16(args[0:2]))
+	off := 2
+	if len(args)-off < klen+8+8 { // key + delta(8) + ttlMs(8)
+		return nil, 0, 0, ErrShortArgs
+	}
+	key = args[off : off+klen]
+	off += klen
+	delta = int64(binary.BigEndian.Uint64(args[off : off+8])) //nolint:gosec // reinterpret stored u64 as i64 for binary read
+	off += 8
+	ttl = time.Duration(binary.BigEndian.Uint64(args[off:off+8])) * time.Millisecond //nolint:gosec // u64 from wire is milliseconds, always positive
+	return key, delta, ttl, nil
+}
+
+// EncodeCAEXArgs encodes "{keyLen u16}{key}{expLen u32}{expected}{ttlMs u64}" for
+// caex (compare-and-expire) — the cas layout without a new value.
+func EncodeCAEXArgs(key, expected []byte, ttl time.Duration) []byte {
+	buf := make([]byte, 2+len(key)+4+len(expected)+8)
+	binary.BigEndian.PutUint16(buf[0:2], uint16(len(key))) //nolint:gosec // bounded by upstream key length limits
+	copy(buf[2:], key)
+	off := 2 + len(key)
+	binary.BigEndian.PutUint32(buf[off:off+4], uint32(len(expected))) //nolint:gosec // bounded by upstream value length limits
+	copy(buf[off+4:], expected)
+	off += 4 + len(expected)
+	binary.BigEndian.PutUint64(buf[off:off+8], uint64(ttl/time.Millisecond)) //nolint:gosec // duration to milliseconds always positive
+	return buf
+}
+
+// DecodeCAEXArgs reads args produced by EncodeCAEXArgs. Bounds-checked in the
+// 32-bit-safe `len-off < n` form with an explicit `< 0` guard on the u32 length,
+// never the additive `off+n` that can overflow on GOARCH=386 (see DecodeCASArgs).
+func DecodeCAEXArgs(args []byte) (key, expected []byte, ttl time.Duration, err error) {
+	if len(args) < 2 {
+		return nil, nil, 0, ErrShortArgs
+	}
+	klen := int(binary.BigEndian.Uint16(args[0:2]))
+	off := 2
+	if len(args)-off < klen+4 { // key + expLen(4)
+		return nil, nil, 0, ErrShortArgs
+	}
+	key = args[off : off+klen]
+	off += klen
+	elen := int(binary.BigEndian.Uint32(args[off : off+4]))
+	off += 4
+	if elen < 0 || len(args)-off < elen { // expected
+		return nil, nil, 0, ErrShortArgs
+	}
+	expected = args[off : off+elen]
+	off += elen
+	if len(args)-off < 8 { // ttlMs(8)
+		return nil, nil, 0, ErrShortArgs
+	}
+	ttl = time.Duration(binary.BigEndian.Uint64(args[off:off+8])) * time.Millisecond //nolint:gosec // u64 from wire is milliseconds, always positive
+	return key, expected, ttl, nil
+}
+
+// EncodeMGetArgs encodes "{count u16}" then, per key, "{keyLen u16}{key}" — a
+// same-shard batch read. The caller guarantees every key hashes to one shard;
+// mgetKeyExtractor routes the batch by its FIRST key, like put_batch.
+func EncodeMGetArgs(keys [][]byte) []byte {
+	total := 2
+	for _, k := range keys {
+		total += 2 + len(k)
+	}
+	buf := make([]byte, 2, total)
+	binary.BigEndian.PutUint16(buf[0:2], uint16(len(keys))) //nolint:gosec // caller caps batch to <= 65535 keys
+	var kl [2]byte
+	for _, k := range keys {
+		binary.BigEndian.PutUint16(kl[:], uint16(len(k))) //nolint:gosec // bounded by upstream key length limits
+		buf = append(buf, kl[:]...)
+		buf = append(buf, k...)
+	}
+	return buf
+}
+
+// DecodeMGetArgs reads args produced by EncodeMGetArgs. The declared count is
+// bounded by CountFitsIn (each key costs >= its 2-byte length prefix) before any
+// allocation, and every keyLen is checked in the 32-bit-safe form.
+func DecodeMGetArgs(args []byte) ([][]byte, error) {
+	if len(args) < 2 {
+		return nil, ErrShortArgs
+	}
+	n := int(binary.BigEndian.Uint16(args[0:2]))
+	off := 2
+	if !CountFitsIn(n, len(args)-off, 2) {
+		return nil, ErrShortArgs
+	}
+	keys := make([][]byte, 0, n)
+	for range n {
+		if len(args)-off < 2 {
+			return nil, ErrShortArgs
+		}
+		kl := int(binary.BigEndian.Uint16(args[off : off+2]))
+		off += 2
+		if len(args)-off < kl {
+			return nil, ErrShortArgs
+		}
+		keys = append(keys, args[off:off+kl])
+		off += kl
+	}
+	return keys, nil
+}
+
+// EncodeMGetResult encodes "{count u16}" then, per key, "[found u8]" and, when
+// found, "[valLen u32][val]". vals and found are parallel and same-length; a
+// found[i]=false entry emits only the flag byte.
+func EncodeMGetResult(vals [][]byte, found []bool) []byte {
+	buf := make([]byte, 2)
+	binary.BigEndian.PutUint16(buf[0:2], uint16(len(found))) //nolint:gosec // count bounded by the request's key count (<= 65535)
+	var vl [4]byte
+	for i := range found {
+		if !found[i] {
+			buf = append(buf, 0)
+			continue
+		}
+		buf = append(buf, 1)
+		binary.BigEndian.PutUint32(vl[:], uint32(len(vals[i]))) //nolint:gosec // bounded by upstream value length limits
+		buf = append(buf, vl[:]...)
+		buf = append(buf, vals[i]...)
+	}
+	return buf
+}
+
+// DecodeMGetResult reads a result produced by EncodeMGetResult into a slice
+// aligned to the requested keys: a missing key is a nil entry, a found key a
+// non-nil (possibly empty) copy of its value. The count is CountFitsIn-bounded
+// (each entry costs >= its 1-byte flag) and every valLen is 32-bit-safe checked.
+// Values are copied out so the result outlives the response buffer.
+func DecodeMGetResult(b []byte) ([][]byte, error) {
+	if len(b) < 2 {
+		return nil, ErrShortArgs
+	}
+	n := int(binary.BigEndian.Uint16(b[0:2]))
+	off := 2
+	if !CountFitsIn(n, len(b)-off, 1) {
+		return nil, ErrShortArgs
+	}
+	out := make([][]byte, 0, n)
+	for range n {
+		if len(b)-off < 1 {
+			return nil, ErrShortArgs
+		}
+		f := b[off]
+		off++
+		if f == 0 {
+			out = append(out, nil)
+			continue
+		}
+		if len(b)-off < 4 {
+			return nil, ErrShortArgs
+		}
+		vlen := int(binary.BigEndian.Uint32(b[off : off+4]))
+		off += 4
+		if vlen < 0 || len(b)-off < vlen {
+			return nil, ErrShortArgs
+		}
+		v := make([]byte, vlen)
+		copy(v, b[off:off+vlen])
+		out = append(out, v)
+		off += vlen
+	}
+	return out, nil
+}
+
+// mgetKeyExtractor returns the FIRST key as the mget batch's routing key. The
+// args lead with a u16 count, so the first "{keyLen u16}{key}" entry starts at
+// offset 2 — StdKeyExtractor reads it from there. Mirrors putBatchKeyExtractor.
+func mgetKeyExtractor(args []byte) ([]byte, bool) {
+	if len(args) < 2 {
+		return nil, false
+	}
+	return StdKeyExtractor(args[2:])
 }
 
 // ScrollOrderToOrderBy maps the wire args ScrollOrder onto vector.OrderBy, including the

@@ -5,6 +5,24 @@ Notable user-visible changes. Entries that alter existing behaviour are marked
 
 ## Unreleased
 
+- **Eight new key-value ops: `exists`, `getdel`, `getset`, `persist`, `ttl`,
+  `incr_ex`, compare-and-expire, and `mget`.** The KV store gains the everyday
+  Redis-style verbs: `exists` reports whether a key is present, `getdel`
+  atomically reads a key and deletes it, `getset` atomically replaces a value and
+  returns the old one, `persist` removes a key's TTL, and `ttl` reports the
+  remaining time-to-live (`-2` absent, `-1` no expiry, else remaining ms). Two
+  are primitives for correct distributed coordination: `incr_ex` increments a
+  counter but sets the TTL only when the key is first created — so an existing
+  counter's window never slides, giving you a correct fixed-window rate limiter
+  in one round trip — and compare-and-expire refreshes a key's TTL only if it
+  still holds an expected token, the safe lock-renewal counterpart to
+  compare-and-delete. `mget` fetches many keys at once, returning a value (or a
+  distinct "missing") per key in request order; the Go client groups keys by
+  owning shard and fans out one batched read per shard. Available on the Go
+  client as `Exists` / `GetDel` / `GetSet` / `Persist` / `TTL` / `IncrEx` /
+  `CompareAndExpire` / `MGet` and on the Python client (`rostam-client`) as
+  `exists` / `getdel` / `getset` / `persist` / `ttl` / `incr_ex` /
+  `compare_and_expire` / `mget`.
 - **Persistence works on Windows.** `cache.Config.DataDir` and mmap-backed
   (`Persistent`) vector collections are now supported on Windows, so an
   embedded store — and the MCP memory server on its default `-data auto` — keeps
