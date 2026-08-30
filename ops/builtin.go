@@ -457,8 +457,9 @@ func handlePersist(tx *TxContext, args []byte) ([]byte, error) {
 // handleTTL returns key's remaining time-to-live in ms (Redis convention): -2 if
 // the key is absent, -1 if it is present but has no expiry, else the remaining ms
 // (>= 0; 0 when it is about to expire). Read-only, so it is NOT stamped — the
-// remaining time is computed against the same wall clock the read path filters
-// with (cache.NowMs).
+// remaining time is computed against the cache's EFFECTIVE clock (Cache.NowMs,
+// which honours an injected SetNowFunc), the SAME clock the GetWithExpiry read
+// above judged liveness with, so a live key can never report a wrong remaining.
 func handleTTL(tx *TxContext, args []byte) ([]byte, error) {
 	key, err := wire.DecodeKeyArgs(args)
 	if err != nil {
@@ -474,7 +475,7 @@ func handleTTL(tx *TxContext, args []byte) ([]byte, error) {
 	if expiryMs == 0 {
 		return wire.EncodeTTLResult(-1), nil
 	}
-	remaining := int64(expiryMs) - int64(cache.NowMs()) //nolint:gosec // ms timestamps fit int64
+	remaining := int64(expiryMs) - int64(tx.Cache().NowMs()) //nolint:gosec // ms timestamps fit int64
 	if remaining < 0 {
 		remaining = 0
 	}

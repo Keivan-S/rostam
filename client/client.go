@@ -506,12 +506,16 @@ func (e *ambiguousError) Error() string { return e.err.Error() }
 func (e *ambiguousError) Unwrap() error { return e.err }
 
 // nonReplayableOp reports whether replaying op after an ambiguous transport
-// failure can corrupt its result. The conditional writes are outcome-returning:
-// if the first server committed but the response was lost, a replay sees the
-// key already changed and returns the wrong success bit.
+// failure can corrupt its result. These mutations are outcome-returning or
+// non-idempotent: if the first server committed but the response was lost, a
+// replay sees the key already changed and returns the wrong result — a replayed
+// incr_ex double-increments, getdel/getset return the retry's view not the
+// original, and persist/caex report the wrong bit or extend a lease the caller
+// can no longer be sure it still holds. Read-only / idempotent ops (get, exists,
+// ttl, mget) are deliberately absent: replaying them cannot corrupt a result.
 func nonReplayableOp(op string) bool {
 	switch op {
-	case "set_nx", "cas", "cad":
+	case "set_nx", "cas", "cad", "getdel", "getset", "incr_ex", "caex", "persist":
 		return true
 	}
 	return false

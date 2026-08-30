@@ -5,6 +5,7 @@ package wire
 import (
 	"encoding/binary"
 	"errors"
+	"math"
 	"time"
 
 	"github.com/rostamlabs/rostam/sdk/vtypes"
@@ -12,6 +13,28 @@ import (
 
 // ErrShortArgs indicates the args byte slice is shorter than expected.
 var ErrShortArgs = errors.New("wire: args too short")
+
+// ErrTTLOutOfRange indicates a wire ttlMs so large it would overflow the
+// time.Duration it decodes into.
+var ErrTTLOutOfRange = errors.New("wire: ttlMs out of range")
+
+// maxTTLMs is the largest ttl (in ms) that fits in a time.Duration (int64
+// nanoseconds) — ~292 years. Above it, time.Duration(ms)*time.Millisecond
+// overflows to a NEGATIVE (or wrapped) duration, which the cache reads as the
+// "no expiry" sentinel — silently making a bounded key permanent. The new
+// TTL-carrying decoders reject anything above it via ttlFromMs.
+const maxTTLMs = math.MaxInt64 / int64(time.Millisecond)
+
+// ttlFromMs converts a wire ttlMs (u64) to a time.Duration, rejecting a value so
+// large the multiply would overflow. It is the shared guard the incr_ex / caex
+// decoders apply BEFORE the multiply. (put/expire share this latent overflow but
+// predate the guard; left alone here to keep this change scoped to the new ops.)
+func ttlFromMs(ms uint64) (time.Duration, error) {
+	if ms > uint64(maxTTLMs) {
+		return 0, ErrTTLOutOfRange
+	}
+	return time.Duration(ms) * time.Millisecond, nil
+}
 
 // StdKeyExtractor reads [keyLen u16][key] from the start of args.
 // It is the canonical extractor for all five built-in routable ops
@@ -398,7 +421,10 @@ func DecodeIncrExArgs(args []byte) (key []byte, delta int64, ttl time.Duration, 
 	off += klen
 	delta = int64(binary.BigEndian.Uint64(args[off : off+8])) //nolint:gosec // reinterpret stored u64 as i64 for binary read
 	off += 8
-	ttl = time.Duration(binary.BigEndian.Uint64(args[off:off+8])) * time.Millisecond //nolint:gosec // u64 from wire is milliseconds, always positive
+	ttl, err = ttlFromMs(binary.BigEndian.Uint64(args[off : off+8]))
+	if err != nil {
+		return nil, 0, 0, err
+	}
 	return key, delta, ttl, nil
 }
 
@@ -440,7 +466,10 @@ func DecodeCAEXArgs(args []byte) (key, expected []byte, ttl time.Duration, err e
 	if len(args)-off < 8 { // ttlMs(8)
 		return nil, nil, 0, ErrShortArgs
 	}
-	ttl = time.Duration(binary.BigEndian.Uint64(args[off:off+8])) * time.Millisecond //nolint:gosec // u64 from wire is milliseconds, always positive
+	ttl, err = ttlFromMs(binary.BigEndian.Uint64(args[off : off+8]))
+	if err != nil {
+		return nil, nil, 0, err
+	}
 	return key, expected, ttl, nil
 }
 

@@ -36,9 +36,3 @@ func isExpired(expiryMs, nowMs uint64) bool {
 func nowMs() uint64 {
 	return uint64(time.Now().UnixMilli())
 }
-
-// NowMs returns the current Unix timestamp in milliseconds — the exported
-// counterpart of the clock the wall-clock read path uses. The read-only ttl op
-// uses it to turn a stored absolute expiry into a remaining-ms value against the
-// same clock the cache filters reads with.
-func NowMs() uint64 { return nowMs() }

@@ -547,6 +547,41 @@ func TestBuiltinTTL(t *testing.T) {
 	}
 }
 
+// TestBuiltinTTLUsesEffectiveClock guards that handleTTL computes remaining
+// against the cache's EFFECTIVE clock (an injected SetNowFunc), NOT raw wall
+// time. With the clock frozen far in the past and a 10s TTL, the expiry is
+// base+10s and the remaining must be exactly 10000 ms; the old raw-time.Now path
+// would subtract real wall time and clamp to 0.
+func TestBuiltinTTLUsesEffectiveClock(t *testing.T) {
+	cfg := cache.DefaultConfig()
+	cfg.NumShards = 1
+	c, err := cache.New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	r := NewRegistry()
+	if err := RegisterBuiltins(r); err != nil {
+		t.Fatal(err)
+	}
+	tx := NewTxContext(c)
+	putH, _, _, _ := r.Lookup("put")
+	ttlH, _, _, _ := r.Lookup("ttl")
+
+	base := uint64(1_000_000_000_000) // a fixed instant, far from real wall time
+	c.SetNowFunc(func() uint64 { return base })
+	if _, err := putH(tx, EncodePutArgs([]byte("k"), []byte("v"), 10*time.Second)); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	res, err := ttlH(tx, EncodeKeyArgs([]byte("k")))
+	if err != nil {
+		t.Fatalf("ttl: %v", err)
+	}
+	if got, _ := DecodeTTLResult(res); got != 10_000 {
+		t.Fatalf("ttl against injected clock = %d ms, want exactly 10000 (effective clock, not wall)", got)
+	}
+}
+
 func TestBuiltinIncrEx(t *testing.T) {
 	r, tx := newTestSetup(t)
 	h, kind, _, ok := r.Lookup("incr_ex")
@@ -688,6 +723,19 @@ func TestKVRoadmapCodecs(t *testing.T) {
 	caexOverflow := []byte{0, 0 /*klen*/, 0x7F, 0xFF, 0xFF, 0xFF /*expLen*/}
 	if _, _, _, err := DecodeCAEXArgs(caexOverflow); err != ErrShortArgs {
 		t.Fatalf("DecodeCAEXArgs huge expLen: err = %v, want ErrShortArgs", err)
+	}
+
+	// An out-of-range ttlMs (would overflow time.Duration to a negative "no
+	// expiry" value) must be REJECTED, not silently accepted. incr_ex: klen=0,
+	// delta=0, ttlMs=MaxUint64.
+	incrExHugeTTL := []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}
+	if _, _, _, err := DecodeIncrExArgs(incrExHugeTTL); err != ErrTTLOutOfRange {
+		t.Fatalf("DecodeIncrExArgs huge ttlMs: err = %v, want ErrTTLOutOfRange", err)
+	}
+	// caex: klen=0, expLen=0, ttlMs=MaxUint64.
+	caexHugeTTL := []byte{0, 0, 0, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}
+	if _, _, _, err := DecodeCAEXArgs(caexHugeTTL); err != ErrTTLOutOfRange {
+		t.Fatalf("DecodeCAEXArgs huge ttlMs: err = %v, want ErrTTLOutOfRange", err)
 	}
 
 	// Roundtrips.

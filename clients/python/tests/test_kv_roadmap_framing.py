@@ -23,11 +23,16 @@ import unittest
 from rostam.rostam import Rostam
 
 _STATUS_OK = 0
+_STATUS_NOT_FOUND = 1
+
+
+def _status(status: int, payload: bytes = b"") -> bytes:
+    body = bytes([status]) + struct.pack(">I", len(payload)) + payload
+    return struct.pack(">I", len(body)) + body
 
 
 def _ok(payload: bytes) -> bytes:
-    body = bytes([_STATUS_OK]) + struct.pack(">I", len(payload)) + payload
-    return struct.pack(">I", len(body)) + body
+    return _status(_STATUS_OK, payload)
 
 
 def _recv_all(conn, n):
@@ -155,26 +160,19 @@ class KVRoadmapFramingTest(unittest.TestCase):
         )
         self.assertEqual(args, expected)
 
-    def test_mget_frames_count_and_keys_and_decodes(self):
-        # Response: count=3, [1][len=2]"va", [0], [1][len=0]
-        payload = (
-            struct.pack(">H", 3)
-            + b"\x01" + struct.pack(">I", 2) + b"va"
-            + b"\x00"
-            + b"\x01" + struct.pack(">I", 0)
-        )
-        r, srv = self._client([_ok(payload)])
+    def test_mget_issues_one_get_per_key_in_order(self):
+        # mget is per-key get (no server-side batch): three gets, replied a=va,
+        # b=missing (StatusNotFound), c=empty. Order and None/empty must survive.
+        responses = [_ok(b"va"), _status(_STATUS_NOT_FOUND), _ok(b"")]
+        r, srv = self._client(responses)
         vals = r.kv.mget(["a", "b", "c"])
         self.assertEqual(vals, [b"va", None, b""])
-        op, args = srv.requests[0]
-        self.assertEqual(op, "mget")
-        expected = (
-            struct.pack(">H", 3)
-            + struct.pack(">H", 1) + b"a"
-            + struct.pack(">H", 1) + b"b"
-            + struct.pack(">H", 1) + b"c"
+        # Exactly one "get" per key, in the requested order.
+        self.assertEqual([op for op, _ in srv.requests], ["get", "get", "get"])
+        self.assertEqual(
+            [args for _, args in srv.requests],
+            [struct.pack(">H", 1) + b"a", struct.pack(">H", 1) + b"b", struct.pack(">H", 1) + b"c"],
         )
-        self.assertEqual(args, expected)
 
 
 if __name__ == "__main__":

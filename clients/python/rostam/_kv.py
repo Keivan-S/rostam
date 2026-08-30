@@ -184,37 +184,19 @@ class _KV:
         return bool(payload and payload[0])
 
     def mget(self, keys) -> list:
-        """Fetch many keys in one round trip, returning a list of
-        ``Optional[bytes]`` aligned to ``keys`` (``None`` for each absent key).
+        """Fetch many keys, returning a list of ``Optional[bytes]`` aligned to
+        ``keys`` (``None`` for each absent key).
 
-        The Python KV client talks to a single node and does no shard routing —
-        every op goes to the connected server — so ``mget`` issues one batched
-        call routed by its first key, matching how ``get`` / ``put`` already
-        behave against that node (correct on a single-node store; against a
-        cluster it reflects only what the connected shard owns, exactly like the
-        per-key ops).
+        Implemented as one ``get`` per key — NOT a single server-side batch. The
+        server routes the ``mget`` op to ONE shard (by its first key), and the
+        Python client carries no shard topology to group keys by, so a single
+        batched call would silently return ``None`` for keys owned by other
+        shards in a cluster. Per-key ``get`` is routed and served correctly for
+        every key on both a single-node store and a cluster, at the cost of N
+        round trips. (The Go client, which does carry topology, fans out one
+        ``mget`` per owning shard instead.)
         """
-        ks = [_as_bytes(k) for k in keys]
-        if len(ks) > 0xFFFF:
-            raise ValueError(f"mget key count {len(ks)} exceeds 65535")
-        buf = bytearray(struct.pack(">H", len(ks)))
-        for k in ks:
-            buf += _enc_key(k)
-        payload = self._t._call("mget", bytes(buf), idempotent=True)
-        out: list = []
-        off = 2
-        count = struct.unpack_from(">H", payload, 0)[0] if payload else 0
-        for _ in range(count):
-            found = payload[off]
-            off += 1
-            if not found:
-                out.append(None)
-                continue
-            (vlen,) = struct.unpack_from(">I", payload, off)
-            off += 4
-            out.append(bytes(payload[off : off + vlen]))
-            off += vlen
-        return out
+        return [self.get(k) for k in keys]
 
     def expire(self, key: Key, ttl_ms: int) -> None:
         """Set a TTL (in milliseconds) on an existing key."""

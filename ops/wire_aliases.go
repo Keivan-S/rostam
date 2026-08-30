@@ -435,6 +435,7 @@ var (
 	ErrCursorOrderMismatch                    = wire.ErrCursorOrderMismatch
 	ErrMalformedPayloadJSON                   = wire.ErrMalformedPayloadJSON
 	ErrShortArgs                              = wire.ErrShortArgs
+	ErrTTLOutOfRange                          = wire.ErrTTLOutOfRange
 	ErrWASMModuleNotResident                  = wire.ErrWASMModuleNotResident
 	ErrWASMNoGroupBinding                     = wire.ErrWASMNoGroupBinding
 	KeyExtractorByHandle                      = wire.KeyExtractorByHandle
