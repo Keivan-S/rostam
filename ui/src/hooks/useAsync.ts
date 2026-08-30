@@ -22,7 +22,7 @@ export function useAsync<T>(
   const [error, setError] = useState<Error | null>(null);
   const [loading, setLoading] = useState(true);
   const [nonce, setNonce] = useState(0);
-  const { reportUnauthorized } = useApiKey();
+  const { apiKey, reportUnauthorized } = useApiKey();
   const loaderRef = useRef(loader);
   loaderRef.current = loader;
 
@@ -53,7 +53,7 @@ export function useAsync<T>(
       ctrl.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [...deps, nonce]);
+  }, [...deps, nonce, apiKey]);
 
   return { data, error, loading, reload };
 }

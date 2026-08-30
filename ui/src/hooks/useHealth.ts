@@ -17,9 +17,15 @@ export function useHealth(intervalMs = 5000): {
   useEffect(() => {
     let active = true;
     let timer: number | undefined;
+    // Hoisted so cleanup can abort an in-flight request, and reused as the
+    // re-entrancy guard: tick() is self-scheduling (setTimeout, not
+    // setInterval) so a slow/unreachable server can never let an older
+    // response settle after a newer one — the next tick is scheduled only
+    // once the current one finishes. Mirrors useMetrics.ts's polling loop.
+    let ctrl: AbortController | undefined;
 
     const tick = async () => {
-      const ctrl = new AbortController();
+      ctrl = new AbortController();
       try {
         const res = await getReady(ctrl.signal);
         if (!active) return;
@@ -35,14 +41,16 @@ export function useHealth(intervalMs = 5000): {
           setState('notready');
           setDetail(e instanceof Error ? e.message : undefined);
         }
+      } finally {
+        if (active) timer = window.setTimeout(tick, intervalMs);
       }
     };
 
     tick();
-    timer = window.setInterval(tick, intervalMs);
     return () => {
       active = false;
-      if (timer) window.clearInterval(timer);
+      ctrl?.abort();
+      if (timer) window.clearTimeout(timer);
     };
   }, [intervalMs]);
 

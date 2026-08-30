@@ -178,7 +178,7 @@ function PlacementCard({
                       <span className="text-2xs text-faint">unplaced</span>
                     )}
                     {nodes.map((nodeId) => {
-                      const isLeader = isLeaderNode(topo, nodeId, leader);
+                      const isLeader = isLeaderNode(topo, nodeId, leader, nodes.length);
                       return (
                         <span
                           key={nodeId}
@@ -206,12 +206,18 @@ function PlacementCard({
 }
 
 // The leaders array holds a server_addr; map it back to a node_id for highlight.
+// A single-node deployment publishes an empty leader/server_addr (there is no
+// advertised address to hand a remote client — see cmd/rostam-server/main.go),
+// so an empty leaderAddr can't be matched by address. In that case the shard's
+// one owning node is, by construction, the leader: derive it instead of
+// leaving the row leaderless.
 function isLeaderNode(
   topo: TopologyResponse,
   nodeId: string,
   leaderAddr: string | undefined,
+  shardNodeCount: number,
 ): boolean {
-  if (!leaderAddr) return false;
+  if (!leaderAddr) return shardNodeCount === 1;
   const member = topo.members?.find((m) => m.node_id === nodeId);
   return member?.server_addr === leaderAddr || nodeId === leaderAddr;
 }
@@ -238,7 +244,9 @@ function NodesCard({ topo }: { topo: TopologyResponse | null }) {
                 <Activity size={13} className="text-ok" />
                 <span className="font-mono text-xs text-ink">{m.node_id}</span>
               </div>
-              <span className="font-mono text-2xs text-faint">{m.server_addr}</span>
+              <span className="font-mono text-2xs text-faint">
+                {m.server_addr || 'single node'}
+              </span>
             </div>
           ))
         )}

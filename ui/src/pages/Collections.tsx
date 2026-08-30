@@ -104,6 +104,14 @@ export function Collections() {
                   <tr
                     key={r.name}
                     onClick={() => setSelected(r.name)}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        if (e.key === ' ') e.preventDefault();
+                        setSelected(r.name);
+                      }
+                    }}
                     className="group cursor-pointer border-b border-line/50 transition-colors last:border-0 hover:bg-panel-2/50"
                   >
                     <td className="px-4 py-3">

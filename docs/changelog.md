@@ -5,6 +5,14 @@ Notable user-visible changes. Entries that alter existing behaviour are marked
 
 ## Unreleased
 
+- **Embedded web dashboard.** The server now ships a browser UI at
+  `/dashboard/` for inspecting and operating on a running instance — vector
+  collections, cluster topology, and KV keys — with no separate install. It
+  reads over new REST endpoints: `GET /v1/topology`, `GET /v1/collections`,
+  and `GET /v1/collections/{name}`. The KV store also gains a REST data
+  plane alongside the existing binary protocol: `GET`, `PUT`, and `DELETE
+  /v1/kv/{key}`.
+
 ## v0.5.0 — 2026-08-30
 
 - **Eight new key-value ops: `exists`, `getdel`, `getset`, `persist`, `ttl`,

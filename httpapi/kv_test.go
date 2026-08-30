@@ -4,6 +4,7 @@ package httpapi
 
 import (
 	"encoding/base64"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -224,5 +225,58 @@ func TestHTTPKVKeyCap(t *testing.T) {
 	rec := do(t, h, "PUT", atCap, `{"value":"x"}`, nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("at-cap key PUT = %d, want 200 (%s)", rec.Code, rec.Body)
+	}
+}
+
+// TestHTTPKVKeyEncoding proves the {key} wildcard is used as-is: net/http's
+// ServeMux already unescapes a matched wildcard segment before PathValue
+// returns it, so a second url.PathUnescape must NOT run. Two regressions that
+// a second decode would cause: an encoded slash getting decoded again (merging
+// distinct keys), and a key that merely contains a bare '%' (not a valid
+// escape) being rejected as malformed.
+func TestHTTPKVKeyEncoding(t *testing.T) {
+	h, cleanup := newTestAPI(t)
+	defer cleanup()
+
+	// %2F in the request path is the ONE decode (by ServeMux) that turns into a
+	// literal '/' inside the key value.
+	rec := do(t, h, "PUT", "/v1/kv/a%2Fb", `{"value":"slash"}`, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("put a%%2Fb = %d, want 200 (%s)", rec.Code, rec.Body)
+	}
+	var out kvGetResponse
+	do(t, h, "GET", "/v1/kv/a%2Fb", "", &out)
+	if !out.Found || out.ValueUTF8 == nil || *out.ValueUTF8 != "slash" {
+		t.Fatalf("get a%%2Fb: found=%v value=%v, want found value=slash", out.Found, out.ValueUTF8)
+	}
+
+	// %25ZZ decodes (once) to the literal key "%ZZ", which is not itself a
+	// valid percent-escape — a second PathUnescape would reject it.
+	rec = do(t, h, "PUT", "/v1/kv/%25ZZ", `{"value":"pct"}`, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("put %%25ZZ = %d, want 200 (%s)", rec.Code, rec.Body)
+	}
+	out = kvGetResponse{}
+	do(t, h, "GET", "/v1/kv/%25ZZ", "", &out)
+	if !out.Found || out.ValueUTF8 == nil || *out.ValueUTF8 != "pct" {
+		t.Fatalf("get %%25ZZ: found=%v value=%v, want found value=pct", out.Found, out.ValueUTF8)
+	}
+}
+
+// TestHTTPKVPutTTLOverflow proves ttl_ms is rejected 400 once it would
+// overflow time.Duration on the *time.Millisecond conversion, rather than
+// wrapping into an incorrect (e.g. negative) stored TTL.
+func TestHTTPKVPutTTLOverflow(t *testing.T) {
+	h, cleanup := newTestAPI(t)
+	defer cleanup()
+
+	rec := do(t, h, "PUT", "/v1/kv/ttl-at-max", fmt.Sprintf(`{"value":"x","ttl_ms":%d}`, maxTTLMs), nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("put at max ttl_ms (%d) = %d, want 200 (%s)", maxTTLMs, rec.Code, rec.Body)
+	}
+
+	rec = do(t, h, "PUT", "/v1/kv/ttl-overflow", fmt.Sprintf(`{"value":"x","ttl_ms":%d}`, maxTTLMs+1), nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("put over-max ttl_ms (%d) = %d, want 400 (%s)", maxTTLMs+1, rec.Code, rec.Body)
 	}
 }

@@ -115,6 +115,9 @@ func serveFile(w http.ResponseWriter, fsys fs.FS, name string) bool {
 	} else {
 		w.Header().Set("Cache-Control", "no-cache")
 	}
+	//nolint:gosec // G705: data is read only from the build-time embedded dist FS
+	// (see the go:embed above), and name is sanitized by path.Clean + fs.Sub in
+	// Handler, so it cannot select anything outside the embedded assets.
 	_, _ = w.Write(data)
 	return true
 }

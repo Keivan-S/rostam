@@ -1,6 +1,8 @@
 // A tiny dependency-free SVG sparkline. Renders an area + line for a numeric
 // series, scaling to its own min/max. Keeps the embedded bundle small.
 
+import { useId } from 'react';
+
 export function Sparkline({
   values,
   width = 120,
@@ -16,6 +18,10 @@ export function Sparkline({
   className?: string;
   color?: string;
 }) {
+  // useId() gives every Sparkline instance its own SVG id namespace, so two
+  // charts with identical values (and thus identical hashSeries output) never
+  // collide on the gradient id and steal each other's fill via url(#id).
+  const reactId = useId();
   const pad = 2;
   const w = width - pad * 2;
   const h = height - pad * 2;
@@ -57,7 +63,9 @@ export function Sparkline({
   const area =
     `${line} L${pts[pts.length - 1][0].toFixed(1)},${(height - pad).toFixed(1)}` +
     ` L${pts[0][0].toFixed(1)},${(height - pad).toFixed(1)} Z`;
-  const gid = `spark-${Math.abs(hashSeries(values)).toString(36)}`;
+  // useId()'s value contains colons, which are legal in an SVG id but awkward
+  // in a url(#...) reference in some tooling, so they are stripped.
+  const gid = `spark-${reactId.replace(/:/g, '')}-${Math.abs(hashSeries(values)).toString(36)}`;
 
   return (
     <svg

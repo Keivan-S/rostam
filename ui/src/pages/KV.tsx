@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Clock, Database, Info, Save, Search, Trash2 } from 'lucide-react';
 import { PageHeader } from '../components/Layout';
 import { Card, Badge, CopyButton } from '../components/primitives';
@@ -21,16 +21,23 @@ export function KVPage() {
   const [view, setView] = useState<ValueView>('utf8');
   const [putOpen, setPutOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  // Tracks the most recently requested key, so a response from an older,
+  // slower lookup (e.g. "a" resolving after a newer lookup for "b" already
+  // started) can be told apart from the current one and discarded instead of
+  // being rendered as — or acted on as — the wrong key's data.
+  const latestKeyRef = useRef<string | null>(null);
 
   const doGet = async (k = key) => {
     const trimmed = k.trim();
     if (!trimmed) return;
+    latestKeyRef.current = trimmed;
     setLoading(true);
     setError(null);
     setResult(null);
     setNotFoundKey(null);
     try {
       const res = await kvGet(trimmed);
+      if (latestKeyRef.current !== trimmed) return;
       if (res.found) {
         setResult(res);
         setView(res.value_utf8 != null ? 'utf8' : 'base64');
@@ -38,9 +45,10 @@ export function KVPage() {
         setNotFoundKey(trimmed);
       }
     } catch (e) {
+      if (latestKeyRef.current !== trimmed) return;
       setError(e instanceof ApiError ? e.message : e instanceof Error ? e.message : 'Lookup failed.');
     } finally {
-      setLoading(false);
+      if (latestKeyRef.current === trimmed) setLoading(false);
     }
   };
 

@@ -4,8 +4,8 @@ package httpapi
 
 import (
 	"encoding/base64"
+	"math"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -21,18 +21,21 @@ import (
 // guards the collection/alias routes), so this cap is enforced here.
 const maxKVKeyLen = 512
 
-// kvKey decodes the {key} path segment: it is URL-encoded (a KV key is arbitrary
-// bytes addressed as a UTF-8 string), so it is percent-decoded here, then bounded
-// at maxKVKeyLen. Returns ok=false (after writing the 400) on a malformed encoding
-// or an over-long key.
+// maxTTLMs is the largest ttl_ms that survives the *time.Millisecond
+// conversion to time.Duration (an int64 count of nanoseconds) without
+// overflowing: math.MaxInt64 / int64(time.Millisecond). A value above this
+// wraps to a negative or truncated duration and would silently store the
+// wrong TTL instead of failing loud, so kvPut rejects it as a 400.
+const maxTTLMs = int64(math.MaxInt64) / int64(time.Millisecond)
+
+// kvKey decodes the {key} path segment. net/http's ServeMux already unescapes
+// a {wildcard} match before PathValue returns it, so raw is the literal key —
+// unescaping it again would merge distinct keys (a literal "a/b" and the
+// encoded "a%2Fb" both decode to "a/b") and reject a valid key that merely
+// contains a bare '%' (e.g. "%ZZ"). Only the length is bounded here, at
+// maxKVKeyLen. Returns ok=false (after writing the 400) on an over-long key.
 func kvKey(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
-	raw := r.PathValue("key")
-	dec, err := url.PathUnescape(raw)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid key encoding: "+err.Error())
-		return nil, false
-	}
-	key := []byte(dec)
+	key := []byte(r.PathValue("key"))
 	if len(key) > maxKVKeyLen {
 		writeError(w, http.StatusBadRequest, "key too long")
 		return nil, false
@@ -152,6 +155,10 @@ func (a *api) kvPut(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.TTLMs < 0 {
 		writeError(w, http.StatusBadRequest, "ttl_ms must be non-negative")
+		return
+	}
+	if req.TTLMs > maxTTLMs {
+		writeError(w, http.StatusBadRequest, "ttl_ms too large")
 		return
 	}
 	ttl := time.Duration(req.TTLMs) * time.Millisecond
