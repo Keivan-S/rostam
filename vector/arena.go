@@ -80,11 +80,22 @@ type arena struct {
 	mmapF      *os.File
 	mmapRegion []byte
 
-	// poisoned marks a TERMINAL failure of an mmap slab growth (growVecs or the
-	// graph's growLevel0). growVecMmap unmaps the old view BEFORE it truncates and
-	// remaps, so a failure partway through leaves the old region freed and the
-	// aliasing slice header (vecs / level0) nil'd — there is no valid mapping to
-	// fall back to. The guard is LAYERED so no op dereferences the freed region:
+	// poisoned marks a TERMINAL failure of an mmap slab growth. growVecMmap unmaps
+	// the old view BEFORE it truncates and remaps; a grow that fails there now FIRST
+	// tries to restore a mapping of the old (intact, append-only) data. What that
+	// buys depends on WHICH slab was growing, because the two grows sit on opposite
+	// sides of the point commit:
+	//   - arena.growVecs (the vecs slab) runs INSIDE arena.Insert, BEFORE the point
+	//     is committed. A restored failure aborts that Insert as a clean no-op, so
+	//     the index stays fully usable and this flag is NOT set — only the single op
+	//     errors. Poison is reached only in the rare DOUBLE failure (restore also
+	//     fails), leaving the region freed and vecs nil'd.
+	//   - hnsw.growLevel0 (the graph slab) runs from setNode, AFTER the point is
+	//     committed to idMap/indexes, with no clean rollback. A grow failure there is
+	//     ALWAYS terminal (poison) even when the mapping was restored, because
+	//     "restored but usable" would leave a torn half-committed insert — strictly
+	//     worse than poison. See growLevel0's error branch for the full rationale.
+	// Either way, once set the guard is LAYERED so no op dereferences a freed region:
 	//   - write / persist / snapshot chokepoints (insertBody, SavePersist,
 	//     Snapshot) check the flag at the top and return ErrIndexPoisoned;
 	//   - read chokepoints check UNDER h.mu, which also closes the TOCTOU against a
@@ -132,6 +143,25 @@ type arena struct {
 // first mapped. Growth is geometric from there, so this only bounds the number
 // of early remaps.
 const mmapInitVectors = 1024
+
+// growVecMmapFailpoint, when non-nil, is invoked by the real growVecMmap impls
+// (mmap_linux.go and mmap_windows.go — the mmap_other.go stub has no mapping to
+// grow and never consults it) right after the old view is unmapped; its returned
+// error (if any) forces the grow to fail there — the Truncate/mmap is skipped and
+// control goes straight to the restore path with that error. It exists ONLY so a
+// test can deterministically simulate a Truncate/mmap failure (disk-full,
+// address-space exhaustion) without one actually occurring; it is nil in
+// production. Declared here (untagged) so the single definition is shared across
+// the platform files and is visible to the platform-agnostic test.
+var growVecMmapFailpoint func() error
+
+// growVecMmapRestoreFailpoint is the second seam: when non-nil, the real
+// growVecMmap impls consult it right before the RESTORE remap and, on a non-nil
+// return, skip that remap so it fails too — driving the (region==nil) terminal
+// tri-state (grow AND restore both failed). Same test-only, nil-in-production
+// contract and platform coverage as growVecMmapFailpoint; used together with it
+// to exercise the double-failure poison + errors.Join path.
+var growVecMmapRestoreFailpoint func() error
 
 // floatsOver reinterprets a byte region as a []float32 spanning its full
 // length (len == cap == len(region)/4). The region must outlive the slice;
@@ -454,12 +484,20 @@ func (a *arena) growVecs(needFloats int) error {
 	if a.mmapF != nil {
 		region, err := growVecMmap(a.mmapF, a.mmapRegion, newBytes)
 		if err != nil {
-			// growVecMmap unmaps the old view BEFORE truncate+remap; on error the old
-			// backing is already gone, so a.mmapRegion/a.vecs (which aliases it) point
-			// at an unmapped region. Poison the index so every public op rejects with
+			if region != nil {
+				// Grow failed, but growVecMmap restored a valid mapping of the OLD data
+				// (grow only appends, so bytes [0,oldLen) are intact). Rebind to it at the
+				// old logical length: the index stays fully usable and only THIS operation
+				// fails. len(region) == oldLen*4 bytes, so the reslice is in-bounds. No poison.
+				a.mmapRegion = region
+				a.vecs = floatsOver(region)[:oldLen]
+				return err
+			}
+			// Grow AND restore both failed: the old backing is gone with nothing valid to
+			// fall back to. Poison the index so every public op rejects with
 			// ErrIndexPoisoned, and nil the headers (belt-and-suspenders) so a bug that
 			// bypasses the guard faults cleanly instead of reading unmapped memory.
-			// (a.codes has no file backing — leave it.)
+			// (a.codes has no file backing — leave it.) This is now the rare backstop.
 			a.poisoned.Store(true)
 			a.mmapRegion = nil
 			a.vecs = nil
