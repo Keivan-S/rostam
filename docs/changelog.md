@@ -50,8 +50,9 @@ Notable user-visible changes. Entries that alter existing behaviour are marked
   so a lock re-acquires cleanly once its TTL lapses. Available on the Go client
   as `SetNX` / `CAS` / `CompareAndDelete` and on the Python client
   (`rostam-client`) as `set_nx` / `cas` / `compare_and_delete`.
-- **Python client: Mem0, Semantic Router, CrewAI, and DSPy adapters
-  (`rostam-client` 0.3.0).** Framework integrations join the existing LangChain,
+- **Python client: Mem0, Semantic Router, CrewAI, and DSPy adapters.** (First
+  shipped in `rostam-client` 0.3.0; this release cuts the client at 0.4.0 for the
+  new KV methods listed above.) Framework integrations join the existing LangChain,
   LlamaIndex, and Haystack adapters, each an optional in-package submodule behind
   its own extra so the base `import rostam` stays standard-library only:
   `rostam.mem0` (`RostamVectorStore`, a Mem0 vector-store provider),
@@ -75,12 +76,14 @@ Notable user-visible changes. Entries that alter existing behaviour are marked
   to pin it. Selecting a model by its full Hugging Face id instead of its
   catalog short name uses a distinct cache scope key, so pick one form and keep
   it.
-- **Reliability: a failed mmap slab grow no longer bricks a collection.** When a
-  persistent vector collection needs to grow its on-disk slab and the OS grow
-  fails (disk full, address-space exhaustion), the index now re-maps its existing
-  data and stays fully usable — only the one write that triggered the grow errors
-  and can be retried once space frees. Previously the collection was left in a
-  terminal error state.
+- **Reliability: a failed vector-slab grow no longer bricks a collection.** When
+  a persistent collection must grow its on-disk vector slab and the OS grow fails
+  (disk full, address-space exhaustion), the index re-maps its existing vectors
+  and stays usable — only the write that triggered the grow errors, and it can be
+  retried once space frees (previously the whole collection went to a terminal
+  error state). A failure while growing the smaller graph-edge slab, which happens
+  after the point is already committed, still takes the collection terminal, since
+  there is no safe rollback from that half-committed point.
 - **Hardening: the wire decoders reject hostile length fields on 32-bit builds.**
   A crafted request could previously panic a decoder on a 32-bit target via an
   integer-width overflow; every decoder now bounds-checks in an overflow-safe
