@@ -48,6 +48,9 @@ type slabReservation struct {
 	f      *os.File       // always nil here; see newSlabReservation
 }
 
+// mapped reports whether this slab is reservation-backed at all. A nil
+// receiver is the ordinary "no reservation" case, not a bug: newSlabReservation
+// returns one whenever the reservation could not be made.
 func (r *slabReservation) mapped() bool { return r != nil && r.base != nil }
 
 // pageAlign rounds n up to a whole number of pages. Commits are page-granular

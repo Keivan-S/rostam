@@ -244,6 +244,10 @@ func TestGrowInPlaceEquivalentHeap(t *testing.T) {
 	})
 }
 
+// TestGrowInPlaceEquivalentMmap is the file-backed half of that differential.
+// It needs a platform where an mmap-backed slab can itself be
+// reservation-backed, which is not every platform that maps files at all —
+// see requireFileBackedReservations.
 func TestGrowInPlaceEquivalentMmap(t *testing.T) {
 	requireFileBackedReservations(t)
 	testGrowEquivalent(t, 5000, 64, mmapGrowConfig(24, 9))
@@ -260,6 +264,9 @@ func TestGrowRelocationEquivalentHeap(t *testing.T) {
 	})
 }
 
+// TestGrowRelocationEquivalentMmap drives the relocation path on file-backed
+// slabs, where the copy is between two MAPPINGS rather than two heap
+// allocations. Skipped where those slabs never take a reservation.
 func TestGrowRelocationEquivalentMmap(t *testing.T) {
 	requireFileBackedReservations(t)
 	testGrowEquivalent(t, 5000, 1, mmapGrowConfig(24, 4))
@@ -378,6 +385,9 @@ func TestGrowInPlaceConcurrentHeap(t *testing.T) {
 	}
 }
 
+// TestGrowInPlaceConcurrentMmap is the same race coverage for file-backed
+// slabs, whose commit maps a new tail over the reservation instead of
+// re-protecting anonymous pages. Skipped where that is unavailable.
 func TestGrowInPlaceConcurrentMmap(t *testing.T) {
 	requireFileBackedReservations(t)
 	withSmallReservations(t, 64<<10, 64<<10, 64)
