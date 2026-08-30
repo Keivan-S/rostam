@@ -136,11 +136,17 @@ func DecodePutArgs(args []byte) (key, val []byte, ttl time.Duration, err error) 
 	off := 2 + klen
 	vlen := int(binary.BigEndian.Uint32(args[off : off+4]))
 	off += 4
-	if len(args) < off+vlen+8 {
+	// Overflow-safe: never add the untrusted vlen into the comparison. On 32-bit a
+	// vlen above MaxInt32 widens negative and slips an additive `off+vlen+8` check,
+	// then panics the slice. Check the value bytes and the trailing ttl separately.
+	if vlen < 0 || len(args)-off < vlen {
 		return nil, nil, 0, ErrShortArgs
 	}
 	val = args[off : off+vlen]
 	off += vlen
+	if len(args)-off < 8 {
+		return nil, nil, 0, ErrShortArgs
+	}
 	ttl = time.Duration(binary.BigEndian.Uint64(args[off:off+8])) * time.Millisecond //nolint:gosec // safe: u64 from wire is milliseconds, always positive
 	return key, val, ttl, nil
 }
