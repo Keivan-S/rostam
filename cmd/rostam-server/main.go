@@ -576,6 +576,34 @@ func main() {
 			// block before this assignment takes effect.)
 			Authenticator: cfg.Authenticator,
 		}
+
+		// Register a single-node __topology__ so the discovery op resolves WITHOUT
+		// -cluster: the dashboard's cluster view then sees one node owning its one
+		// logical shard, instead of the op erroring as "not registered". In -cluster
+		// mode cluster.Node registers the real, live topology on this same registry;
+		// this branch never builds a cluster.Node, so there is no double-register.
+		//
+		// ServerAddr and Leaders are deliberately EMPTY. A smart client caches this
+		// topology and, in pickInitialTarget, would DIAL a non-empty Leaders[shard]
+		// / owner ServerAddr — but the server's bind address (e.g. ":7000",
+		// "0.0.0.0:7000", or the httpAddr fallback) is not a dialable target and is
+		// not a reliable advertised address. Leaving them empty makes OwnerAddr
+		// return "" so the client falls back to its own configured server target —
+		// byte-identical to the pre-registration behavior (where the op was absent
+		// and the topology cache stayed nil) — while still giving the dashboard the
+		// node id + placement it renders. (A multi-node deployment uses -cluster,
+		// which advertises real peer addresses.)
+		selfID := *nodeID
+		if err := ops.RegisterTopology(reg, func() (ops.Topology, error) {
+			return ops.Topology{
+				NumShards: 1,
+				Members:   []ops.TopologyMember{{NodeID: selfID, ServerAddr: ""}},
+				Leaders:   []string{""},
+				Placement: [][]string{{selfID}},
+			}, nil
+		}); err != nil {
+			fatal("register single-node topology failed", "err", err)
+		}
 	}
 
 	// OPT-IN S3 tier (backup cron + cold-tier sweeper + admin REST surface). Build

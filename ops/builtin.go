@@ -97,6 +97,11 @@ var builtinHandlers = map[string]Handler{
 	// __ready__ is overridden. Read-only, no args; result is a JSON body served
 	// as-is by the HTTP /v1/replication handler.
 	wire.ReplMetricsOp: handleReplMetrics,
+	// __collections__ is shardless: it enumerates the local node's dense
+	// collections, reading the SAME CollectionStore.CollectionNames() source
+	// __metrics__ renders, so the two never disagree about which collections exist.
+	// Served as JSON by the HTTP /v1/collections handler.
+	wire.CollectionsOp: handleCollections,
 
 	// Vector ops. Routing (kind/wire.KeyExtractor/wire.RouteLayout) lives in
 	// wire.BuiltinOps; only the handler binding happens here.
@@ -616,6 +621,18 @@ func handleMetrics(tx *TxContext, _ []byte) ([]byte, error) {
 // a valid body the /v1/replication handler serves verbatim.
 func handleReplMetrics(_ *TxContext, _ []byte) ([]byte, error) {
 	return []byte(`{"shards":[]}`), nil
+}
+
+// handleCollections enumerates every dense collection on this node and returns
+// the name list. It is read-only, takes no args, and reads the SAME
+// CollectionStore.CollectionNames() source handleMetrics renders — the shardless
+// counterpart of __metrics__ for the dashboard's collection list. A node with no
+// vector store (KV-only) returns ErrVectorsNotAvailable.
+func handleCollections(tx *TxContext, _ []byte) ([]byte, error) {
+	if tx.vectors == nil {
+		return nil, ErrVectorsNotAvailable
+	}
+	return wire.EncodeCollectionsResult(tx.vectors.CollectionNames()), nil
 }
 
 func handleVectorCreateCollection(tx *TxContext, args []byte) ([]byte, error) {

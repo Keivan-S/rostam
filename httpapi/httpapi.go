@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/rostamlabs/rostam/authz"
+	"github.com/rostamlabs/rostam/dashboard"
 	"github.com/rostamlabs/rostam/ops"
 	"github.com/rostamlabs/rostam/vector"
 )
@@ -136,6 +137,18 @@ func Handler(disp Dispatcher, opts Options) http.Handler {
 	// min-ISR / per-backup lag as JSON via the __repl_metrics__ read op.
 	// Auth-exempt like /v1/ready — an ops/infra probe carries no token.
 	mux.HandleFunc("GET /v1/replication", a.replication)
+	// Dashboard read surface: the cluster routing map, the dense-collection list,
+	// and a single collection's config. All are scope-gated reads (via a.call), the
+	// data plane the embedded web dashboard renders.
+	mux.HandleFunc("GET /v1/topology", a.topology)
+	mux.HandleFunc("GET /v1/collections", a.collections)
+	mux.HandleFunc("GET /v1/collections/{name}", a.collectionConfigView)
+	// KV data plane over REST (no KV HTTP routes existed before). The {key} is a
+	// URL-encoded UTF-8 path segment (arbitrary bytes on the wire); the 512-byte
+	// cap is enforced in-handler since nameLenGuard does not cover /v1/kv/.
+	mux.HandleFunc("GET /v1/kv/{key}", a.kvGet)
+	mux.HandleFunc("PUT /v1/kv/{key}", a.kvPut)
+	mux.HandleFunc("DELETE /v1/kv/{key}", a.kvDelete)
 	mux.HandleFunc("POST /v1/collections", a.createCollection)
 	mux.HandleFunc("DELETE /v1/collections/{name}", a.dropCollection)
 	mux.HandleFunc("POST /v1/collections/{name}/points", a.putPoint)
@@ -225,6 +238,16 @@ func Handler(disp Dispatcher, opts Options) http.Handler {
 	mux.HandleFunc("GET /v1/admin/backups", a.listBackups)
 	mux.HandleFunc("POST /v1/collections/{name}/evict", a.evictCollection)
 	mux.HandleFunc("POST /v1/collections/{name}/restore", a.restoreCollection)
+
+	// Embedded web dashboard (static SPA). Served UNDER /dashboard/ with no auth —
+	// the assets are inert HTML/JS/CSS and every data read goes through the authed
+	// /v1 endpoints above. The bare /dashboard 301-redirects to /dashboard/ so the
+	// SPA's relative asset URLs resolve. The dashboard package imports nothing from
+	// rostam, so mounting it here forms no import cycle.
+	mux.Handle("GET /dashboard/", http.StripPrefix("/dashboard", dashboard.Handler()))
+	mux.HandleFunc("GET /dashboard", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/dashboard/", http.StatusMovedPermanently)
+	})
 	return nameLenGuard(mux)
 }
 

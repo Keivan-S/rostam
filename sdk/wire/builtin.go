@@ -64,6 +64,61 @@ const MetricsOp = "__metrics__"
 // per-hosted-shard replication state (mode / primary / ISR / min-ISR / lag).
 const ReplMetricsOp = "__repl_metrics__"
 
+// CollectionsOp is the shardless op that enumerates the local node's dense
+// collections. Its result is the name list (EncodeCollectionsResult); the HTTP
+// /v1/collections handler renders it as JSON. Like __metrics__ it reads the SAME
+// CollectionStore.CollectionNames() source, so the two never disagree about which
+// collections exist.
+const CollectionsOp = "__collections__"
+
+// EncodeCollectionsResult serializes a collection-name list as
+// "{count u32}({nameLen u16}{name})*". Mirrors the MGet wire framing so the
+// decoder can bound the declared count before allocating.
+func EncodeCollectionsResult(names []string) []byte {
+	total := 4
+	for _, n := range names {
+		total += 2 + len(n)
+	}
+	buf := make([]byte, 4, total)
+	binary.BigEndian.PutUint32(buf[0:4], uint32(len(names))) //nolint:gosec // count bounded by the store's collection count
+	var nl [2]byte
+	for _, n := range names {
+		binary.BigEndian.PutUint16(nl[:], uint16(len(n))) //nolint:gosec // bounded by MaxCollectionNameWire
+		buf = append(buf, nl[:]...)
+		buf = append(buf, n...)
+	}
+	return buf
+}
+
+// DecodeCollectionsResult reads a result produced by EncodeCollectionsResult. The
+// declared count is CountFitsIn-bounded (each name costs >= its 2-byte length
+// prefix) before any allocation, and every nameLen is checked in the 32-bit-safe
+// form. Names are copied out so they outlive the response buffer.
+func DecodeCollectionsResult(b []byte) ([]string, error) {
+	if len(b) < 4 {
+		return nil, ErrShortArgs
+	}
+	n := int(binary.BigEndian.Uint32(b[0:4]))
+	off := 4
+	if !CountFitsIn(n, len(b)-off, 2) {
+		return nil, ErrShortArgs
+	}
+	names := make([]string, 0, n)
+	for range n {
+		if len(b)-off < 2 {
+			return nil, ErrShortArgs
+		}
+		nl := int(binary.BigEndian.Uint16(b[off : off+2]))
+		off += 2
+		if len(b)-off < nl {
+			return nil, ErrShortArgs
+		}
+		names = append(names, string(b[off:off+nl]))
+		off += nl
+	}
+	return names, nil
+}
+
 // EncodeKeyArgs encodes "{keyLen u16}{key}" used by get and del.
 func EncodeKeyArgs(key []byte) []byte {
 	return AppendKeyArgs(nil, key)

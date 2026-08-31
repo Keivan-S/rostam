@@ -3,6 +3,17 @@
 #
 # cgo is required (wasmtime-go is pulled in transitively), so the build image
 # carries a C toolchain and the runtime image is debian-slim (not scratch).
+#
+# Dashboard UI: built in its own Node stage and copied into dashboard/dist/
+# (the go:embed'd tree) before the Go build, so the shipped binary embeds the
+# real Vite output instead of the checked-in .gitkeep placeholder.
+FROM node:20-bookworm AS ui
+WORKDIR /ui
+COPY ui/package.json ui/package-lock.json ./
+RUN npm ci
+COPY ui/ ./
+RUN npm run build
+
 FROM golang:1.26-bookworm AS build
 WORKDIR /src
 COPY go.mod go.sum go.work go.work.sum ./
@@ -10,6 +21,9 @@ COPY sdk/go.mod sdk/go.sum ./sdk/
 COPY client/go.mod client/go.sum ./client/
 RUN go mod download
 COPY . .
+# Overwrites the placeholder dashboard/dist/ (just .gitkeep in a checkout) with
+# the real built assets from the ui stage above.
+COPY --from=ui /ui/dist/. ./dashboard/dist/
 RUN CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o /out/rostam-server ./cmd/rostam-server
 
 FROM debian:bookworm-slim

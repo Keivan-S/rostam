@@ -21,8 +21,33 @@ permissions:
   contents: read
 
 jobs:
+  # A manual dispatch takes inputs.tag straight into actions/checkout as the
+  # ref, and the build then runs `make ui` (npm lifecycle scripts) and a
+  # Docker build — both execute code from that ref with privileged tokens
+  # (contents: write, packages: write). Reject anything that is not a release
+  # tag BEFORE either job checks out the ref, so a dispatch against an
+  # arbitrary branch/SHA cannot run untrusted code with those credentials.
+  # Skipped entirely on the normal `push: tags: v*` trigger, where the ref is
+  # already a real tag by construction.
+  validate-tag:
+    name: validate release tag
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reject a non-release tag
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.].*)?$ ]]; then
+            echo "::error::inputs.tag '$TAG' is not a release tag (expected vX.Y.Z, e.g. v0.1.0 or v0.1.0-rc1)"
+            exit 1
+          fi
+
   binaries:
     name: binaries
+    needs: [validate-tag]
+    if: ${{ always() && (needs.validate-tag.result == 'success' || needs.validate-tag.result == 'skipped') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write # create the release and upload artifacts
@@ -38,6 +63,14 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      # goreleaser's before.hooks run `make ui` (builds the Vite dashboard and
+      # syncs it into dashboard/dist/), which needs npm on PATH.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
 
       - uses: goreleaser/goreleaser-action@v6
         with:
@@ -57,6 +90,8 @@ jobs:
   # once, at merge time, rather than twice and racing.
   image:
     name: image (${{ matrix.platform }})
+    needs: [validate-tag]
+    if: ${{ always() && (needs.validate-tag.result == 'success' || needs.validate-tag.result == 'skipped') }}
     strategy:
       fail-fast: false
       matrix:
