@@ -175,13 +175,19 @@ func (r *slabReservation) release() error {
 	if r == nil || r.base == nil {
 		return nil
 	}
-	base := uintptr(r.base)
-	r.base, r.commit, r.resLen = nil, 0, 0
-	liveSlabReservations.Add(-1)
 	// MEM_RELEASE requires a zero size and frees the entire region that was
 	// reserved at base, committed sub-ranges included.
-	if err := windows.VirtualFree(base, 0, windows.MEM_RELEASE); err != nil {
+	//
+	// The bookkeeping is cleared only AFTER the free succeeds. Doing it first
+	// would say "released" about a range still mapped: mapped() would report
+	// false, liveSlabReservations would under-count the very leak it exists to
+	// detect, and a second release would return early instead of retrying.
+	if err := windows.VirtualFree(uintptr(r.base), 0, windows.MEM_RELEASE); err != nil {
 		return fmt.Errorf("vector: release reservation: %w", err)
 	}
+
+	r.base, r.commit, r.resLen = nil, 0, 0
+	liveSlabReservations.Add(-1)
+
 	return nil
 }
